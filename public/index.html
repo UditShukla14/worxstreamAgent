@@ -1,0 +1,915 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Worxstream AI Agent</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-primary: #0f172a;
+      --bg-secondary: #1e293b;
+      --bg-tertiary: #334155;
+      --text-primary: #f8fafc;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --accent-blue: #3b82f6;
+      --accent-purple: #8b5cf6;
+      --accent-green: #22c55e;
+      --accent-yellow: #eab308;
+      --accent-red: #ef4444;
+      --accent-cyan: #06b6d4;
+      --border-color: #334155;
+      --card-bg: #1e293b;
+      --hover-bg: #334155;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100vh;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Header */
+    header {
+      text-align: center;
+      padding: 20px 0;
+      border-bottom: 1px solid var(--border-color);
+      margin-bottom: 20px;
+    }
+
+    header h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+    }
+
+    header p {
+      color: var(--text-secondary);
+      margin-top: 5px;
+      font-size: 0.9rem;
+    }
+
+    /* Chat Container */
+    .chat-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-secondary);
+      border-radius: 16px;
+      border: 1px solid var(--border-color);
+      overflow: hidden;
+    }
+
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .message {
+      max-width: 95%;
+      animation: fadeIn 0.3s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .message.user {
+      align-self: flex-end;
+    }
+
+    .message.user .message-content {
+      background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+      color: white;
+      border-radius: 16px 16px 4px 16px;
+      padding: 12px 18px;
+    }
+
+    .message.assistant {
+      align-self: flex-start;
+    }
+
+    .message.assistant .message-content {
+      background: var(--bg-tertiary);
+      border-radius: 16px 16px 16px 4px;
+      padding: 16px 20px;
+    }
+
+    .message-text {
+      line-height: 1.6;
+      font-size: 0.95rem;
+    }
+
+    .message-text p {
+      margin-bottom: 12px;
+    }
+
+    .message-text p:last-child {
+      margin-bottom: 0;
+    }
+
+    /* Stats Grid */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 12px;
+      margin: 16px 0;
+    }
+
+    .stat-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 16px;
+      text-align: center;
+      transition: transform 0.2s, border-color 0.2s;
+    }
+
+    .stat-card:hover {
+      transform: translateY(-2px);
+      border-color: var(--accent-blue);
+    }
+
+    .stat-card .icon {
+      font-size: 24px;
+      margin-bottom: 8px;
+    }
+
+    .stat-card .value {
+      font-size: 1.5rem;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .stat-card .label {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .stat-card.blue { border-top: 3px solid var(--accent-blue); }
+    .stat-card.green { border-top: 3px solid var(--accent-green); }
+    .stat-card.purple { border-top: 3px solid var(--accent-purple); }
+    .stat-card.yellow { border-top: 3px solid var(--accent-yellow); }
+    .stat-card.red { border-top: 3px solid var(--accent-red); }
+    .stat-card.cyan { border-top: 3px solid var(--accent-cyan); }
+
+    /* List Component */
+    .data-list {
+      margin: 16px 0;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .data-list-header {
+      padding: 14px 18px;
+      background: var(--bg-tertiary);
+      font-weight: 600;
+      font-size: 0.95rem;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .data-list-item {
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: background 0.2s;
+    }
+
+    .data-list-item:hover {
+      background: var(--hover-bg);
+    }
+
+    .data-list-item:last-child {
+      border-bottom: none;
+    }
+
+    .data-list-item-content {
+      flex: 1;
+    }
+
+    .data-list-item-title {
+      font-weight: 500;
+      margin-bottom: 2px;
+    }
+
+    .data-list-item-desc {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+    }
+
+    .data-list-item-badge {
+      background: var(--accent-blue);
+      color: white;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      font-weight: 500;
+      margin-left: 12px;
+    }
+
+    /* Table Component */
+    .data-table {
+      margin: 16px 0;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .data-table-header {
+      padding: 14px 18px;
+      background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+      font-weight: 600;
+      font-size: 1rem;
+      color: white;
+    }
+
+    .data-table-wrapper {
+      overflow-x: auto;
+    }
+
+    .data-table table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 600px;
+    }
+
+    .data-table th {
+      padding: 14px 16px;
+      text-align: left;
+      font-weight: 600;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+      background: var(--bg-tertiary);
+      border-bottom: 2px solid var(--border-color);
+      white-space: nowrap;
+    }
+
+    .data-table td {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border-color);
+      font-size: 0.9rem;
+    }
+
+    .data-table tr:last-child td {
+      border-bottom: none;
+    }
+
+    .data-table tbody tr {
+      transition: background 0.2s;
+    }
+
+    .data-table tbody tr:hover {
+      background: var(--hover-bg);
+    }
+
+    .status-badge {
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      display: inline-block;
+    }
+
+    .status-badge.success { background: rgba(34, 197, 94, 0.2); color: var(--accent-green); }
+    .status-badge.warning { background: rgba(234, 179, 8, 0.2); color: var(--accent-yellow); }
+    .status-badge.error { background: rgba(239, 68, 68, 0.2); color: var(--accent-red); }
+    .status-badge.info { background: rgba(59, 130, 246, 0.2); color: var(--accent-blue); }
+
+    /* Details Component */
+    .details-card {
+      margin: 16px 0;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .details-card-header {
+      padding: 14px 18px;
+      background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+      font-weight: 600;
+      font-size: 1rem;
+      color: white;
+    }
+
+    .details-card-body {
+      padding: 4px 0;
+    }
+
+    .details-item {
+      display: flex;
+      padding: 12px 18px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .details-item:last-child {
+      border-bottom: none;
+    }
+
+    .details-item-label {
+      width: 40%;
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      font-weight: 500;
+    }
+
+    .details-item-value {
+      flex: 1;
+      font-weight: 500;
+    }
+
+    /* Alert Component */
+    .alert {
+      padding: 14px 18px;
+      border-radius: 10px;
+      margin: 12px 0;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 0.9rem;
+    }
+
+    .alert.success {
+      background: rgba(34, 197, 94, 0.15);
+      border: 1px solid rgba(34, 197, 94, 0.3);
+      color: var(--accent-green);
+    }
+
+    .alert.warning {
+      background: rgba(234, 179, 8, 0.15);
+      border: 1px solid rgba(234, 179, 8, 0.3);
+      color: var(--accent-yellow);
+    }
+
+    .alert.error {
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      color: var(--accent-red);
+    }
+
+    .alert.info {
+      background: rgba(59, 130, 246, 0.15);
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      color: var(--accent-blue);
+    }
+
+    /* Tools Used Badge */
+    .tools-used {
+      margin-top: 16px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border-color);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .tools-label {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .tool-badge {
+      background: rgba(139, 92, 246, 0.2);
+      color: var(--accent-purple);
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-weight: 500;
+    }
+
+    /* Examples Bar */
+    .examples {
+      padding: 16px;
+      background: var(--bg-tertiary);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: center;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .example-btn {
+      padding: 8px 16px;
+      border: 1px solid var(--border-color);
+      border-radius: 20px;
+      background: var(--bg-secondary);
+      color: var(--text-secondary);
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .example-btn:hover {
+      border-color: var(--accent-blue);
+      color: var(--accent-blue);
+      background: rgba(59, 130, 246, 0.1);
+    }
+
+    /* Input Area */
+    .input-area {
+      padding: 20px;
+      background: var(--bg-tertiary);
+      display: flex;
+      gap: 12px;
+      border-top: 1px solid var(--border-color);
+    }
+
+    .input-area input {
+      flex: 1;
+      padding: 14px 20px;
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      background: var(--bg-secondary);
+      color: var(--text-primary);
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .input-area input:focus {
+      border-color: var(--accent-blue);
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+    }
+
+    .input-area input::placeholder {
+      color: var(--text-muted);
+    }
+
+    .input-area button {
+      padding: 14px 28px;
+      border: none;
+      border-radius: 12px;
+      background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+      color: white;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .input-area button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);
+    }
+
+    .input-area button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    /* Typing Indicator */
+    .typing {
+      display: flex;
+      gap: 6px;
+      padding: 16px 20px;
+      align-self: flex-start;
+      background: var(--bg-tertiary);
+      border-radius: 16px;
+    }
+
+    .typing span {
+      width: 10px;
+      height: 10px;
+      background: var(--accent-blue);
+      border-radius: 50%;
+      animation: bounce 1.4s infinite ease-in-out both;
+    }
+
+    .typing span:nth-child(1) { animation-delay: -0.32s; }
+    .typing span:nth-child(2) { animation-delay: -0.16s; }
+
+    @keyframes bounce {
+      0%, 80%, 100% { transform: scale(0); }
+      40% { transform: scale(1); }
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: var(--bg-secondary);
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--bg-tertiary);
+      border-radius: 4px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🤖 Worxstream AI Agent</h1>
+      <p>Intelligent Business Assistant powered by Claude</p>
+    </header>
+
+    <div class="chat-container">
+      <div class="examples">
+        <button class="example-btn" onclick="sendExample('Show me all product categories')">📦 Product Categories</button>
+        <button class="example-btn" onclick="sendExample('List all customers')">👥 Customers</button>
+        <button class="example-btn" onclick="sendExample('Show all vendors')">🤝 Vendors</button>
+        <button class="example-btn" onclick="sendExample('List all departments')">🏢 Departments</button>
+        <button class="example-btn" onclick="sendExample('Show all products')">🛍️ Products</button>
+        <button class="example-btn" onclick="sendExample('List subscription plans')">💳 Subscriptions</button>
+      </div>
+
+      <div class="messages" id="messages">
+        <div class="message assistant">
+          <div class="message-content">
+            <div class="message-text">
+              <p>👋 Hello! I'm your Worxstream AI assistant. I can help you with:</p>
+              <div class="data-list">
+                <div class="data-list-item">
+                  <div class="data-list-item-content">
+                    <div class="data-list-item-title">📦 Products & Services</div>
+                    <div class="data-list-item-desc">Manage categories, items, pricing</div>
+                  </div>
+                </div>
+                <div class="data-list-item">
+                  <div class="data-list-item-content">
+                    <div class="data-list-item-title">👥 Customers & Contacts</div>
+                    <div class="data-list-item-desc">View and manage customer data</div>
+                  </div>
+                </div>
+                <div class="data-list-item">
+                  <div class="data-list-item-content">
+                    <div class="data-list-item-title">🏢 Organization</div>
+                    <div class="data-list-item-desc">Company info, branches, HR data</div>
+                  </div>
+                </div>
+                <div class="data-list-item">
+                  <div class="data-list-item-content">
+                    <div class="data-list-item-title">💰 Finance</div>
+                    <div class="data-list-item-desc">Tax configs, chart of accounts</div>
+                  </div>
+                </div>
+              </div>
+              <p>Try one of the quick actions above or ask me anything!</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="input-area">
+        <input 
+          type="text" 
+          id="userInput" 
+          placeholder="Ask me anything about your business data..."
+          onkeypress="if(event.key === 'Enter') sendMessage()"
+        >
+        <button onclick="sendMessage()" id="sendBtn">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API_URL = 'http://localhost:3000';
+    let conversationId = null;
+
+    // Icon mapping
+    const iconMap = {
+      'users': '👥',
+      'package': '📦',
+      'dollar': '💰',
+      'building': '🏢',
+      'chart': '📊',
+      'calendar': '📅',
+      'mail': '📧',
+      'phone': '📞',
+      'tag': '🏷️',
+      'folder': '📁',
+      'check': '✅',
+      'warning': '⚠️',
+      'error': '❌',
+      'info': 'ℹ️',
+      'success': '✅',
+    };
+
+    function getIcon(name) {
+      return iconMap[name] || '📌';
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // Parse XML content using DOM parser
+    function parseXMLContent(content) {
+      let html = content;
+
+      // Parse <stats> blocks
+      html = html.replace(/<stats>([\s\S]*?)<\/stats>/gi, (match, inner) => {
+        const statsHtml = [];
+        const statMatches = inner.matchAll(/<stat\s+([^>]*)\/>/gi);
+        for (const m of statMatches) {
+          const attrs = parseAttributes(m[1]);
+          const color = attrs.color || 'blue';
+          const icon = getIcon(attrs.icon || 'chart');
+          statsHtml.push(`
+            <div class="stat-card ${color}">
+              <div class="icon">${icon}</div>
+              <div class="value">${escapeHtml(attrs.value || '0')}</div>
+              <div class="label">${escapeHtml(attrs.label || '')}</div>
+            </div>
+          `);
+        }
+        return `<div class="stats-grid">${statsHtml.join('')}</div>`;
+      });
+
+      // Parse <table> blocks
+      html = html.replace(/<table\s*([^>]*)>([\s\S]*?)<\/table>/gi, (match, attrs, inner) => {
+        const tableAttrs = parseAttributes(attrs);
+        const title = tableAttrs.title || '';
+        
+        // Parse headers
+        const headers = [];
+        const headersMatch = inner.match(/<headers>([\s\S]*?)<\/headers>/i);
+        if (headersMatch) {
+          const thMatches = headersMatch[1].matchAll(/<th>([^<]*)<\/th>/gi);
+          for (const th of thMatches) {
+            headers.push(th[1].trim());
+          }
+        }
+
+        // Parse rows
+        const rows = [];
+        const rowMatches = inner.matchAll(/<row>([\s\S]*?)<\/row>/gi);
+        for (const rowMatch of rowMatches) {
+          const cells = [];
+          const tdMatches = rowMatch[1].matchAll(/<td\s*([^>]*)>([^<]*)<\/td>/gi);
+          for (const td of tdMatches) {
+            const tdAttrs = parseAttributes(td[1]);
+            cells.push({
+              value: td[2].trim(),
+              status: tdAttrs.status || null
+            });
+          }
+          if (cells.length > 0) rows.push(cells);
+        }
+
+        return `
+          <div class="data-table">
+            ${title ? `<div class="data-table-header">📋 ${escapeHtml(title)}</div>` : ''}
+            <div class="data-table-wrapper">
+              <table>
+                <thead>
+                  <tr>${headers.map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr>
+                </thead>
+                <tbody>
+                  ${rows.map(row => `
+                    <tr>
+                      ${row.map(cell => 
+                        cell.status 
+                          ? `<td><span class="status-badge ${cell.status}">${escapeHtml(cell.value)}</span></td>`
+                          : `<td>${escapeHtml(cell.value)}</td>`
+                      ).join('')}
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        `;
+      });
+
+      // Parse <list> blocks
+      html = html.replace(/<list\s*([^>]*)>([\s\S]*?)<\/list>/gi, (match, attrs, inner) => {
+        const listAttrs = parseAttributes(attrs);
+        const title = listAttrs.title || '';
+        
+        const items = [];
+        const itemMatches = inner.matchAll(/<item\s+([^>]*)\/>/gi);
+        for (const item of itemMatches) {
+          const itemAttrs = parseAttributes(item[1]);
+          items.push({
+            title: itemAttrs.title || '',
+            description: itemAttrs.description || '',
+            badge: itemAttrs.badge || ''
+          });
+        }
+
+        return `
+          <div class="data-list">
+            ${title ? `<div class="data-list-header">📋 ${escapeHtml(title)}</div>` : ''}
+            ${items.map(item => `
+              <div class="data-list-item">
+                <div class="data-list-item-content">
+                  <div class="data-list-item-title">${escapeHtml(item.title)}</div>
+                  ${item.description ? `<div class="data-list-item-desc">${escapeHtml(item.description)}</div>` : ''}
+                </div>
+                ${item.badge ? `<span class="data-list-item-badge">${escapeHtml(item.badge)}</span>` : ''}
+              </div>
+            `).join('')}
+          </div>
+        `;
+      });
+
+      // Parse <details> blocks
+      html = html.replace(/<details\s*([^>]*)>([\s\S]*?)<\/details>/gi, (match, attrs, inner) => {
+        const detailsAttrs = parseAttributes(attrs);
+        const title = detailsAttrs.title || '';
+        
+        const items = [];
+        const itemMatches = inner.matchAll(/<item\s+([^>]*)>([\s\S]*?)<\/item>/gi);
+        for (const item of itemMatches) {
+          const itemAttrs = parseAttributes(item[1]);
+          items.push({
+            label: itemAttrs.label || '',
+            value: item[2].trim()
+          });
+        }
+
+        return `
+          <div class="details-card">
+            ${title ? `<div class="details-card-header">📄 ${escapeHtml(title)}</div>` : ''}
+            <div class="details-card-body">
+              ${items.map(item => `
+                <div class="details-item">
+                  <span class="details-item-label">${escapeHtml(item.label)}</span>
+                  <span class="details-item-value">${escapeHtml(item.value)}</span>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        `;
+      });
+
+      // Parse <alert> blocks
+      html = html.replace(/<alert\s+type="([^"]*)">([\s\S]*?)<\/alert>/gi, (match, type, content) => {
+        const icon = getIcon(type);
+        return `<div class="alert ${type}">${icon} ${escapeHtml(content.trim())}</div>`;
+      });
+
+      // Clean up and format remaining text
+      html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      
+      // Split into paragraphs
+      const parts = html.split(/\n\n+/);
+      const formattedParts = parts.map(part => {
+        part = part.trim();
+        if (!part) return '';
+        // Don't wrap if it starts with HTML tag
+        if (part.startsWith('<div') || part.startsWith('<p')) {
+          return part;
+        }
+        // Wrap plain text in paragraph
+        return `<p>${part.replace(/\n/g, '<br>')}</p>`;
+      });
+
+      return formattedParts.filter(p => p).join('');
+    }
+
+    // Parse HTML attributes from a string
+    function parseAttributes(attrString) {
+      const attrs = {};
+      if (!attrString) return attrs;
+      
+      const regex = /(\w+)="([^"]*)"/g;
+      let match;
+      while ((match = regex.exec(attrString)) !== null) {
+        attrs[match[1]] = match[2];
+      }
+      return attrs;
+    }
+
+    function addMessage(content, role, toolsUsed = []) {
+      const messagesDiv = document.getElementById('messages');
+      const messageDiv = document.createElement('div');
+      messageDiv.className = `message ${role}`;
+      
+      const contentDiv = document.createElement('div');
+      contentDiv.className = 'message-content';
+      
+      const textDiv = document.createElement('div');
+      textDiv.className = 'message-text';
+      
+      if (role === 'assistant') {
+        textDiv.innerHTML = parseXMLContent(content);
+      } else {
+        textDiv.innerHTML = `<p>${escapeHtml(content)}</p>`;
+      }
+      
+      contentDiv.appendChild(textDiv);
+
+      if (toolsUsed.length > 0) {
+        const toolsDiv = document.createElement('div');
+        toolsDiv.className = 'tools-used';
+        toolsDiv.innerHTML = '<span class="tools-label">Tools used:</span> ' + 
+          toolsUsed.map(t => `<span class="tool-badge">${escapeHtml(t.name)}</span>`).join('');
+        contentDiv.appendChild(toolsDiv);
+      }
+
+      messageDiv.appendChild(contentDiv);
+      messagesDiv.appendChild(messageDiv);
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+
+    function showTyping() {
+      const messagesDiv = document.getElementById('messages');
+      const typingDiv = document.createElement('div');
+      typingDiv.className = 'typing';
+      typingDiv.id = 'typing';
+      typingDiv.innerHTML = '<span></span><span></span><span></span>';
+      messagesDiv.appendChild(typingDiv);
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+
+    function hideTyping() {
+      const typingDiv = document.getElementById('typing');
+      if (typingDiv) typingDiv.remove();
+    }
+
+    async function sendMessage() {
+      const input = document.getElementById('userInput');
+      const sendBtn = document.getElementById('sendBtn');
+      const message = input.value.trim();
+
+      if (!message) return;
+
+      addMessage(message, 'user');
+      input.value = '';
+      sendBtn.disabled = true;
+      showTyping();
+
+      try {
+        const response = await fetch(`${API_URL}/api/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message, conversation_id: conversationId }),
+        });
+
+        const data = await response.json();
+        hideTyping();
+
+        if (data.success) {
+          conversationId = data.conversation_id;
+          addMessage(data.response, 'assistant', data.tools_used);
+        } else {
+          addMessage(`<alert type="error">${data.error}</alert>`, 'assistant');
+        }
+      } catch (error) {
+        hideTyping();
+        addMessage(`<alert type="error">Connection error: ${error.message}. Make sure the server is running.</alert>`, 'assistant');
+      }
+
+      sendBtn.disabled = false;
+      input.focus();
+    }
+
+    function sendExample(text) {
+      document.getElementById('userInput').value = text;
+      sendMessage();
+    }
+  </script>
+</body>
+</html>

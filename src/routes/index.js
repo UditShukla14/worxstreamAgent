@@ -1,0 +1,33 @@
+/**
+ * Routes Index - Configure all application routes
+ */
+
+import { Router } from 'express';
+import healthRoutes from './health.js';
+import toolsRoutes from './tools.js';
+import chatRoutes from './chat.js';
+import priceComparisonRoutes from './priceComparison.js';
+
+const router = Router();
+
+// Mount routes
+router.use('/health', healthRoutes);
+router.use('/api/tools', toolsRoutes);
+router.use('/api/chat', chatRoutes);
+router.use('/api/price-comparison', priceComparisonRoutes);
+
+// Root health check
+router.get('/', (req, res) => {
+  res.json({
+    name: 'Worxstream AI Agent API',
+    version: '1.0.0',
+    endpoints: {
+      health: '/health',
+      chat: '/api/chat',
+      stream: '/api/chat/stream',
+      tools: '/api/tools',
+    },
+  });
+});
+
+export default router;
