@@ -1,0 +1,67 @@
+name: Deploy to DigitalOcean
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to DigitalOcean Droplet
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DROPLET_IP }}
+          username: root
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          script: |
+            # Navigate to app directory
+            cd /opt/worxstream-agent || mkdir -p /opt/worxstream-agent && cd /opt/worxstream-agent
+            
+            # Pull latest code
+            if [ -d ".git" ]; then
+              git pull origin main
+            else
+              git clone https://github.com/UditShukla14/worxstreamAgent.git .
+            fi
+            
+            # Ensure .env file exists (don't overwrite if it exists)
+            if [ ! -f .env ]; then
+              echo "⚠️  Warning: .env file not found. Please create it manually."
+            fi
+            
+            # Install Docker if not installed
+            if ! command -v docker &> /dev/null; then
+              echo "📦 Installing Docker..."
+              apt-get update
+              apt-get install -y docker.io docker-compose
+              systemctl start docker
+              systemctl enable docker
+            fi
+            
+            # Build and deploy with Docker Compose
+            echo "🐳 Building and deploying with Docker..."
+            docker-compose down
+            docker-compose build --no-cache
+            docker-compose up -d
+            
+            # Wait for health check
+            echo "⏳ Waiting for service to be healthy..."
+            sleep 10
+            
+            # Check if container is running
+            if docker ps | grep -q worxstream-agent; then
+              echo "✅ Deployment successful!"
+              docker ps | grep worxstream-agent
+            else
+              echo "❌ Deployment failed!"
+              docker-compose logs
+              exit 1
+            fi
+
