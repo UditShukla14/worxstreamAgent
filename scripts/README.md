@@ -1,58 +1,29 @@
 # Deployment Scripts
 
-Scripts for deploying the Worxstream AI Agent.
-
 ## deploy.sh
 
-Main deployment script for the Worxstream AI Agent on DigitalOcean droplet.
+Deployment script for Worxstream AI Agent.
 
-### Usage
-
+**Usage:**
 ```bash
-# On your droplet
 cd /opt/worxstream-agent
-chmod +x scripts/deploy.sh
 ./scripts/deploy.sh
 ```
 
-### What it does
+**Requirements:**
+- Root access
+- `.env` file with required variables
+- Git repository access
 
-1. Pulls latest changes from GitHub
-2. Checks for required `.env` file
-3. Installs Docker and Docker Compose if needed
-4. Builds the Docker image
-5. Starts the container
-6. Verifies the service is running
+**Environment Variables:**
+- `ANTHROPIC_API_KEY` (required)
+- `WORXSTREAM_API_TOKEN` (required)
+- `BACKEND_URL` (default: https://mcp.worxstream.io)
+- `PORT` (default: 3000)
+- `NODE_ENV` (default: production)
 
-### Prerequisites
-
-- Docker and Docker Compose installed
-- `.env` file configured with required environment variables
-- Git repository cloned in `/opt/worxstream-agent`
-
-### Environment Variables
-
-Required variables in `.env`:
-- `ANTHROPIC_API_KEY` - Your Claude API key (required)
-- `WORXSTREAM_BASE_URL` - Worxstream API URL (default: https://api.worxstream.io)
-- `WORXSTREAM_API_TOKEN` - Your Worxstream API token (required)
-- `BACKEND_URL` - Public URL for the backend API (default: https://mcp.worxstream.io)
-- `DEFAULT_COMPANY_ID` - Default company ID (default: 1)
-- `DEFAULT_USER_ID` - Default user ID (default: 1)
-- `PORT` - Server port (default: 3000)
-- `NODE_ENV` - Environment (default: production)
-- `MONGODB_URL` - MongoDB connection string (optional, has default)
-
-### Troubleshooting
-
-If deployment fails:
+**Troubleshooting:**
 ```bash
-# Check container logs
 docker compose logs -f
-
-# Check container status
 docker ps -a
-
-# Restart deployment
-./scripts/deploy.sh
 ```

@@ -1,133 +1,61 @@
 #!/bin/bash
 
-# Deployment script for Worxstream AI Agent
-# This script can be run manually on the droplet
+# Worxstream AI Agent - Deployment Script
 
 set -e
 
-echo "🚀 Starting deployment..."
-
-# Configuration
 APP_DIR="/opt/worxstream-agent"
 REPO_URL="https://github.com/UditShukla14/worxstreamAgent.git"
 BRANCH="main"
 
-# Colors for output
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m' # No Color
+# Check root access
+[ "$EUID" -eq 0 ] || { echo "Error: Must run as root" >&2; exit 1; }
 
-# Check if running as root
-if [ "$EUID" -ne 0 ]; then 
-  echo -e "${RED}Please run as root${NC}"
-  exit 1
-fi
-
-# Create app directory if it doesn't exist
-if [ ! -d "$APP_DIR" ]; then
-  echo -e "${YELLOW}Creating app directory...${NC}"
-  mkdir -p "$APP_DIR"
-fi
-
+# Ensure app directory exists
+mkdir -p "$APP_DIR"
 cd "$APP_DIR"
 
-# Clone or pull repository
+# Update code
 if [ -d ".git" ]; then
-  echo -e "${GREEN}Pulling latest changes...${NC}"
-  git pull origin "$BRANCH"
+  git pull origin "$BRANCH" > /dev/null 2>&1
 else
-  echo -e "${GREEN}Cloning repository...${NC}"
-  git clone -b "$BRANCH" "$REPO_URL" .
+  git clone -b "$BRANCH" "$REPO_URL" . > /dev/null 2>&1
 fi
 
-# Check for .env file
+# Check .env file
 if [ ! -f .env ]; then
-  echo -e "${YELLOW}⚠️  Warning: .env file not found!${NC}"
-  echo -e "${YELLOW}Please create .env file with required environment variables.${NC}"
-  echo ""
-  echo "Required variables:"
-  echo "  - ANTHROPIC_API_KEY"
-  echo "  - WORXSTREAM_BASE_URL (default: https://api.worxstream.io)"
-  echo "  - WORXSTREAM_API_TOKEN"
-  echo "  - BACKEND_URL (default: https://mcp.worxstream.io)"
-  echo "  - DEFAULT_COMPANY_ID (default: 1)"
-  echo "  - DEFAULT_USER_ID (default: 1)"
-  echo "  - PORT (default: 3000)"
-  echo "  - NODE_ENV (default: production)"
-  echo "  - MONGODB_URL (optional, has default)"
-  echo ""
-  
-  # Skip interactive prompt if SKIP_ENV_CHECK is set (for CI/CD)
   if [ -z "$SKIP_ENV_CHECK" ]; then
-    read -p "Continue anyway? (y/n) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-      exit 1
-    fi
-  else
-    echo "⚠️  Continuing without .env file (CI/CD mode)..."
+    echo "Warning: .env file not found" >&2
+    exit 1
   fi
 fi
 
-# Install Docker if not installed
+# Ensure Docker is installed
 if ! command -v docker &> /dev/null; then
-  echo -e "${YELLOW}Installing Docker...${NC}"
-  apt-get update
-  apt-get install -y docker.io docker-compose-plugin
-  systemctl start docker
-  systemctl enable docker
+  curl -fsSL https://get.docker.com | sh > /dev/null 2>&1
+  systemctl enable docker > /dev/null 2>&1
 fi
 
-# Install Docker Compose if not installed
-if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
-  echo -e "${YELLOW}Installing Docker Compose...${NC}"
-  apt-get install -y docker-compose-plugin
-fi
+# Determine compose command
+COMPOSE_CMD="docker compose"
+docker compose version > /dev/null 2>&1 || COMPOSE_CMD="docker-compose"
 
-# Create uploads directory
+# Prepare directories
 mkdir -p uploads
 chmod 755 uploads
 
-# Determine which compose command to use
-if docker compose version &> /dev/null; then
-  COMPOSE_CMD="docker compose"
-else
-  COMPOSE_CMD="docker-compose"
-fi
+# Deploy
+$COMPOSE_CMD down > /dev/null 2>&1 || true
+$COMPOSE_CMD build --no-cache --quiet
+$COMPOSE_CMD up -d > /dev/null 2>&1
 
-# Stop existing containers
-echo -e "${GREEN}Stopping existing containers...${NC}"
-$COMPOSE_CMD down || true
-
-# Build and start containers
-echo -e "${GREEN}Building Docker image...${NC}"
-$COMPOSE_CMD build --no-cache
-
-echo -e "${GREEN}Starting containers...${NC}"
-$COMPOSE_CMD up -d
-
-# Wait for service to start
-echo -e "${YELLOW}Waiting for service to start...${NC}"
-sleep 10
-
-# Check health
-echo -e "${GREEN}Checking service health...${NC}"
+# Verify deployment
+sleep 5
 if docker ps | grep -q worxstream-agent; then
-  echo -e "${GREEN}✅ Deployment successful!${NC}"
-  echo ""
-  echo "Container status:"
-  docker ps | grep worxstream-agent
-  echo ""
-  echo "Service URL: http://localhost:3000"
-  echo "Health check: http://localhost:3000/health"
-  echo ""
-  echo "To view logs: $COMPOSE_CMD logs -f"
+  echo "Deployment successful"
+  exit 0
 else
-  echo -e "${RED}❌ Deployment failed!${NC}"
-  echo ""
-  echo "Container logs:"
-  $COMPOSE_CMD logs
+  echo "Deployment failed" >&2
+  $COMPOSE_CMD logs --tail=50
   exit 1
 fi
-
