@@ -57,10 +57,16 @@ if [ ! -f .env ]; then
   echo "  - NODE_ENV (default: production)"
   echo "  - MONGODB_URL (optional, has default)"
   echo ""
-  read -p "Continue anyway? (y/n) " -n 1 -r
-  echo
-  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    exit 1
+  
+  # Skip interactive prompt if SKIP_ENV_CHECK is set (for CI/CD)
+  if [ -z "$SKIP_ENV_CHECK" ]; then
+    read -p "Continue anyway? (y/n) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+      exit 1
+    fi
+  else
+    echo "⚠️  Continuing without .env file (CI/CD mode)..."
   fi
 fi
 

@@ -20,48 +20,91 @@ jobs:
           host: ${{ secrets.DROPLET_IP }}
           username: root
           key: ${{ secrets.DROPLET_SSH_KEY }}
+          passphrase: ${{ secrets.DROPLET_SSH_PASSPHRASE }}
+          port: 22
+          timeout: 30s
+          command_timeout: 10m
           script: |
             # Navigate to app directory
             cd /opt/worxstream-agent || mkdir -p /opt/worxstream-agent && cd /opt/worxstream-agent
             
             # Pull latest code
             if [ -d ".git" ]; then
+              echo "📥 Pulling latest changes..."
               git pull origin main
             else
+              echo "📥 Cloning repository..."
               git clone https://github.com/UditShukla14/worxstreamAgent.git .
             fi
             
             # Ensure .env file exists (don't overwrite if it exists)
             if [ ! -f .env ]; then
               echo "⚠️  Warning: .env file not found. Please create it manually."
+              echo "⚠️  Deployment will continue but may fail if required env vars are missing."
             fi
             
-            # Install Docker if not installed
-            if ! command -v docker &> /dev/null; then
-              echo "📦 Installing Docker..."
-              apt-get update
-              apt-get install -y docker.io docker-compose
-              systemctl start docker
-              systemctl enable docker
-            fi
-            
-            # Build and deploy with Docker Compose
-            echo "🐳 Building and deploying with Docker..."
-            docker-compose down
-            docker-compose build --no-cache
-            docker-compose up -d
-            
-            # Wait for health check
-            echo "⏳ Waiting for service to be healthy..."
-            sleep 10
-            
-            # Check if container is running
-            if docker ps | grep -q worxstream-agent; then
-              echo "✅ Deployment successful!"
-              docker ps | grep worxstream-agent
+            # Use the deploy script if it exists, otherwise deploy manually
+            if [ -f "scripts/deploy.sh" ]; then
+              echo "🚀 Using deployment script..."
+              chmod +x scripts/deploy.sh
+              # Skip interactive prompts by setting environment variable
+              export SKIP_ENV_CHECK=1
+              # Use yes to auto-answer any prompts
+              yes | ./scripts/deploy.sh || {
+                echo "❌ Deployment script failed, trying manual deployment..."
+                # Fallback to manual deployment
+                if docker compose version &> /dev/null; then
+                  COMPOSE_CMD="docker compose"
+                else
+                  COMPOSE_CMD="docker-compose"
+                fi
+                $COMPOSE_CMD down || true
+                $COMPOSE_CMD build --no-cache
+                $COMPOSE_CMD up -d
+                sleep 10
+                if docker ps | grep -q worxstream-agent; then
+                  echo "✅ Manual deployment successful!"
+                else
+                  echo "❌ Manual deployment failed!"
+                  $COMPOSE_CMD logs
+                  exit 1
+                fi
+              }
             else
-              echo "❌ Deployment failed!"
-              docker-compose logs
-              exit 1
+              echo "🚀 Manual deployment (deploy script not found)..."
+              # Install Docker if not installed
+              if ! command -v docker &> /dev/null; then
+                echo "📦 Installing Docker..."
+                curl -fsSL https://get.docker.com | sh
+                systemctl start docker
+                systemctl enable docker
+              fi
+              
+              # Determine compose command
+              if docker compose version &> /dev/null; then
+                COMPOSE_CMD="docker compose"
+              else
+                COMPOSE_CMD="docker-compose"
+              fi
+              
+              # Build and deploy
+              echo "🐳 Building and deploying with Docker..."
+              $COMPOSE_CMD down || true
+              $COMPOSE_CMD build --no-cache
+              $COMPOSE_CMD up -d
+              
+              # Wait for health check
+              echo "⏳ Waiting for service to be healthy..."
+              sleep 10
+              
+              # Check if container is running
+              if docker ps | grep -q worxstream-agent; then
+                echo "✅ Deployment successful!"
+                docker ps | grep worxstream-agent
+              else
+                echo "❌ Deployment failed!"
+                $COMPOSE_CMD logs
+                exit 1
+              fi
             fi
 
