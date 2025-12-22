@@ -1,4 +1,4 @@
-# Multi-stage build for Worxstream AI Agent
+# Backend-only build for Worxstream AI Agent
 FROM node:20-alpine AS base
 
 # Install dependencies only when needed
@@ -8,18 +8,6 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 RUN npm ci --only=production
-
-# Build stage for frontend
-FROM base AS frontend-builder
-WORKDIR /app/client
-
-# Copy client package files
-COPY client/package*.json ./
-RUN npm ci
-
-# Copy client source and build
-COPY client/ ./
-RUN npm run build
 
 # Production stage
 FROM base AS runner
@@ -36,11 +24,8 @@ COPY --from=deps --chown=nodejs:nodejs /app/node_modules ./node_modules
 COPY --chown=nodejs:nodejs src ./src
 COPY --chown=nodejs:nodejs package*.json ./
 
-# Copy built frontend
-COPY --from=frontend-builder --chown=nodejs:nodejs /app/client/dist ./public
-
-# Create uploads directory
-RUN mkdir -p uploads && chown nodejs:nodejs uploads
+# Create uploads and public directories
+RUN mkdir -p uploads public && chown nodejs:nodejs uploads public
 
 USER nodejs
 

@@ -1,3 +1,5 @@
+import { Milestone } from '../components/Milestones';
+
 // Icon mapping
 const iconMap: Record<string, string> = {
   users: '👥',
@@ -81,7 +83,7 @@ export function extractWorkflowFromXML(content: string): any | null {
 }
 
 // Extract milestones data from <milestones> tags (handles partial/incomplete content during streaming)
-export function extractMilestonesFromXML(content: string): Array<{ id: string; status: string; text: string }> | null {
+export function extractMilestonesFromXML(content: string): Milestone[] | null {
   if (!content) return null;
 
   // Try to find complete milestones tag first
@@ -101,7 +103,7 @@ export function extractMilestonesFromXML(content: string): Array<{ id: string; s
 
   try {
     const innerContent = milestonesMatch[2];
-    const milestones: Array<{ id: string; status: string; text: string }> = [];
+    const milestones: Milestone[] = [];
     
     // Parse individual milestone tags (including incomplete ones during streaming)
     // Match milestone tags even if they're not closed yet
@@ -112,11 +114,19 @@ export function extractMilestonesFromXML(content: string): Array<{ id: string; s
       const attrs = parseAttributes(match[1]);
       const text = match[2].trim();
       
+      // Validate and normalize status
+      const statusValue = attrs.status || 'pending';
+      const validStatus: Milestone['status'] = 
+        (statusValue === 'pending' || statusValue === 'in_progress' || 
+         statusValue === 'completed' || statusValue === 'failed')
+          ? statusValue
+          : 'pending';
+      
       // Only add milestone if it has valid attributes (id or status)
       if (attrs.id || attrs.status || text) {
         milestones.push({
           id: attrs.id || String(milestones.length + 1),
-          status: (attrs.status || 'pending') as 'pending' | 'in_progress' | 'completed' | 'failed',
+          status: validStatus,
           text: text || '...', // Show placeholder if text is empty (streaming)
         });
       }

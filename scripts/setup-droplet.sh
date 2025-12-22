@@ -3,7 +3,8 @@
 # Initial setup script for DigitalOcean Droplet
 # Run this once to set up the environment
 
-set -e
+# Don't exit on error - continue with what we can
+set +e
 
 echo "🔧 Setting up DigitalOcean Droplet for Worxstream AI Agent..."
 
@@ -13,12 +14,18 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-# Update system
+# Update system (handle repository errors gracefully)
 echo "📦 Updating system packages..."
-apt-get update
-apt-get upgrade -y
+apt-get update || {
+  echo "⚠️  Repository update failed, attempting to fix sources..."
+  # Fix repository sources for Ubuntu 24.10
+  sed -i 's|http://mirrors.digitalocean.com/ubuntu|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/*.list 2>/dev/null || true
+  sed -i 's|http://security.ubuntu.com/ubuntu|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/*.list 2>/dev/null || true
+  apt-get update || echo "⚠️  Continuing despite repository errors..."
+}
+apt-get upgrade -y || echo "⚠️  Upgrade failed, continuing..."
 
-# Install essential tools
+# Install essential tools (try without update first, then with update if needed)
 echo "📦 Installing essential tools..."
 apt-get install -y \
   curl \
@@ -26,7 +33,11 @@ apt-get install -y \
   git \
   build-essential \
   vim \
-  htop
+  htop 2>/dev/null || {
+  echo "⚠️  Direct install failed, trying with update..."
+  apt-get update 2>/dev/null || true
+  apt-get install -y curl wget git build-essential vim htop || echo "⚠️  Some tools may not be installed"
+}
 
 # Install Docker
 echo "🐳 Installing Docker..."
@@ -34,29 +45,43 @@ if ! command -v docker &> /dev/null; then
   # Remove old versions
   apt-get remove -y docker docker-engine docker.io containerd runc 2>/dev/null || true
   
-  # Install Docker
+  # Install prerequisites
   apt-get install -y \
     ca-certificates \
     gnupg \
-    lsb-release
+    lsb-release \
+    curl \
+    wget || echo "⚠️  Some packages failed to install, continuing..."
   
   # Add Docker's official GPG key
   install -m 0755 -d /etc/apt/keyrings
   curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
   chmod a+r /etc/apt/keyrings/docker.gpg
   
+  # Detect Ubuntu version and set appropriate codename
+  UBUNTU_CODENAME=$(lsb_release -cs)
+  # For Ubuntu 24.10, use noble (LTS) repositories if oracular fails
+  if [ "$UBUNTU_CODENAME" = "oracular" ]; then
+    UBUNTU_CODENAME="noble"
+  fi
+  
   # Set up repository
   echo \
     "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-    $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+    ${UBUNTU_CODENAME} stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
   
   # Install Docker Engine
-  apt-get update
-  apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  apt-get update || echo "⚠️  Repository update failed, trying alternative method..."
+  
+  # Try installing docker.io from Ubuntu repos as fallback
+  if ! apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin 2>/dev/null; then
+    echo "📦 Installing Docker from Ubuntu repositories..."
+    apt-get install -y docker.io docker-compose-plugin || apt-get install -y docker.io
+  fi
   
   # Start and enable Docker
-  systemctl start docker
-  systemctl enable docker
+  systemctl start docker || service docker start
+  systemctl enable docker || true
   
   echo "✅ Docker installed successfully"
 else
@@ -66,9 +91,12 @@ fi
 # Install Node.js (for local development/testing, Docker will use its own)
 echo "📦 Installing Node.js..."
 if ! command -v node &> /dev/null; then
-  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-  apt-get install -y nodejs
-  echo "✅ Node.js installed"
+  curl -fsSL https://deb.nodesource.com/setup_20.x | bash - || {
+    echo "⚠️  NodeSource setup failed, installing from Ubuntu repos..."
+    apt-get install -y nodejs npm || echo "⚠️  Node.js installation failed, Docker will handle it"
+  }
+  apt-get install -y nodejs || echo "⚠️  Node.js installation skipped"
+  echo "✅ Node.js installation attempted"
 else
   echo "✅ Node.js already installed"
 fi

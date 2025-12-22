@@ -16,9 +16,7 @@ Thumbs.db
 dist
 build
 *.tsbuildinfo
-client/node_modules
-client/dist
-client/.vite
+client
 uploads/*
 !uploads/.gitkeep
 scripts

@@ -81,16 +81,23 @@ fi
 mkdir -p uploads
 chmod 755 uploads
 
+# Determine which compose command to use
+if docker compose version &> /dev/null; then
+  COMPOSE_CMD="docker compose"
+else
+  COMPOSE_CMD="docker-compose"
+fi
+
 # Stop existing containers
 echo -e "${GREEN}Stopping existing containers...${NC}"
-docker-compose down || docker compose down || true
+$COMPOSE_CMD down || true
 
 # Build and start containers
 echo -e "${GREEN}Building Docker image...${NC}"
-docker-compose build --no-cache || docker compose build --no-cache
+$COMPOSE_CMD build --no-cache
 
 echo -e "${GREEN}Starting containers...${NC}"
-docker-compose up -d || docker compose up -d
+$COMPOSE_CMD up -d
 
 # Wait for service to start
 echo -e "${YELLOW}Waiting for service to start...${NC}"
@@ -107,12 +114,12 @@ if docker ps | grep -q worxstream-agent; then
   echo "Service URL: http://localhost:3000"
   echo "Health check: http://localhost:3000/health"
   echo ""
-  echo "To view logs: docker-compose logs -f"
+  echo "To view logs: $COMPOSE_CMD logs -f"
 else
   echo -e "${RED}❌ Deployment failed!${NC}"
   echo ""
   echo "Container logs:"
-  docker-compose logs || docker compose logs
+  $COMPOSE_CMD logs
   exit 1
 fi
 
