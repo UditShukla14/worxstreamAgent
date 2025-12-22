@@ -24,8 +24,42 @@ const __dirname = dirname(__filename);
 // Create Express app
 const app = express();
 
+// CORS configuration
+const allowedOrigins = [
+  'https://worxstream.io',
+  'https://app.worxstream.io',
+  'https://mcp.worxstream.io',
+  'http://localhost:5173', // Frontend dev
+  'http://localhost:3000', // Backend dev
+  'http://localhost:4173', // Frontend preview
+];
+
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps, Postman, or curl requests)
+    if (!origin) {
+      return callback(null, true);
+    }
+    
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      // In production, be strict; in development, allow all
+      if (config.server.env === 'development') {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    }
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  credentials: true,
+  exposedHeaders: ['Content-Length', 'X-Request-ID'],
+};
+
 // Middleware
-app.use(cors());
+app.use(cors(corsOptions));
 app.use(express.json());
 
 // Serve static files from public directory
@@ -44,22 +78,23 @@ async function startServer() {
     // Connect to MongoDB
     await connectDB();
     
-    app.listen(config.server.port, () => {
+    app.listen(config.server.port, '0.0.0.0', () => {
       console.log('\n' + '='.repeat(60));
       console.log('🚀 Worxstream AI Agent Server');
       console.log('='.repeat(60));
-      console.log(`📍 Server running on http://localhost:${config.server.port}`);
+      console.log(`📍 Server running on http://0.0.0.0:${config.server.port}`);
+      console.log(`🌐 Public URL: ${config.server.publicUrl}`);
       console.log(`🤖 Using model: ${config.anthropic.model}`);
       console.log(`🔧 Available MCP tools: ${getAvailableTools().length}`);
       console.log(`📦 MongoDB connected`);
       console.log('='.repeat(60));
       console.log('\nEndpoints:');
-      console.log(`  POST /api/chat        - Send a message to the AI agent`);
-      console.log(`  POST /api/chat/stream - Send a message with streaming response (SSE)`);
-      console.log(`  GET  /api/chat/:id    - Get conversation history`);
-      console.log(`  DELETE /api/chat/:id  - Delete conversation`);
-      console.log(`  GET  /api/tools       - List available tools`);
-      console.log(`  GET  /health          - Health check`);
+      console.log(`  POST ${config.server.publicUrl}/api/chat        - Send a message to the AI agent`);
+      console.log(`  POST ${config.server.publicUrl}/api/chat/stream - Send a message with streaming response (SSE)`);
+      console.log(`  GET  ${config.server.publicUrl}/api/chat/:id    - Get conversation history`);
+      console.log(`  DELETE ${config.server.publicUrl}/api/chat/:id  - Delete conversation`);
+      console.log(`  GET  ${config.server.publicUrl}/api/tools       - List available tools`);
+      console.log(`  GET  ${config.server.publicUrl}/health          - Health check`);
       console.log('='.repeat(60) + '\n');
     });
   } catch (error) {

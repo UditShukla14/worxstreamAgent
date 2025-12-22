@@ -48,12 +48,14 @@ if [ ! -f .env ]; then
   echo ""
   echo "Required variables:"
   echo "  - ANTHROPIC_API_KEY"
-  echo "  - WORXSTREAM_BASE_URL"
+  echo "  - WORXSTREAM_BASE_URL (default: https://api.worxstream.io)"
   echo "  - WORXSTREAM_API_TOKEN"
-  echo "  - DEFAULT_COMPANY_ID"
-  echo "  - DEFAULT_USER_ID"
+  echo "  - BACKEND_URL (default: https://mcp.worxstream.io)"
+  echo "  - DEFAULT_COMPANY_ID (default: 1)"
+  echo "  - DEFAULT_USER_ID (default: 1)"
   echo "  - PORT (default: 3000)"
-  echo "  - MONGODB_URI (if using MongoDB)"
+  echo "  - NODE_ENV (default: production)"
+  echo "  - MONGODB_URL (optional, has default)"
   echo ""
   read -p "Continue anyway? (y/n) " -n 1 -r
   echo

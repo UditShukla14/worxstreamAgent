@@ -33,13 +33,15 @@ chmod +x scripts/deploy.sh
 ### Environment Variables
 
 Required variables in `.env`:
-- `ANTHROPIC_API_KEY` - Your Claude API key
-- `WORXSTREAM_BASE_URL` - Worxstream API URL
-- `WORXSTREAM_API_TOKEN` - Your Worxstream API token
-- `DEFAULT_COMPANY_ID` - Default company ID
-- `DEFAULT_USER_ID` - Default user ID
+- `ANTHROPIC_API_KEY` - Your Claude API key (required)
+- `WORXSTREAM_BASE_URL` - Worxstream API URL (default: https://api.worxstream.io)
+- `WORXSTREAM_API_TOKEN` - Your Worxstream API token (required)
+- `BACKEND_URL` - Public URL for the backend API (default: https://mcp.worxstream.io)
+- `DEFAULT_COMPANY_ID` - Default company ID (default: 1)
+- `DEFAULT_USER_ID` - Default user ID (default: 1)
 - `PORT` - Server port (default: 3000)
-- `NODE_ENV` - Environment (production)
+- `NODE_ENV` - Environment (default: production)
+- `MONGODB_URL` - MongoDB connection string (optional, has default)
 
 ### Troubleshooting
 

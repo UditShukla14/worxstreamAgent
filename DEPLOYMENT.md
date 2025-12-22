@@ -50,11 +50,14 @@ nano .env
 
 Fill in your environment variables:
 - `ANTHROPIC_API_KEY` - Your Claude API key
-- `WORXSTREAM_BASE_URL` - Worxstream API URL
+- `WORXSTREAM_BASE_URL` - Worxstream API URL (default: https://api.worxstream.io)
 - `WORXSTREAM_API_TOKEN` - Your Worxstream API token
-- `DEFAULT_COMPANY_ID` - Your company ID
-- `DEFAULT_USER_ID` - Your user ID
-- `MONGODB_URI` - MongoDB connection string (if using)
+- `BACKEND_URL` - Public URL for the backend API (default: https://mcp.worxstream.io)
+- `DEFAULT_COMPANY_ID` - Your company ID (default: 1)
+- `DEFAULT_USER_ID` - Your user ID (default: 1)
+- `PORT` - Server port (default: 3000)
+- `NODE_ENV` - Environment (production/development)
+- `MONGODB_URL` - MongoDB connection string (optional, has default)
 
 ### Step 4: Enable GitHub Actions
 

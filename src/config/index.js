@@ -19,6 +19,7 @@ export const config = {
   server: {
     port: parseInt(process.env.PORT || '3000', 10),
     env: process.env.NODE_ENV || 'development',
+    publicUrl: process.env.BACKEND_URL || process.env.PUBLIC_URL || 'https://mcp.worxstream.io',
   },
   database: {
     url: process.env.MONGODB_URL || 'mongodb+srv://doadmin:94f0Pq2rX1768uKe@db-mongodb-nyc1-38465-c4ba6c32.mongo.ondigitalocean.com/?authSource=admin',
