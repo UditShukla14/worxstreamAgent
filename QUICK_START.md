@@ -11,18 +11,20 @@
 
 ### Step 2: Initial Setup on Droplet
 
+Ensure Docker is installed on your droplet:
+
 ```bash
 # SSH into droplet
 ssh root@157.245.218.43
 
-# Upload and run setup script
-# From your local machine:
-scp scripts/setup-droplet.sh root@157.245.218.43:/root/
-scp scripts/deploy.sh root@157.245.218.43:/root/
+# Install Docker (if not already installed)
+curl -fsSL https://get.docker.com | sh
+systemctl start docker
+systemctl enable docker
 
-# On droplet:
-chmod +x setup-droplet.sh deploy.sh
-./setup-droplet.sh
+# Create app directory
+mkdir -p /opt/worxstream-agent
+cd /opt/worxstream-agent
 ```
 
 ### Step 3: Configure Environment
@@ -46,7 +48,8 @@ Fill in:
 ```bash
 cd /opt/worxstream-agent
 git clone https://github.com/UditShukla14/worxstreamAgent.git .
-./deploy.sh
+chmod +x scripts/deploy.sh
+./scripts/deploy.sh
 ```
 
 **Option B: Auto-deployment (after GitHub secrets are set)**

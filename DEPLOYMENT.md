@@ -25,18 +25,19 @@ cat ~/.ssh/id_rsa
 
 ### Step 2: Initial Setup on Droplet
 
-SSH into your droplet and run the setup script:
+Ensure Docker and Docker Compose are installed on your droplet:
 
 ```bash
 ssh root@157.245.218.43
 
-# Upload setup script
-# From your local machine:
-scp scripts/setup-droplet.sh root@157.245.218.43:/root/
+# Install Docker (if not already installed)
+curl -fsSL https://get.docker.com | sh
+systemctl start docker
+systemctl enable docker
 
-# On the droplet:
-chmod +x setup-droplet.sh
-./setup-droplet.sh
+# Verify installation
+docker --version
+docker compose version
 ```
 
 ### Step 3: Configure Environment Variables
@@ -64,14 +65,7 @@ Once you push to the `main` branch, GitHub Actions will automatically:
 
 ## Option 2: Manual Deployment
 
-### Step 1: Initial Setup
-
-```bash
-ssh root@157.245.218.43
-./setup-droplet.sh
-```
-
-### Step 2: Clone Repository
+### Step 1: Clone Repository
 
 ```bash
 cd /opt/worxstream-agent
@@ -86,7 +80,7 @@ nano .env
 # Fill in your environment variables
 ```
 
-### Step 4: Deploy
+### Step 3: Deploy
 
 ```bash
 chmod +x scripts/deploy.sh
