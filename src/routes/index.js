@@ -14,7 +14,7 @@ const router = Router();
 
 // Mount routes (session same pattern as health: single path, one router)
 router.use('/health', healthRoutes);
-router.use('/session', sessionRoutes);
+router.use('/session', sessionRoutes); // GET/POST/DELETE /session
 router.use('/api/auth', authRoutes);
 router.use('/api/tools', toolsRoutes);
 router.use('/api/chat', chatRoutes);
