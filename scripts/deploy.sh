@@ -47,6 +47,15 @@ chmod 755 uploads
 
 # Deploy
 $COMPOSE_CMD down > /dev/null 2>&1 || true
+
+# Free port 3000 if another container is using it (e.g. orphan from old compose project)
+for cid in $(docker ps -q 2>/dev/null); do
+  if docker port "$cid" 2>/dev/null | grep -q '0.0.0.0:3000'; then
+    echo "Stopping container $cid using port 3000..."
+    docker stop "$cid" >/dev/null 2>&1 || true
+  fi
+done
+
 $COMPOSE_CMD build --no-cache --quiet
 $COMPOSE_CMD up -d
 

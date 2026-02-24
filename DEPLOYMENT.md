@@ -206,10 +206,13 @@ docker ps -a
 ```
 
 ### Port already in use
+
+The deploy script automatically stops any **Docker container** that is using port 3000 (e.g. an orphan from an old compose project). If you still see "address already in use", a non-Docker process is holding the port:
+
 ```bash
-# Check what's using port 3000
+# On the droplet: see what is using port 3000
 lsof -i :3000
-# Or change port in docker-compose.yml
+# Stop that process or change PORT in .env and the port mapping in docker-compose.yml
 ```
 
 ### Environment variables not loading
