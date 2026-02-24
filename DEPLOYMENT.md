@@ -1,6 +1,6 @@
 # Deployment Guide for Worxstream AI Agent
 
-This guide covers deploying the Worxstream AI Agent to your DigitalOcean droplet using Docker.
+This guide covers deploying the Worxstream AI Agent to your DigitalOcean droplet using **PM2** (recommended) or Docker.
 
 ## Prerequisites
 
@@ -8,7 +8,7 @@ This guide covers deploying the Worxstream AI Agent to your DigitalOcean droplet
 - SSH access to the droplet (IP: 157.245.218.43)
 - GitHub repository: https://github.com/UditShukla14/worxstreamAgent.git
 
-## Option 1: Automated Deployment with GitHub Actions (Recommended)
+## Option 1: PM2 with GitHub Actions (Recommended)
 
 ### Step 1: Set up GitHub Secrets
 
@@ -16,6 +16,7 @@ Go to your GitHub repository → Settings → Secrets and variables → Actions,
 
 1. **DROPLET_IP**: `157.245.218.43`
 2. **DROPLET_SSH_KEY**: Your private SSH key (the one you use to SSH into the droplet)
+3. **DROPLET_SSH_PASSPHRASE**: (optional) Passphrase for the key, if set
 
 To get your SSH key:
 ```bash
@@ -23,134 +24,146 @@ cat ~/.ssh/id_rsa
 # Copy the entire output including -----BEGIN and -----END lines
 ```
 
-### Step 2: Initial Setup on Droplet
+### Step 2: Initial setup on the droplet (one-time)
 
-Ensure Docker and Docker Compose are installed on your droplet:
+SSH in and install Node.js, PM2, and the app:
 
 ```bash
 ssh root@157.245.218.43
 
-# Install Docker (if not already installed)
-curl -fsSL https://get.docker.com | sh
-systemctl start docker
-systemctl enable docker
+# Install Node.js 20 (if not already installed)
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt-get install -y nodejs
 
-# Verify installation
-docker --version
-docker compose version
-```
+# Install PM2 globally
+npm install -g pm2
 
-### Step 3: Configure Environment Variables
-
-```bash
+# Clone app and configure
+mkdir -p /opt/worxstream-agent
 cd /opt/worxstream-agent
+git clone https://github.com/UditShukla14/worxstreamAgent.git .
 cp .env.example .env
-nano .env
+nano .env   # fill in ANTHROPIC_API_KEY, WORXSTREAM_*, etc.
+
+# Install dependencies and start with PM2
+npm ci --omit=dev
+pm2 start ecosystem.config.cjs
+pm2 save
+pm2 startup   # run the command it prints so the app restarts on reboot
 ```
 
-Fill in your environment variables:
+### Step 3: Environment variables
+
+In `/opt/worxstream-agent/.env` set at least:
+
 - `ANTHROPIC_API_KEY` - Your Claude API key
 - `WORXSTREAM_BASE_URL` - Worxstream API URL (default: https://api.worxstream.io)
 - `WORXSTREAM_API_TOKEN` - Your Worxstream API token
 - `BACKEND_URL` - Public URL for the backend API (default: https://mcp.worxstream.io)
-- `DEFAULT_COMPANY_ID` - Your company ID (default: 1)
-- `DEFAULT_USER_ID` - Your user ID (default: 1)
-- `PORT` - Server port (default: 3000)
-- `NODE_ENV` - Environment (production/development)
-- `MONGODB_URL` - MongoDB connection string (optional, has default)
+- `DEFAULT_COMPANY_ID`, `DEFAULT_USER_ID`, `PORT` (default 3000), `NODE_ENV`, `MONGODB_URL` (optional)
 
-### Step 4: Enable GitHub Actions
+### Step 4: Deployments
 
-Once you push to the `main` branch, GitHub Actions will automatically:
-1. Build the Docker image
-2. Deploy to your droplet
-3. Start the container
+- **Automatic:** Push to `main` or run the "Deploy to DigitalOcean" workflow. It will SSH in, pull code, run `npm ci --omit=dev`, then `pm2 restart mcp-backend` (or start from `ecosystem.config.cjs` if not running).
+- **Manual:**  
+  ```bash
+  ssh root@<DROPLET_IP>
+  cd /opt/worxstream-agent
+  git pull origin main
+  npm ci --omit=dev
+  pm2 restart mcp-backend --update-env
+  pm2 save
+  ```
 
 ## Restarting after the droplet was stopped
 
-If the backend was running on the droplet and you powered it off (or left it off for a while), use one of these:
+**Same droplet, app already set up at `/opt/worxstream-agent`:**
 
-**Same droplet, code and `.env` still at `/opt/worxstream-agent`:**
-
-1. **Via GitHub Actions (easiest):** Push any commit to `main` or run the "Deploy to DigitalOcean" workflow manually (Actions → Deploy to DigitalOcean → Run workflow). The workflow will SSH in, pull latest code, and run the deploy script (which frees port 3000 and starts the container).
+1. **Via GitHub Actions:** Run the "Deploy to DigitalOcean" workflow (or push to `main`). It will pull and restart PM2.
 2. **Via SSH:**  
    ```bash
-   ssh root@<YOUR_DROPLET_IP>
+   ssh root@<DROPLET_IP>
    cd /opt/worxstream-agent
    git pull origin main
-   ./scripts/deploy.sh
+   npm ci --omit=dev
+   pm2 restart mcp-backend
+   pm2 save
    ```
 
-**Droplet was destroyed and recreated (or `/opt/worxstream-agent` is empty):** Do the full setup again: install Docker (Step 2 above), clone the repo, create `.env` from `.env.example`, then run `./scripts/deploy.sh` or trigger the GitHub Action.
+**Droplet recreated or `/opt/worxstream-agent` empty:** Do the full one-time setup again (Step 2 above), then use the workflow or manual deploy.
 
-## Option 2: Manual Deployment
+## Option 2: Manual PM2 (no GitHub Actions)
 
-### Step 1: Clone Repository
+### Clone and configure
+
+```bash
+ssh root@<DROPLET_IP>
+mkdir -p /opt/worxstream-agent && cd /opt/worxstream-agent
+git clone https://github.com/UditShukla14/worxstreamAgent.git .
+cp .env.example .env
+nano .env
+npm ci --omit=dev
+pm2 start ecosystem.config.cjs
+pm2 save && pm2 startup
+```
+
+### Update later
 
 ```bash
 cd /opt/worxstream-agent
-git clone https://github.com/UditShukla14/worxstreamAgent.git .
+git pull origin main
+npm ci --omit=dev
+pm2 restart mcp-backend
+pm2 save
 ```
 
-### Step 3: Configure Environment
+## Option 3: Docker (alternative)
+
+If you prefer Docker instead of PM2, use the deploy script (see `scripts/deploy.sh`). The GitHub Action is configured for PM2; for Docker you would run the script over SSH yourself.
 
 ```bash
-cp .env.example .env
-nano .env
-# Fill in your environment variables
-```
-
-### Step 3: Deploy
-
-```bash
+cd /opt/worxstream-agent
+git pull origin main
 chmod +x scripts/deploy.sh
 ./scripts/deploy.sh
 ```
 
-## Option 3: Direct Docker Commands
+Or run Docker Compose directly:
 
 ```bash
 cd /opt/worxstream-agent
-
-# Build image
-docker-compose build
-
-# Start container
-docker-compose up -d
-
-# View logs
-docker-compose logs -f
-
-# Stop container
-docker-compose down
+docker compose build
+docker compose up -d
+docker compose logs -f
+docker compose down
 ```
 
 ## Managing the Deployment
 
-### View Logs
+### View logs (PM2)
 ```bash
-cd /opt/worxstream-agent
-docker-compose logs -f
+pm2 logs mcp-backend
+# or
+pm2 logs
 ```
 
-### Restart Service
+### Restart (PM2)
 ```bash
-docker-compose restart
+pm2 restart mcp-backend
+pm2 save
 ```
 
-### Update Deployment
+### Check status
 ```bash
-cd /opt/worxstream-agent
-git pull origin main
-docker-compose down
-docker-compose build --no-cache
-docker-compose up -d
-```
-
-### Check Status
-```bash
-docker ps
+pm2 status
 curl http://localhost:3000/health
+```
+
+### Docker (if you use Option 3)
+```bash
+cd /opt/worxstream-agent
+docker compose logs -f
+docker compose restart
 ```
 
 ## Setting up Nginx Reverse Proxy (Optional)
@@ -197,24 +210,11 @@ certbot --nginx -d your-domain.com
 
 ## Troubleshooting
 
-### GitHub Actions deploy exits with status 1
+### GitHub Actions deploy fails
 
-If the workflow builds the image but then fails with "Process exited with status 1", the container is usually **starting then exiting** (e.g. crash on startup). After the next run you’ll see "Deployment verification failed" plus container status and logs in the job output.
-
-**Typical cause: missing or invalid `.env` on the droplet.** The workflow uses `SKIP_ENV_CHECK=1` so the script doesn’t abort when `.env` is missing, but the app will crash without it.
-
-**Fix:**
-
-1. SSH into the droplet and create `.env` from the example:
-   ```bash
-   ssh root@<DROPLET_IP>
-   cd /opt/worxstream-agent
-   cp .env.example .env
-   nano .env   # set ANTHROPIC_API_KEY, WORXSTREAM_*, etc.
-   ```
-2. Re-run the GitHub Action (push a small commit or use "Run workflow"). The script will pull, build, and start; verification should pass once the app stays up.
-
-If it still fails, check the container logs printed at the end of the job (or run `docker compose logs` on the droplet) for the real error (e.g. MongoDB connection, bad API key).
+- **SSH or key error:** Check `DROPLET_IP`, `DROPLET_SSH_KEY`, and `DROPLET_SSH_PASSPHRASE` in repo secrets.
+- **`pm2: command not found`:** Install PM2 on the droplet: `npm install -g pm2` (after Node.js is installed).
+- **App won’t start or crashes:** Ensure `/opt/worxstream-agent/.env` exists and has valid values. SSH in and run `pm2 logs mcp-backend` to see the error.
 
 ### Container won't start
 ```bash
@@ -222,9 +222,13 @@ docker-compose logs
 docker ps -a
 ```
 
+### PM2: "One of the pids provided is invalid" (pidusage)
+
+If you run the app with PM2 and see this in logs, it’s a known PM2/pidusage issue when a process restarts or a PID goes stale. The app keeps working; the message is noise. To reduce it: upgrade PM2 (`npm i -g pm2@latest`) or ignore it.
+
 ### Port already in use
 
-The deploy script automatically stops any **Docker container** that is using port 3000 (e.g. an orphan from an old compose project). If you still see "address already in use", a non-Docker process is holding the port:
+The deploy script automatically stops any **Docker container** (and, if needed, any process) using port 3000. If you still see "address already in use", something else is holding the port:
 
 ```bash
 # On the droplet: see what is using port 3000

@@ -14,7 +14,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Deploy to DigitalOcean Droplet
+      - name: Deploy to DigitalOcean Droplet (PM2)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DROPLET_IP }}
@@ -25,12 +25,12 @@ jobs:
           timeout: 30s
           command_timeout: 10m
           script: |
-            cd /opt/worxstream-agent || mkdir -p /opt/worxstream-agent && cd /opt/worxstream-agent
+            cd /opt/worxstream-agent || (mkdir -p /opt/worxstream-agent && cd /opt/worxstream-agent)
             if [ -d ".git" ]; then
-              git pull origin main > /dev/null 2>&1
+              git pull origin main
             else
-              git clone https://github.com/UditShukla14/worxstreamAgent.git . > /dev/null 2>&1
+              git clone https://github.com/UditShukla14/worxstreamAgent.git .
             fi
-            export SKIP_ENV_CHECK=1
-            chmod +x scripts/deploy.sh
-            ./scripts/deploy.sh
+            npm ci --omit=dev
+            pm2 restart mcp-backend --update-env || pm2 start ecosystem.config.cjs
+            pm2 save
