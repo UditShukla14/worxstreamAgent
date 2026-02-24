@@ -48,13 +48,22 @@ chmod 755 uploads
 # Deploy
 $COMPOSE_CMD down > /dev/null 2>&1 || true
 
-# Free port 3000 if another container is using it (e.g. orphan from old compose project)
+# Free port 3000: stop any container using it, then kill any process still bound to it
 for cid in $(docker ps -q 2>/dev/null); do
   if docker port "$cid" 2>/dev/null | grep -q '0.0.0.0:3000'; then
     echo "Stopping container $cid using port 3000..."
     docker stop "$cid" >/dev/null 2>&1 || true
   fi
 done
+sleep 2
+if command -v fuser &>/dev/null; then
+  fuser -k 3000/tcp 2>/dev/null || true
+  sleep 1
+elif lsof -ti :3000 &>/dev/null; then
+  echo "Freeing port 3000..."
+  kill -9 $(lsof -ti :3000) 2>/dev/null || true
+  sleep 1
+fi
 
 $COMPOSE_CMD build --no-cache --quiet
 $COMPOSE_CMD up -d

@@ -66,6 +66,23 @@ Once you push to the `main` branch, GitHub Actions will automatically:
 2. Deploy to your droplet
 3. Start the container
 
+## Restarting after the droplet was stopped
+
+If the backend was running on the droplet and you powered it off (or left it off for a while), use one of these:
+
+**Same droplet, code and `.env` still at `/opt/worxstream-agent`:**
+
+1. **Via GitHub Actions (easiest):** Push any commit to `main` or run the "Deploy to DigitalOcean" workflow manually (Actions → Deploy to DigitalOcean → Run workflow). The workflow will SSH in, pull latest code, and run the deploy script (which frees port 3000 and starts the container).
+2. **Via SSH:**  
+   ```bash
+   ssh root@<YOUR_DROPLET_IP>
+   cd /opt/worxstream-agent
+   git pull origin main
+   ./scripts/deploy.sh
+   ```
+
+**Droplet was destroyed and recreated (or `/opt/worxstream-agent` is empty):** Do the full setup again: install Docker (Step 2 above), clone the repo, create `.env` from `.env.example`, then run `./scripts/deploy.sh` or trigger the GitHub Action.
+
 ## Option 2: Manual Deployment
 
 ### Step 1: Clone Repository
