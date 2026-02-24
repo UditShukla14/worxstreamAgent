@@ -18,14 +18,17 @@ router.use('/api/tools', toolsRoutes);
 router.use('/api/chat', chatRoutes);
 router.use('/api/price-comparison', priceComparisonRoutes);
 
-// Root health check
+// Root: API info and endpoint contract (for frontend baseURL + apiEndpoints alignment)
 router.get('/', (req, res) => {
   res.json({
     name: 'Worxstream AI Agent API',
     version: '1.0.0',
     endpoints: {
       health: '/health',
-      auth: '/api/auth',
+      auth: {
+        base: '/api/auth',
+        session: '/api/auth/session', // POST set, DELETE clear, GET status (chat backend session)
+      },
       chat: '/api/chat',
       stream: '/api/chat/stream',
       tools: '/api/tools',

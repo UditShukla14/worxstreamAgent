@@ -74,10 +74,12 @@ Copy `.env.example` to `.env` and set all required variables. No URLs or secrets
 
 When the agent is part of the Worxstream ecosystem, the frontend can send the logged-in user’s credentials once; the backend uses them until logout.
 
+**Paths (this backend uses `/api` prefix):**
+
 - **Set session (after user login)**  
   `POST /api/auth/session`  
   Body: `{ "userId": "<id>", "companyId": "<id>", "apiToken": "<token>" }`  
-  All three fields required. The backend uses these for all Worxstream API calls until the session is cleared.
+  All three fields required.
 
 - **Clear session (on user logout)**  
   `DELETE /api/auth/session`
@@ -86,7 +88,9 @@ When the agent is part of the Worxstream ecosystem, the frontend can send the lo
   `GET /api/auth/session`  
   Returns `{ "success": true, "active": true|false, "message": "..." }` (no credentials in response).
 
-Use HTTPS in production so credentials are not sent in the clear. If no session is set, the backend falls back to `WORXSTREAM_API_TOKEN`, `DEFAULT_COMPANY_ID`, and `DEFAULT_USER_ID` from `.env`.
+**Frontend alignment:** Use base URL from `VITE_CHAT_BACKEND_URL` (or your backend URL) and path `CHAT_SESSION: '/api/auth/session'`. See **docs/API.md** for the full contract and 404 troubleshooting (same host vs different host, path with/without `/api`).
+
+Use HTTPS in production. If no session is set, the backend falls back to `WORXSTREAM_API_TOKEN`, `DEFAULT_COMPANY_ID`, and `DEFAULT_USER_ID` from `.env`.
 
 ### Step 4: Deployments
 
