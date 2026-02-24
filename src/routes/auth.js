@@ -8,11 +8,18 @@ import * as worxstreamSession from '../session/worxstreamSession.js';
 
 const router = Router();
 
+/** GET /api/auth or /auth - confirm auth routes are mounted */
+router.get('/', (req, res) => {
+  res.json({
+    ok: true,
+    session: '/session',
+    hint: 'Use POST/DELETE/GET on .../session for chat backend session',
+  });
+});
+
 /**
- * POST /api/auth/session
- * Set Worxstream credentials for the current backend session (call after user login).
- * Body: { userId: string|number, companyId: string|number, apiToken: string }
- * Uses credentials until DELETE /api/auth/session (logout) is called.
+ * POST .../session - Set Worxstream credentials (call after user login).
+ * Body: { userId, companyId, apiToken }
  */
 router.post('/session', (req, res) => {
   const { userId, companyId, apiToken } = req.body || {};

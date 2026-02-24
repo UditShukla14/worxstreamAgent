@@ -13,7 +13,15 @@ const router = Router();
 
 // Mount routes
 router.use('/health', healthRoutes);
+// Auth: mount and also explicit GET so base path always responds (avoids mount path edge cases)
+router.get('/api/auth', (req, res) => {
+  res.json({ ok: true, session: '/api/auth/session', hint: 'POST/DELETE/GET .../session for chat backend session' });
+});
+router.get('/auth', (req, res) => {
+  res.json({ ok: true, session: '/auth/session', hint: 'POST/DELETE/GET .../session for chat backend session' });
+});
 router.use('/api/auth', authRoutes);
+router.use('/auth', authRoutes); // also under /auth so both /api/auth/session and /auth/session work
 router.use('/api/tools', toolsRoutes);
 router.use('/api/chat', chatRoutes);
 router.use('/api/price-comparison', priceComparisonRoutes);

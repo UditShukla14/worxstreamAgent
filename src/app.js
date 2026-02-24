@@ -80,6 +80,7 @@ async function startServer() {
       console.log(`  GET  ${config.server.publicUrl}/api/chat/:id    - Get conversation history`);
       console.log(`  DELETE ${config.server.publicUrl}/api/chat/:id  - Delete conversation`);
       console.log(`  GET  ${config.server.publicUrl}/api/tools       - List available tools`);
+      console.log(`  POST/GET/DELETE ${config.server.publicUrl}/api/auth/session - Chat backend session`);
       console.log(`  GET  ${config.server.publicUrl}/health          - Health check`);
       console.log('='.repeat(60) + '\n');
     });
