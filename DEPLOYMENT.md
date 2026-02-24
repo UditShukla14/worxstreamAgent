@@ -180,6 +180,25 @@ certbot --nginx -d your-domain.com
 
 ## Troubleshooting
 
+### GitHub Actions deploy exits with status 1
+
+If the workflow builds the image but then fails with "Process exited with status 1", the container is usually **starting then exiting** (e.g. crash on startup). After the next run you’ll see "Deployment verification failed" plus container status and logs in the job output.
+
+**Typical cause: missing or invalid `.env` on the droplet.** The workflow uses `SKIP_ENV_CHECK=1` so the script doesn’t abort when `.env` is missing, but the app will crash without it.
+
+**Fix:**
+
+1. SSH into the droplet and create `.env` from the example:
+   ```bash
+   ssh root@<DROPLET_IP>
+   cd /opt/worxstream-agent
+   cp .env.example .env
+   nano .env   # set ANTHROPIC_API_KEY, WORXSTREAM_*, etc.
+   ```
+2. Re-run the GitHub Action (push a small commit or use "Run workflow"). The script will pull, build, and start; verification should pass once the app stays up.
+
+If it still fails, check the container logs printed at the end of the job (or run `docker compose logs` on the droplet) for the real error (e.g. MongoDB connection, bad API key).
+
 ### Container won't start
 ```bash
 docker-compose logs

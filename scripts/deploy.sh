@@ -28,6 +28,7 @@ if [ ! -f .env ]; then
     echo "Warning: .env file not found" >&2
     exit 1
   fi
+  echo "Note: .env not found. Create it from .env.example on the server or the app may exit on start."
 fi
 
 # Ensure Docker is installed
@@ -47,15 +48,23 @@ chmod 755 uploads
 # Deploy
 $COMPOSE_CMD down > /dev/null 2>&1 || true
 $COMPOSE_CMD build --no-cache --quiet
-$COMPOSE_CMD up -d > /dev/null 2>&1
+$COMPOSE_CMD up -d
 
-# Verify deployment
+# Verify deployment (allow time for container to start; retry a few times)
 sleep 5
-if docker ps | grep -q worxstream-agent; then
-  echo "Deployment successful"
-  exit 0
-else
-  echo "Deployment failed" >&2
-  $COMPOSE_CMD logs --tail=50
-  exit 1
-fi
+for i in 1 2 3; do
+  if docker ps --format '{{.Names}}' | grep -qx worxstream-agent; then
+    echo "Deployment successful"
+    exit 0
+  fi
+  [ "$i" -lt 3 ] && sleep 5
+done
+
+# Verification failed: show why (container may have exited)
+echo "Deployment verification failed." >&2
+echo "Container status (docker ps -a):" >&2
+docker ps -a --filter "name=worxstream-agent" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+echo "" >&2
+echo "Container logs:" >&2
+$COMPOSE_CMD logs --tail=100
+exit 1
