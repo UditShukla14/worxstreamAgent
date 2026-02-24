@@ -8,23 +8,11 @@ This guide covers deploying the Worxstream AI Agent to your DigitalOcean droplet
 - SSH access to the droplet (IP: 157.245.218.43)
 - GitHub repository: https://github.com/UditShukla14/worxstreamAgent.git
 
-## Option 1: PM2 with GitHub Actions (Recommended)
+## Deploy with PM2 (manual)
 
-### Step 1: Set up GitHub Secrets
+Deployment is manual: pull on the droplet and restart PM2. No GitHub Actions.
 
-Go to your GitHub repository → Settings → Secrets and variables → Actions, and add:
-
-1. **DROPLET_IP**: `157.245.218.43`
-2. **DROPLET_SSH_KEY**: Your private SSH key (the one you use to SSH into the droplet)
-3. **DROPLET_SSH_PASSPHRASE**: (optional) Passphrase for the key, if set
-
-To get your SSH key:
-```bash
-cat ~/.ssh/id_rsa
-# Copy the entire output including -----BEGIN and -----END lines
-```
-
-### Step 2: Initial setup on the droplet (one-time)
+### Step 1: Initial setup on the droplet (one-time)
 
 SSH in and install Node.js, PM2, and the app:
 
@@ -74,51 +62,59 @@ Copy `.env.example` to `.env` and set all required variables. No URLs or secrets
 
 When the agent is part of the Worxstream ecosystem, the frontend can send the logged-in user’s credentials once; the backend uses them until logout.
 
-**Paths (this backend uses `/api` prefix):**
+**Preferred path (same pattern as `/health`):**
 
-- **Set session (after user login)**  
-  `POST /api/auth/session`  
-  Body: `{ "userId": "<id>", "companyId": "<id>", "apiToken": "<token>" }`  
-  All three fields required.
+- `GET /session` – session status  
+- `POST /session` – set credentials. Body: `{ "userId", "companyId", "apiToken" }`  
+- `DELETE /session` – clear session  
 
-- **Clear session (on user logout)**  
-  `DELETE /api/auth/session`
+Also available: `GET/POST/DELETE /api/auth/session` (same behaviour).
 
-- **Check session**  
-  `GET /api/auth/session`  
-  Returns `{ "success": true, "active": true|false, "message": "..." }` (no credentials in response).
-
-**Frontend alignment:** Use base URL from `VITE_CHAT_BACKEND_URL` (or your backend URL) and path `CHAT_SESSION: '/api/auth/session'`. See **docs/API.md** for the full contract and 404 troubleshooting (same host vs different host, path with/without `/api`).
+**Frontend:** Use base URL (e.g. `https://mcp.worxstream.io`) and path `'/session'` for GET/POST/DELETE, or `'/api/auth/session'`. See **docs/API.md** for details.
 
 Use HTTPS in production. If no session is set, the backend falls back to `WORXSTREAM_API_TOKEN`, `DEFAULT_COMPANY_ID`, and `DEFAULT_USER_ID` from `.env`.
 
-### Step 4: Deployments
+### Step 4: Deploy / update (manual)
 
-- **Automatic:** Push to `main` or run the "Deploy to DigitalOcean" workflow. It will SSH in, pull code, run `npm ci --omit=dev`, then `pm2 restart mcp-backend` (or start from `ecosystem.config.cjs` if not running).
-- **Manual:**  
-  ```bash
-  ssh root@<DROPLET_IP>
-  cd /opt/worxstream-agent
-  git pull origin main
-  npm ci --omit=dev
-  pm2 restart mcp-backend --update-env
-  pm2 save
-  ```
+Whenever you have new code:
+
+```bash
+ssh root@<DROPLET_IP>
+cd /opt/worxstream-agent
+git pull origin main
+npm ci --omit=dev
+pm2 restart mcp-backend --update-env
+pm2 save
+```
+
+### Step 5: Verify routes with curl
+
+From your machine or the droplet:
+
+```bash
+# Health (should return 200 + JSON)
+curl -s https://mcp.worxstream.io/health
+
+# Session: GET status, POST set, DELETE clear (same pattern as /health)
+curl -s https://mcp.worxstream.io/session
+curl -s -X POST https://mcp.worxstream.io/session -H "Content-Type: application/json" -d '{"userId":"1","companyId":"1","apiToken":"test"}'
+curl -s -X DELETE https://mcp.worxstream.io/session
+```
+
+Or run the script (from the repo): `./scripts/test-routes.sh https://mcp.worxstream.io`
 
 ## Restarting after the droplet was stopped
 
 **Same droplet, app already set up at `/opt/worxstream-agent`:**
 
-1. **Via GitHub Actions:** Run the "Deploy to DigitalOcean" workflow (or push to `main`). It will pull and restart PM2.
-2. **Via SSH:**  
-   ```bash
-   ssh root@<DROPLET_IP>
-   cd /opt/worxstream-agent
-   git pull origin main
-   npm ci --omit=dev
-   pm2 restart mcp-backend
-   pm2 save
-   ```
+```bash
+ssh root@<DROPLET_IP>
+cd /opt/worxstream-agent
+git pull origin main
+npm ci --omit=dev
+pm2 restart mcp-backend --update-env
+pm2 save
+```
 
 **Droplet recreated or `/opt/worxstream-agent` empty:** Do the full one-time setup again (Step 2 above), then use the workflow or manual deploy.
 
