@@ -4,6 +4,7 @@
 
 import { Router } from 'express';
 import healthRoutes from './health.js';
+import sessionRoutes from './session.js';
 import toolsRoutes from './tools.js';
 import chatRoutes from './chat.js';
 import priceComparisonRoutes from './priceComparison.js';
@@ -11,8 +12,9 @@ import authRoutes from './auth.js';
 
 const router = Router();
 
-// Mount routes
+// Mount routes (session same pattern as health: single path, one router)
 router.use('/health', healthRoutes);
+router.use('/session', sessionRoutes);
 router.use('/api/auth', authRoutes);
 router.use('/api/tools', toolsRoutes);
 router.use('/api/chat', chatRoutes);
@@ -25,10 +27,8 @@ router.get('/', (req, res) => {
     version: '1.0.0',
     endpoints: {
       health: '/health',
-      auth: {
-        base: '/api/auth',
-        session: '/api/auth/session', // POST set, DELETE clear, GET status (chat backend session)
-      },
+      session: '/session', // GET status, POST set, DELETE clear (same pattern as /health)
+      auth: { base: '/api/auth', session: '/api/auth/session' },
       chat: '/api/chat',
       stream: '/api/chat/stream',
       tools: '/api/tools',
