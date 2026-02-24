@@ -6,11 +6,9 @@
 import { z } from 'zod';
 import { registerTool } from '../server.js';
 import { callWorxstreamAPI } from '../../services/httpClient.js';
-import { config } from '../../config/index.js';
+import { getWorxstreamContext } from '../../config/index.js';
 
 export function registerCustomerTools() {
-  const companyId = config.worxstream.defaultCompanyId;
-  const userId = config.worxstream.defaultUserId;
 
   registerTool(
     'list_customers',
@@ -20,6 +18,7 @@ export function registerCustomerTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/master/customer/customer-list',
@@ -42,6 +41,7 @@ export function registerCustomerTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/master/customer/customer-details',
@@ -70,6 +70,7 @@ export function registerCustomerTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'PUT',
         endpoint: '/master/customer/update-customer',
@@ -92,6 +93,7 @@ export function registerCustomerTools() {
       },
     },
     async ({ search }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/master/customer/customer-dropdowns',
@@ -116,6 +118,7 @@ export function registerCustomerTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/master/customer/quick-update-customer',

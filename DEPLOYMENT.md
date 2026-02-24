@@ -54,13 +54,39 @@ pm2 startup   # run the command it prints so the app restarts on reboot
 
 ### Step 3: Environment variables
 
-In `/opt/worxstream-agent/.env` set at least:
+Copy `.env.example` to `.env` and set all required variables. No URLs or secrets are hardcoded.
+
+**Required in all environments:**
 
 - `ANTHROPIC_API_KEY` - Your Claude API key
-- `WORXSTREAM_BASE_URL` - Worxstream API URL (default: https://api.worxstream.io)
-- `WORXSTREAM_API_TOKEN` - Your Worxstream API token
-- `BACKEND_URL` - Public URL for the backend API (default: https://mcp.worxstream.io)
-- `DEFAULT_COMPANY_ID`, `DEFAULT_USER_ID`, `PORT` (default 3000), `NODE_ENV`, `MONGODB_URL` (optional)
+- `ANTHROPIC_MODEL` - Claude model ID (e.g. `claude-sonnet-4-6`)
+- `WORXSTREAM_BASE_URL` - Worxstream API base URL (e.g. `https://api2.worxstream.io`)
+- `WORXSTREAM_API_TOKEN` - API token (optional if using POST /api/auth/session)
+- `DEFAULT_COMPANY_ID`, `DEFAULT_USER_ID` - Fallbacks when no session is set
+- `PORT`, `NODE_ENV`, `MONGODB_URL`
+
+**Required in production:**
+
+- `BACKEND_URL` or `PUBLIC_URL` - Public URL of this API (e.g. `https://mcp.yourdomain.com`)
+- `CORS_ORIGINS` - Comma-separated allowed origins (e.g. `https://app.yourdomain.com,https://admin.yourdomain.com`)
+
+### Step 3b: Worxstream session API (frontend login/logout)
+
+When the agent is part of the Worxstream ecosystem, the frontend can send the logged-in user’s credentials once; the backend uses them until logout.
+
+- **Set session (after user login)**  
+  `POST /api/auth/session`  
+  Body: `{ "userId": "<id>", "companyId": "<id>", "apiToken": "<token>" }`  
+  All three fields required. The backend uses these for all Worxstream API calls until the session is cleared.
+
+- **Clear session (on user logout)**  
+  `DELETE /api/auth/session`
+
+- **Check session**  
+  `GET /api/auth/session`  
+  Returns `{ "success": true, "active": true|false, "message": "..." }` (no credentials in response).
+
+Use HTTPS in production so credentials are not sent in the clear. If no session is set, the backend falls back to `WORXSTREAM_API_TOKEN`, `DEFAULT_COMPANY_ID`, and `DEFAULT_USER_ID` from `.env`.
 
 ### Step 4: Deployments
 

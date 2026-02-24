@@ -5,11 +5,9 @@
 import { z } from 'zod';
 import { registerTool } from '../server.js';
 import { callWorxstreamAPI } from '../../services/httpClient.js';
-import { config } from '../../config/index.js';
+import { getWorxstreamContext } from '../../config/index.js';
 
 export function registerProductTools() {
-  const companyId = config.worxstream.defaultCompanyId;
-  const userId = config.worxstream.defaultUserId;
 
   // ============================================
   // PRODUCT CATEGORIES
@@ -23,6 +21,7 @@ export function registerProductTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/master/product/categories',
@@ -48,6 +47,7 @@ export function registerProductTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/master/product/create-category',
@@ -81,6 +81,7 @@ export function registerProductTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'PUT',
         endpoint: '/master/product/update-category',
@@ -107,6 +108,7 @@ export function registerProductTools() {
       },
     },
     async ({ category_id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/master/product/subcategories',
@@ -132,6 +134,7 @@ export function registerProductTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/master/product/create-subcategory',
@@ -165,6 +168,7 @@ export function registerProductTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'PUT',
         endpoint: '/master/product/update-subcategory',
@@ -191,6 +195,7 @@ export function registerProductTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/master/product/bulk-action-product-service',
@@ -215,6 +220,7 @@ export function registerProductTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/master/product/quick-update-product-service',
@@ -244,6 +250,7 @@ export function registerProductTools() {
       },
     },
     async ({ type = 'product', search, take = 100, page = 1 }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/master/product/product-service-list',
@@ -273,6 +280,7 @@ export function registerProductTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/master/product/product-service-details',
@@ -311,6 +319,7 @@ export function registerProductTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/master/product/create-product-service',
@@ -359,6 +368,7 @@ export function registerProductTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'PUT',
         endpoint: '/master/product/update-product-service',
@@ -381,6 +391,7 @@ export function registerProductTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'DELETE',
         endpoint: '/master/product/delete-product-service',
@@ -403,6 +414,7 @@ export function registerProductTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/master/product/clone-product-service',
@@ -425,6 +437,7 @@ export function registerProductTools() {
       },
     },
     async ({ search }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/master/product/product-service-dropdowns',

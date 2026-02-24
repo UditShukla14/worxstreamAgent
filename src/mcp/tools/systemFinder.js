@@ -6,11 +6,9 @@
 import { z } from 'zod';
 import { registerTool } from '../server.js';
 import { callWorxstreamAPI } from '../../services/httpClient.js';
-import { config } from '../../config/index.js';
+import { getWorxstreamContext } from '../../config/index.js';
 
 export function registerSystemFinderTools() {
-  const companyId = config.worxstream.defaultCompanyId;
-  const userId = config.worxstream.defaultUserId;
 
   // Get system finder options
   registerTool(
@@ -21,6 +19,7 @@ export function registerSystemFinderTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/systemfinder/get-options',
@@ -46,6 +45,7 @@ export function registerSystemFinderTools() {
       },
     },
     async ({ system_type, config: configValue, tonnage }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/systemfinder/get-matchup-products',

@@ -6,12 +6,9 @@
 import { z } from 'zod';
 import { registerTool } from '../server.js';
 import { callWorxstreamAPI } from '../../services/httpClient.js';
-import { config } from '../../config/index.js';
+import { getWorxstreamContext } from '../../config/index.js';
 
 export function registerContactTools() {
-  const companyId = config.worxstream.defaultCompanyId;
-  const userId = config.worxstream.defaultUserId;
-
   // List contacts
   registerTool(
     'list_contacts',
@@ -26,6 +23,7 @@ export function registerContactTools() {
       },
     },
     async ({ contact_type, search, take = 100, page = 1 }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/master/contact/contact-list',
@@ -56,6 +54,7 @@ export function registerContactTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/master/contact/contact-details',
@@ -92,6 +91,7 @@ export function registerContactTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/master/contact/create-contact',
@@ -145,6 +145,7 @@ export function registerContactTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'PUT',
         endpoint: '/master/contact/update-contact',
@@ -173,6 +174,7 @@ export function registerContactTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'DELETE',
         endpoint: '/master/contact/delete-contact',
@@ -196,6 +198,7 @@ export function registerContactTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/master/contact/clone-contact',
@@ -221,6 +224,7 @@ export function registerContactTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/master/contact/quick-update-contact',

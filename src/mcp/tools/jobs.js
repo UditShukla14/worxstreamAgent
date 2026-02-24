@@ -5,11 +5,9 @@
 import { z } from 'zod';
 import { registerTool } from '../server.js';
 import { callWorxstreamAPI } from '../../services/httpClient.js';
-import { config } from '../../config/index.js';
+import { getWorxstreamContext } from '../../config/index.js';
 
 export function registerJobTools() {
-  const companyId = config.worxstream.defaultCompanyId;
-  const userId = config.worxstream.defaultUserId;
 
   // List jobs
   registerTool(
@@ -20,6 +18,7 @@ export function registerJobTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/transaction/job/get-jobs',
@@ -46,6 +45,7 @@ export function registerJobTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/transaction/job/get-job-details',
@@ -84,6 +84,7 @@ export function registerJobTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/transaction/job/create-jobs',

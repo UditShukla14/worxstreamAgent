@@ -5,11 +5,9 @@
 import { z } from 'zod';
 import { registerTool } from '../server.js';
 import { callWorxstreamAPI } from '../../services/httpClient.js';
-import { config } from '../../config/index.js';
+import { getWorxstreamContext } from '../../config/index.js';
 
 export function registerHRTools() {
-  const companyId = config.worxstream.defaultCompanyId;
-  const userId = config.worxstream.defaultUserId;
 
   // ============================================
   // DEPARTMENTS
@@ -23,6 +21,7 @@ export function registerHRTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/hr/departments/list',
@@ -45,6 +44,7 @@ export function registerHRTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/hr/departments/show',
@@ -71,6 +71,7 @@ export function registerHRTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/hr/departments/store',
@@ -95,6 +96,7 @@ export function registerHRTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/hr/departments/hierarchy',
@@ -115,6 +117,7 @@ export function registerHRTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/hr/departments/statistics',
@@ -142,6 +145,7 @@ export function registerHRTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'PUT',
         endpoint: '/hr/departments/update',
@@ -164,6 +168,7 @@ export function registerHRTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'DELETE',
         endpoint: '/hr/departments/delete',
@@ -186,6 +191,7 @@ export function registerHRTools() {
       },
     },
     async ({ branch_id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/hr/departments/by-branch',
@@ -212,6 +218,7 @@ export function registerHRTools() {
       },
     },
     async ({ department_id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/hr/teams/list',
@@ -234,6 +241,7 @@ export function registerHRTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/hr/teams/show',
@@ -259,6 +267,7 @@ export function registerHRTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/hr/teams/store',
@@ -283,6 +292,7 @@ export function registerHRTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/hr/teams/statistics',
@@ -305,6 +315,7 @@ export function registerHRTools() {
       },
     },
     async ({ department_id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/hr/teams/by-department',
@@ -331,6 +342,7 @@ export function registerHRTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'PUT',
         endpoint: '/hr/teams/update',
@@ -353,6 +365,7 @@ export function registerHRTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'DELETE',
         endpoint: '/hr/teams/delete',
@@ -376,6 +389,7 @@ export function registerHRTools() {
       },
     },
     async ({ team_id, member_ids }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/hr/teams/assign-members',
@@ -399,6 +413,7 @@ export function registerHRTools() {
       },
     },
     async ({ team_id, member_ids }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/hr/teams/remove-members',
@@ -423,6 +438,7 @@ export function registerHRTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/hr/team-members/list',
@@ -443,6 +459,7 @@ export function registerHRTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/hr/team-members/dropdown-list',
@@ -465,6 +482,7 @@ export function registerHRTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/hr/team-members/show',
@@ -485,6 +503,7 @@ export function registerHRTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/hr/statistics',
@@ -511,6 +530,7 @@ export function registerHRTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/hr/team-members/store',
@@ -542,6 +562,7 @@ export function registerHRTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'PUT',
         endpoint: '/hr/team-members/update',
@@ -564,6 +585,7 @@ export function registerHRTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'DELETE',
         endpoint: '/hr/team-members/delete',

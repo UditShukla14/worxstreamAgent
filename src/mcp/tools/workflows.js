@@ -5,11 +5,9 @@
 import { z } from 'zod';
 import { registerTool } from '../server.js';
 import { callWorxstreamAPI } from '../../services/httpClient.js';
-import { config } from '../../config/index.js';
+import { getWorxstreamContext } from '../../config/index.js';
 
 export function registerWorkflowTools() {
-  const companyId = config.worxstream.defaultCompanyId;
-  const userId = config.worxstream.defaultUserId;
 
   // Get initial workflow data
   registerTool(
@@ -20,6 +18,7 @@ export function registerWorkflowTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/workflow/initial-data',
@@ -48,6 +47,7 @@ export function registerWorkflowTools() {
       },
     },
     async ({ workflow_type, status, per_page = 15 }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/workflow/list',
@@ -81,6 +81,7 @@ export function registerWorkflowTools() {
       },
     },
     async ({ object_id, role, workflow_type, status, per_page = 15 }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/workflow/by-object',
@@ -113,6 +114,7 @@ export function registerWorkflowTools() {
       },
     },
     async ({ object_id, app_name }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/workflow/object-tree',
@@ -146,6 +148,7 @@ export function registerWorkflowTools() {
       },
     },
     async ({ parent_object_id, parent_app_name, child_object_id, child_app_name, workflow_type, reason }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/workflow/link-existing-nodes',
@@ -204,6 +207,7 @@ export function registerWorkflowTools() {
         settings.due_date = input.due_date;
       }
 
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/workflow/create-new-node',
@@ -238,6 +242,7 @@ export function registerWorkflowTools() {
       },
     },
     async ({ workflow_id, status, notes }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'PUT',
         endpoint: '/workflow/update',
@@ -268,6 +273,7 @@ export function registerWorkflowTools() {
       },
     },
     async ({ workflow_id, notes }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'PUT',
         endpoint: '/workflow/cancel',

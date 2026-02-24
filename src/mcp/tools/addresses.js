@@ -6,12 +6,9 @@
 import { z } from 'zod';
 import { registerTool } from '../server.js';
 import { callWorxstreamAPI } from '../../services/httpClient.js';
-import { config } from '../../config/index.js';
+import { getWorxstreamContext } from '../../config/index.js';
 
 export function registerAddressTools() {
-  const companyId = config.worxstream.defaultCompanyId;
-  const userId = config.worxstream.defaultUserId;
-
   // ============================================
   // ADDRESSES
   // ============================================
@@ -25,6 +22,7 @@ export function registerAddressTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/addresses/initial-data',
@@ -46,6 +44,7 @@ export function registerAddressTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/addresses/list',
@@ -79,6 +78,7 @@ export function registerAddressTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/addresses/store',
@@ -102,6 +102,7 @@ export function registerAddressTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/addresses/show',
@@ -135,6 +136,7 @@ export function registerAddressTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'PUT',
         endpoint: '/addresses/update',
@@ -158,6 +160,7 @@ export function registerAddressTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'DELETE',
         endpoint: '/addresses/delete',
@@ -186,6 +189,7 @@ export function registerAddressTools() {
       },
     },
     async ({ address_id, status }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/addresses/exemptions/list',
@@ -216,6 +220,7 @@ export function registerAddressTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/addresses/exemptions/store',
@@ -239,6 +244,7 @@ export function registerAddressTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/addresses/exemptions/show',
@@ -270,6 +276,7 @@ export function registerAddressTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'PUT',
         endpoint: '/addresses/exemptions/update',
@@ -293,6 +300,7 @@ export function registerAddressTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'DELETE',
         endpoint: '/addresses/exemptions/delete',
@@ -316,6 +324,7 @@ export function registerAddressTools() {
       },
     },
     async ({ address_id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/addresses/exemptions/last-active-valid-exemption',

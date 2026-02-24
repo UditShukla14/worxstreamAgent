@@ -5,11 +5,9 @@
 import { z } from 'zod';
 import { registerTool } from '../server.js';
 import { callWorxstreamAPI } from '../../services/httpClient.js';
-import { config } from '../../config/index.js';
+import { getWorxstreamContext } from '../../config/index.js';
 
 export function registerInvoiceTools() {
-  const companyId = config.worxstream.defaultCompanyId;
-  const userId = config.worxstream.defaultUserId;
 
   // List invoices
   registerTool(
@@ -27,6 +25,7 @@ export function registerInvoiceTools() {
       },
     },
     async ({ customer_id, vendor_id, search, take = 100, page = 1, sort = 'id' }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/master-objects/list',
@@ -60,6 +59,7 @@ export function registerInvoiceTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/master-objects/show',
@@ -96,6 +96,7 @@ export function registerInvoiceTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/master-objects/store',

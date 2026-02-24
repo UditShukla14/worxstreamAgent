@@ -24,33 +24,17 @@ const __dirname = dirname(__filename);
 // Create Express app
 const app = express();
 
-// CORS configuration
-const allowedOrigins = [
-  'https://worxstream.io',
-  'https://app.worxstream.io',
-  'https://mcp.worxstream.io',
-  'http://localhost:5173', // Frontend dev
-  'http://localhost:3000', // Backend dev
-  'http://localhost:4173', // Frontend preview
-];
+// CORS: use CORS_ORIGINS from env (comma-separated). In development, if unset, allow all.
+const allowedOrigins = config.server.corsOrigins
+  ? config.server.corsOrigins.split(',').map((o) => o.trim()).filter(Boolean)
+  : [];
 
 const corsOptions = {
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps, Postman, or curl requests)
-    if (!origin) {
-      return callback(null, true);
-    }
-    
-    if (allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      // In production, be strict; in development, allow all
-      if (config.server.env === 'development') {
-        callback(null, true);
-      } else {
-        callback(new Error('Not allowed by CORS'));
-      }
-    }
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.length > 0 && allowedOrigins.includes(origin)) return callback(null, true);
+    if (config.server.env === 'development' && allowedOrigins.length === 0) return callback(null, true);
+    callback(new Error('Not allowed by CORS'));
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
@@ -83,7 +67,9 @@ async function startServer() {
       console.log('🚀 Worxstream AI Agent Server');
       console.log('='.repeat(60));
       console.log(`📍 Server running on http://0.0.0.0:${config.server.port}`);
-      console.log(`🌐 Public URL: ${config.server.publicUrl}`);
+      if (config.server.publicUrl) {
+        console.log(`🌐 Public URL: ${config.server.publicUrl}`);
+      }
       console.log(`🤖 Using model: ${config.anthropic.model}`);
       console.log(`🔧 Available MCP tools: ${getAvailableTools().length}`);
       console.log(`📦 MongoDB connected`);

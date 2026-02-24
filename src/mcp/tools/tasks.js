@@ -5,12 +5,9 @@
 import { z } from 'zod';
 import { registerTool } from '../server.js';
 import { callWorxstreamAPI } from '../../services/httpClient.js';
-import { config } from '../../config/index.js';
+import { getWorxstreamContext } from '../../config/index.js';
 
 export function registerTaskTools() {
-  const companyId = config.worxstream.defaultCompanyId;
-  const userId = config.worxstream.defaultUserId;
-
   // List tasks
   registerTool(
     'list_tasks',
@@ -24,6 +21,7 @@ export function registerTaskTools() {
       },
     },
     async ({ object_name, object_id, app_id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/transaction/task/get-tasks',
@@ -53,6 +51,7 @@ export function registerTaskTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/transaction/task/get-task-details',
@@ -91,6 +90,7 @@ export function registerTaskTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/transaction/task/create-tasks',

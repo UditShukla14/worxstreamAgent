@@ -5,12 +5,9 @@
 import { z } from 'zod';
 import { registerTool } from '../server.js';
 import { callWorxstreamAPI } from '../../services/httpClient.js';
-import { config } from '../../config/index.js';
+import { getWorxstreamContext } from '../../config/index.js';
 
 export function registerCompanyTools() {
-  const companyId = config.worxstream.defaultCompanyId;
-  const userId = config.worxstream.defaultUserId;
-
   // Get company details
   registerTool(
     'get_company_details',
@@ -20,6 +17,7 @@ export function registerCompanyTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/company/show',
@@ -41,6 +39,7 @@ export function registerCompanyTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/company/status',
@@ -62,6 +61,7 @@ export function registerCompanyTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/company/statistics',
@@ -83,6 +83,7 @@ export function registerCompanyTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/company/initial-data',
@@ -104,6 +105,7 @@ export function registerCompanyTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/branches/list',
@@ -133,6 +135,7 @@ export function registerCompanyTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/branches/store',
@@ -162,6 +165,7 @@ export function registerCompanyTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'PUT',
         endpoint: '/branches/update',
@@ -185,6 +189,7 @@ export function registerCompanyTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'DELETE',
         endpoint: '/branches/delete',
@@ -210,6 +215,7 @@ export function registerCompanyTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/company/setup-database',
@@ -231,6 +237,7 @@ export function registerCompanyTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/company/migrate-database',
@@ -252,6 +259,7 @@ export function registerCompanyTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/company/validate-database',
@@ -273,6 +281,7 @@ export function registerCompanyTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/company/delete-database/otp',
@@ -296,6 +305,7 @@ export function registerCompanyTools() {
       },
     },
     async ({ otp }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/company/delete-database/verify',
@@ -328,6 +338,7 @@ export function registerCompanyTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'PUT',
         endpoint: '/company/update',
@@ -349,6 +360,7 @@ export function registerCompanyTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/company/verify',
@@ -372,6 +384,7 @@ export function registerCompanyTools() {
       },
     },
     async ({ address_id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'DELETE',
         endpoint: '/company/delete-address',
@@ -397,6 +410,7 @@ export function registerCompanyTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/contacts-management/list',
@@ -425,6 +439,7 @@ export function registerCompanyTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/contacts-management/store',
@@ -454,6 +469,7 @@ export function registerCompanyTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'PUT',
         endpoint: '/contacts-management/update',
@@ -480,6 +496,7 @@ export function registerCompanyTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/custom-number-range/list',
@@ -505,6 +522,7 @@ export function registerCompanyTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/custom-number-range/initialize',
@@ -528,6 +546,7 @@ export function registerCompanyTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/custom-number-range/show',
@@ -553,6 +572,7 @@ export function registerCompanyTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/custom-number-range/store',
@@ -578,6 +598,7 @@ export function registerCompanyTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'PUT',
         endpoint: '/custom-number-range/update',
@@ -601,6 +622,7 @@ export function registerCompanyTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'DELETE',
         endpoint: '/custom-number-range/soft-delete',
@@ -624,6 +646,7 @@ export function registerCompanyTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/custom-number-range/restore',
@@ -647,6 +670,7 @@ export function registerCompanyTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/custom-number-range/clone',
@@ -670,6 +694,7 @@ export function registerCompanyTools() {
       },
     },
     async ({ app_name }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/custom-number-range/hint',
@@ -694,6 +719,7 @@ export function registerCompanyTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/custom-number-range/check',
@@ -719,6 +745,7 @@ export function registerCompanyTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/payment-instructions/list',
@@ -742,6 +769,7 @@ export function registerCompanyTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/payment-instructions/show',
@@ -765,6 +793,7 @@ export function registerCompanyTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/payment-instructions/formatted',
@@ -786,6 +815,7 @@ export function registerCompanyTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/payment-instructions/dropdown',
@@ -811,6 +841,7 @@ export function registerCompanyTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/payment-instructions/store',
@@ -839,6 +870,7 @@ export function registerCompanyTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/payment-instructions/clone',
@@ -862,6 +894,7 @@ export function registerCompanyTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'DELETE',
         endpoint: '/payment-instructions/soft-delete',
@@ -885,6 +918,7 @@ export function registerCompanyTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/payment-instructions/restore',
@@ -908,6 +942,7 @@ export function registerCompanyTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'DELETE',
         endpoint: '/payment-instructions/permanent-delete',
@@ -933,6 +968,7 @@ export function registerCompanyTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/signatures/list',
@@ -956,6 +992,7 @@ export function registerCompanyTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/signatures/show',
@@ -977,6 +1014,7 @@ export function registerCompanyTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/signatures/dropdown',
@@ -1002,6 +1040,7 @@ export function registerCompanyTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/signatures/store',
@@ -1030,6 +1069,7 @@ export function registerCompanyTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/signatures/clone',
@@ -1053,6 +1093,7 @@ export function registerCompanyTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'DELETE',
         endpoint: '/signatures/soft-delete',
@@ -1076,6 +1117,7 @@ export function registerCompanyTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/signatures/restore',
@@ -1099,6 +1141,7 @@ export function registerCompanyTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'DELETE',
         endpoint: '/signatures/permanent-delete',

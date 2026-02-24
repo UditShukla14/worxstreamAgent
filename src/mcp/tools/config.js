@@ -5,12 +5,9 @@
 import { z } from 'zod';
 import { registerTool } from '../server.js';
 import { callWorxstreamAPI } from '../../services/httpClient.js';
-import { config } from '../../config/index.js';
+import { getWorxstreamContext } from '../../config/index.js';
 
 export function registerConfigTools() {
-  const companyId = config.worxstream.defaultCompanyId;
-  const userId = config.worxstream.defaultUserId;
-
   // ============================================
   // DROPDOWN & COLUMN CONFIGS
   // ============================================
@@ -25,6 +22,7 @@ export function registerConfigTools() {
       },
     },
     async ({ app_code }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/master/config/dropdown-configs',
@@ -47,6 +45,7 @@ export function registerConfigTools() {
       },
     },
     async ({ dropdown_id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/master/config/dropdown-values',
@@ -69,6 +68,7 @@ export function registerConfigTools() {
       },
     },
     async ({ app_code }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/master/config/column-configs',
@@ -89,6 +89,7 @@ export function registerConfigTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/master/config/all-apps',
@@ -113,6 +114,7 @@ export function registerConfigTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/framework/menus',
@@ -133,6 +135,7 @@ export function registerConfigTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/framework/forms',
@@ -153,6 +156,7 @@ export function registerConfigTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/helper/country-codes',

@@ -7,11 +7,13 @@ import healthRoutes from './health.js';
 import toolsRoutes from './tools.js';
 import chatRoutes from './chat.js';
 import priceComparisonRoutes from './priceComparison.js';
+import authRoutes from './auth.js';
 
 const router = Router();
 
 // Mount routes
 router.use('/health', healthRoutes);
+router.use('/api/auth', authRoutes);
 router.use('/api/tools', toolsRoutes);
 router.use('/api/chat', chatRoutes);
 router.use('/api/price-comparison', priceComparisonRoutes);
@@ -23,6 +25,7 @@ router.get('/', (req, res) => {
     version: '1.0.0',
     endpoints: {
       health: '/health',
+      auth: '/api/auth',
       chat: '/api/chat',
       stream: '/api/chat/stream',
       tools: '/api/tools',

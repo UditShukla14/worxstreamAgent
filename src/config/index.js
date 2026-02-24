@@ -3,6 +3,8 @@
  */
 
 import dotenv from 'dotenv';
+import * as worxstreamSession from '../session/worxstreamSession.js';
+
 dotenv.config();
 
 /** Model IDs that support tool_search_tool_bm25 (on-demand tool loading). GA Feb 2026. */
@@ -26,18 +28,34 @@ export const config = {
     useToolSearch: useToolSearchEnv === 'false' ? false : useToolSearchEnv === 'true' ? true : TOOL_SEARCH_SUPPORTED_MODELS.includes(anthropicModel),
   },
   worxstream: {
-    baseUrl: process.env.WORXSTREAM_BASE_URL || 'https://api.worxstream.io',
-    apiToken: process.env.WORXSTREAM_API_TOKEN,
-    defaultCompanyId: process.env.DEFAULT_COMPANY_ID || '1',
-    defaultUserId: process.env.DEFAULT_USER_ID || '1',
+    baseUrl: process.env.WORXSTREAM_BASE_URL || '',
+    get apiToken() {
+      const s = worxstreamSession.getSession();
+      return s ? s.apiToken : process.env.WORXSTREAM_API_TOKEN;
+    },
+    get defaultCompanyId() {
+      const s = worxstreamSession.getSession();
+      return s ? s.companyId : (process.env.DEFAULT_COMPANY_ID || '1');
+    },
+    get defaultUserId() {
+      const s = worxstreamSession.getSession();
+      return s ? s.userId : (process.env.DEFAULT_USER_ID || '1');
+    },
   },
   server: {
     port: parseInt(process.env.PORT || '3000', 10),
     env: process.env.NODE_ENV || 'development',
-    publicUrl: process.env.BACKEND_URL || process.env.PUBLIC_URL || 'https://mcp.worxstream.io',
+    publicUrl: (() => {
+      const url = process.env.BACKEND_URL || process.env.PUBLIC_URL;
+      if (url) return url;
+      const port = parseInt(process.env.PORT || '3000', 10);
+      return process.env.NODE_ENV === 'production' ? '' : `http://localhost:${port}`;
+    })(),
+    /** Comma-separated list of allowed CORS origins */
+    corsOrigins: process.env.CORS_ORIGINS || '',
   },
   database: {
-    url: process.env.MONGODB_URL || 'mongodb+srv://doadmin:94f0Pq2rX1768uKe@db-mongodb-nyc1-38465-c4ba6c32.mongo.ondigitalocean.com/?authSource=admin',
+    url: process.env.MONGODB_URL || '',
   },
   contextWindow: {
     maxMessages: parseInt(process.env.MAX_CONTEXT_MESSAGES || '50', 10),
@@ -46,16 +64,37 @@ export const config = {
   },
 };
 
+/** Resolve current Worxstream context (session or .env). Call at invocation time, not at module load. */
+export function getWorxstreamContext() {
+  return {
+    companyId: config.worxstream.defaultCompanyId,
+    userId: config.worxstream.defaultUserId,
+  };
+}
+
 // Validation
 export function validateConfig() {
   const errors = [];
+  const isProduction = process.env.NODE_ENV === 'production';
 
   if (!config.anthropic.apiKey) {
     errors.push('ANTHROPIC_API_KEY is required');
   }
+  if (!config.worxstream.baseUrl) {
+    errors.push('WORXSTREAM_BASE_URL is required');
+  }
+  if (!config.database.url) {
+    errors.push('MONGODB_URL is required');
+  }
+  if (isProduction && !config.server.corsOrigins) {
+    errors.push('CORS_ORIGINS is required in production (comma-separated list of allowed origins)');
+  }
+  if (isProduction && !(process.env.BACKEND_URL || process.env.PUBLIC_URL)) {
+    errors.push('BACKEND_URL or PUBLIC_URL is required in production');
+  }
 
-  if (!config.worxstream.apiToken) {
-    console.warn('⚠️  WORXSTREAM_API_TOKEN not set - API calls will fail');
+  if (!process.env.WORXSTREAM_API_TOKEN) {
+    console.warn('⚠️  WORXSTREAM_API_TOKEN not set - set via .env or POST /api/auth/session after login');
   }
 
   if (errors.length > 0) {

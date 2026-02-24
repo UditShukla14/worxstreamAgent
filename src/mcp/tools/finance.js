@@ -5,11 +5,9 @@
 import { z } from 'zod';
 import { registerTool } from '../server.js';
 import { callWorxstreamAPI } from '../../services/httpClient.js';
-import { config } from '../../config/index.js';
+import { getWorxstreamContext } from '../../config/index.js';
 
 export function registerFinanceTools() {
-  const companyId = config.worxstream.defaultCompanyId;
-  const userId = config.worxstream.defaultUserId;
 
   // ============================================
   // TAX
@@ -23,6 +21,7 @@ export function registerFinanceTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/master/tax/tax-list',
@@ -43,6 +42,7 @@ export function registerFinanceTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/master/tax/tax-dropdown',
@@ -67,6 +67,7 @@ export function registerFinanceTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/master/tax/create-tax',
@@ -102,6 +103,7 @@ export function registerFinanceTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'PUT',
         endpoint: '/master/tax/update-tax',
@@ -126,6 +128,7 @@ export function registerFinanceTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/master/config/all-account-charts',
@@ -146,6 +149,7 @@ export function registerFinanceTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/master/config/account-charts-dropdown',
@@ -171,6 +175,7 @@ export function registerFinanceTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/master/config/create-account-chart',
@@ -197,6 +202,7 @@ export function registerFinanceTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'PUT',
         endpoint: '/master/config/update-account-chart',
@@ -219,6 +225,7 @@ export function registerFinanceTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'DELETE',
         endpoint: '/master/config/delete-account-chart',
@@ -253,6 +260,7 @@ export function registerFinanceTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/master/config/create-dropdown-values',
@@ -289,6 +297,7 @@ export function registerFinanceTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'PUT',
         endpoint: '/master/config/update-dropdown-values',
@@ -309,6 +318,7 @@ export function registerFinanceTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/master/config/generate-default-dropdowns',
@@ -340,6 +350,7 @@ export function registerFinanceTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/master/config/save-column-configs',
@@ -360,6 +371,7 @@ export function registerFinanceTools() {
       inputSchema: {},
     },
     async () => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/master/config/generate-default-column-configs',
@@ -387,6 +399,7 @@ export function registerFinanceTools() {
       },
     },
     async (input) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/master/config/save-fields-group',
@@ -409,6 +422,7 @@ export function registerFinanceTools() {
       },
     },
     async ({ app_id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/master/config/get-fields-groups',
@@ -431,6 +445,7 @@ export function registerFinanceTools() {
       },
     },
     async ({ app_id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/master/config/get-all-fields',
@@ -453,6 +468,7 @@ export function registerFinanceTools() {
       },
     },
     async ({ id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'DELETE',
         endpoint: '/master/config/delete-fields-group',
@@ -475,6 +491,7 @@ export function registerFinanceTools() {
       },
     },
     async ({ app_id }) => {
+      const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/master/config/app-filters-for-list',
