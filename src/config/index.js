@@ -5,10 +5,25 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+/** Model IDs that support tool_search_tool_bm25 (on-demand tool loading). GA Feb 2026. */
+const TOOL_SEARCH_SUPPORTED_MODELS = [
+  'claude-sonnet-4-6',
+  'claude-opus-4-6',
+  'claude-sonnet-4-5-20250929',
+  'claude-opus-4-5-20251101',
+  'claude-haiku-4-5-20251001',
+];
+
+const anthropicModel = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
+const useToolSearchEnv = process.env.ANTHROPIC_USE_TOOL_SEARCH;
+
 export const config = {
   anthropic: {
     apiKey: process.env.ANTHROPIC_API_KEY,
-    model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-20250514',
+    /** Default to Sonnet 4.6 for tool search support; override with ANTHROPIC_MODEL. */
+    model: anthropicModel,
+    /** Enabled when model supports tool search; set ANTHROPIC_USE_TOOL_SEARCH=false/true to override. */
+    useToolSearch: useToolSearchEnv === 'false' ? false : useToolSearchEnv === 'true' ? true : TOOL_SEARCH_SUPPORTED_MODELS.includes(anthropicModel),
   },
   worxstream: {
     baseUrl: process.env.WORXSTREAM_BASE_URL || 'https://api.worxstream.io',

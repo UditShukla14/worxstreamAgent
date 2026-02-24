@@ -198,6 +198,42 @@ export function extractKeywords(message) {
   return [...new Set(keywords)]; // Remove duplicates
 }
 
+/** Greetings and short conversational phrases that don't need tools (token-efficient: send 0 tools) */
+const CONVERSATIONAL_PHRASES = new Set([
+  'hi', 'hello', 'hey', 'hey there', 'hi there', 'hello there',
+  'thanks', 'thank you', 'thx', 'ok', 'okay', 'sure', 'yes', 'no',
+  'good morning', 'good afternoon', 'good evening', 'good night',
+  'how are you', 'what can you do', 'help', 'what do you do',
+  'who are you', 'intro', 'introduction',
+]);
+
+/** Task-related verbs that suggest the user wants to use tools */
+const TASK_VERBS = /\b(list|show|get|find|search|create|add|update|edit|delete|remove|view|fetch|compare|convert|copy|release)\b/i;
+
+/**
+ * Detect if the message is purely conversational (greeting, thanks, etc.) and does not need tools.
+ * Used for token-efficient tool use: send 0 tools for these so we don't pay for 171 tool definitions.
+ * @param {string} message - User message
+ * @returns {boolean} True if message is conversational only and tools can be omitted
+ */
+export function isConversationalOnly(message) {
+  if (!message || typeof message !== 'string') {
+    return true;
+  }
+  const trimmed = message.trim();
+  if (trimmed.length === 0) return true;
+  // Very short message that matches a known conversational phrase
+  const lower = trimmed.toLowerCase();
+  if (CONVERSATIONAL_PHRASES.has(lower)) {
+    return true;
+  }
+  // Short message (e.g. under 30 chars) with no task verb → likely chitchat
+  if (trimmed.length < 30 && !TASK_VERBS.test(trimmed)) {
+    return true;
+  }
+  return false;
+}
+
 /**
  * Get tool names for given keywords
  * @param {string[]} keywords - Array of keywords (e.g., ['@customer', '@invoice'])

@@ -10,6 +10,12 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 // Tool registry - tracks all registered tools
 const toolRegistry = new Map();
 
+/** Anthropic tool search tool (BM25) - Claude discovers tools on demand; only this + search results load into context */
+const TOOL_SEARCH_BM25 = {
+  type: 'tool_search_tool_bm25_20251119',
+  name: 'tool_search_tool_bm25',
+};
+
 // Create the MCP server instance
 const mcpServer = new McpServer({
   name: 'worxstream-agent',
@@ -59,6 +65,29 @@ export function getAnthropicTools(filterToolNames = null) {
   }
   
   return tools;
+}
+
+/**
+ * Get tools in tool-search format: search tool + all MCP tools with defer_loading.
+ * Claude only sees the search tool initially; when it searches, the API returns 3–5 relevant tools.
+ * Use this for on-demand tool loading (no static keyword/phrase matching).
+ * @returns {Array} Tools array for Messages API with tool search + defer_loading
+ */
+export function getAnthropicToolsForToolSearch() {
+  const deferredTools = [];
+  for (const [name, tool] of toolRegistry) {
+    deferredTools.push({
+      name,
+      description: tool.description || tool.title || name,
+      input_schema: tool.inputSchema ? zodSchemaToJsonSchema(tool.inputSchema) : {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+      defer_loading: true,
+    });
+  }
+  return [TOOL_SEARCH_BM25, ...deferredTools];
 }
 
 /**

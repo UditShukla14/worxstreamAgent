@@ -7,9 +7,9 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import xlsx from 'xlsx';
 import { config } from '../config/index.js';
-import { getAnthropicTools, executeMcpTool } from '../mcp/server.js';
+import { getAnthropicTools, getAnthropicToolsForToolSearch, executeMcpTool } from '../mcp/server.js';
 import { SYSTEM_PROMPT } from '../agent/systemPrompt.js';
-import { extractKeywords, getToolsForKeywords } from '../mcp/tools/keywordMapping.js';
+import { extractKeywords, getToolsForKeywords, isConversationalOnly } from '../mcp/tools/keywordMapping.js';
 import Conversation from '../models/Conversation.js';
 import { manageContextWindow, getContextStats } from '../utils/contextWindow.js';
 import { removeOrphanedToolResults } from '../utils/validateMessages.js';
@@ -129,9 +129,8 @@ function normalizeMessages(messages) {
               };
             }
 
-            // Unknown block type - skip it
-            console.warn('⚠️ Skipping unknown block type:', block.type);
-            return null;
+            // Pass through other block types (e.g. server_tool_use, tool_search_tool_result for tool search)
+            return block;
           })
           .filter((block) => block !== null);
 
@@ -301,18 +300,25 @@ router.post('/', async (req, res) => {
     }
     console.log('='.repeat(60));
 
-    // Extract keywords and filter tools
-    const keywords = extractKeywords(message);
-    const filteredToolNames = getToolsForKeywords(keywords);
-    const allTools = getAnthropicTools(); // Get total count
-    const tools = getAnthropicTools(filteredToolNames);
-    
-    // Log keyword filtering for debugging
-    if (keywords.length > 0) {
-      console.log(`🔑 Keywords detected: ${keywords.join(', ')}`);
-      console.log(`🔧 Filtered tools: ${filteredToolNames.length} tools available (out of ${allTools.length} total)`);
+    // Tool selection: tool search (if model supports it) or keyword + conversation fallback
+    let tools;
+    if (config.anthropic.useToolSearch) {
+      tools = getAnthropicToolsForToolSearch();
+      console.log(`🔧 Tool search: on-demand loading (1 search tool + ${tools.length - 1} deferred tools)`);
     } else {
-      console.log(`🔧 Using all ${tools.length} tools (no keywords detected)`);
+      const keywords = extractKeywords(message);
+      let filteredToolNames = getToolsForKeywords(keywords);
+      if (filteredToolNames === null && isConversationalOnly(message)) {
+        filteredToolNames = [];
+        console.log(`🔧 Conversation-only: 0 tools`);
+      }
+      const allTools = getAnthropicTools();
+      tools = getAnthropicTools(filteredToolNames);
+      if (keywords.length > 0) {
+        console.log(`🔧 Keywords: ${keywords.join(', ')} → ${filteredToolNames?.length ?? allTools.length} tools`);
+      } else if ((filteredToolNames?.length ?? 0) > 0) {
+        console.log(`🔧 No keywords → ${tools.length} tools`);
+      }
     }
 
     // Build initial messages array with new user message
@@ -379,13 +385,19 @@ router.post('/', async (req, res) => {
       console.log(`\n🔄 Iteration ${iterationCount}/${MAX_ITERATIONS}`);
       console.log('\n📤 Calling Claude...');
       
-      response = await anthropic.messages.create({
+      const createParams = {
         model: config.anthropic.model,
         max_tokens: 4096,
         system: SYSTEM_PROMPT,
-        tools,
         messages,
-      });
+      };
+      if (tools.length > 0) {
+        createParams.tools = tools;
+        createParams.tool_choice = { type: 'auto' };
+      } else {
+        createParams.tools = [];
+      }
+      response = await anthropic.messages.create(createParams);
 
       // Track token usage from Anthropic API response
       if (response.usage) {
@@ -591,18 +603,25 @@ Format your response with clear sections, tables where appropriate, and actionab
     res.write(`data: ${JSON.stringify({ type: 'conversation_id', conversation_id: conversation.id })}\n\n`);
     res.write(`data: ${JSON.stringify({ type: 'start', message: 'Processing your request...' })}\n\n`);
 
-    // Extract keywords and filter tools (use enhanced message for keyword extraction)
-    const keywords = extractKeywords(enhancedMessage);
-    const filteredToolNames = getToolsForKeywords(keywords);
-    const allTools = getAnthropicTools(); // Get total count
-    const tools = getAnthropicTools(filteredToolNames);
-    
-    // Log keyword filtering for debugging
-    if (keywords.length > 0) {
-      console.log(`🔑 Keywords detected: ${keywords.join(', ')}`);
-      console.log(`🔧 Filtered tools: ${filteredToolNames.length} tools available (out of ${allTools.length} total)`);
+    // Tool selection: tool search (if model supports it) or keyword + conversation fallback
+    let tools;
+    if (config.anthropic.useToolSearch) {
+      tools = getAnthropicToolsForToolSearch();
+      console.log(`🔧 Tool search: on-demand loading (1 search tool + ${tools.length - 1} deferred tools)`);
     } else {
-      console.log(`🔧 Using all ${tools.length} tools (no keywords detected)`);
+      const keywords = extractKeywords(enhancedMessage);
+      let filteredToolNames = getToolsForKeywords(keywords);
+      if (filteredToolNames === null && isConversationalOnly(enhancedMessage)) {
+        filteredToolNames = [];
+        console.log(`🔧 Conversation-only: 0 tools`);
+      }
+      const allTools = getAnthropicTools();
+      tools = getAnthropicTools(filteredToolNames);
+      if (keywords.length > 0) {
+        console.log(`🔧 Keywords: ${keywords.join(', ')} → ${filteredToolNames?.length ?? allTools.length} tools`);
+      } else if ((filteredToolNames?.length ?? 0) > 0) {
+        console.log(`🔧 No keywords → ${tools.length} tools`);
+      }
     }
 
     // Build initial messages array with enhanced user message
@@ -666,13 +685,19 @@ Format your response with clear sections, tables where appropriate, and actionab
       console.log(`\n🔄 Iteration ${iterationCount}/${MAX_ITERATIONS}`);
       console.log('\n📤 Calling Claude...');
       
-      const response = await anthropic.messages.create({
+      const createParams = {
         model: config.anthropic.model,
         max_tokens: 4096,
         system: SYSTEM_PROMPT,
-        tools,
         messages,
-      });
+      };
+      if (tools.length > 0) {
+        createParams.tools = tools;
+        createParams.tool_choice = { type: 'auto' };
+      } else {
+        createParams.tools = [];
+      }
+      const response = await anthropic.messages.create(createParams);
 
       console.log(`📥 Claude response - Stop reason: ${response.stop_reason}`);
 
@@ -737,13 +762,19 @@ Format your response with clear sections, tables where appropriate, and actionab
       // Final response - stream it
       console.log('\n📤 Streaming final response...');
       
-      const stream = await anthropic.messages.stream({
+      const streamParams = {
         model: config.anthropic.model,
         max_tokens: 4096,
         system: SYSTEM_PROMPT,
-        tools,
         messages,
-      });
+      };
+      if (tools.length > 0) {
+        streamParams.tools = tools;
+        streamParams.tool_choice = { type: 'auto' };
+      } else {
+        streamParams.tools = [];
+      }
+      const stream = await anthropic.messages.stream(streamParams);
 
       for await (const event of stream) {
         if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
