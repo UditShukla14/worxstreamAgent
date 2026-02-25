@@ -86,20 +86,19 @@ export function validateConfig() {
   if (!config.database.url) {
     errors.push('MONGODB_URL is required');
   }
-  if (isProduction && !config.server.corsOrigins) {
-    errors.push('CORS_ORIGINS is required in production (comma-separated list of allowed origins)');
-  }
-  if (isProduction && !(process.env.BACKEND_URL || process.env.PUBLIC_URL)) {
-    errors.push('BACKEND_URL or PUBLIC_URL is required in production');
-  }
-
-  if (!process.env.WORXSTREAM_API_TOKEN) {
-    console.warn('⚠️  WORXSTREAM_API_TOKEN not set - set via .env or POST /api/auth/session after login');
-  }
-
   if (errors.length > 0) {
     console.error('❌ Configuration errors:');
     errors.forEach(err => console.error(`   - ${err}`));
     process.exit(1);
+  }
+
+  if (!process.env.WORXSTREAM_API_TOKEN) {
+    console.warn('⚠️  WORXSTREAM_API_TOKEN not set - set via .env or POST /session after login');
+  }
+  if (isProduction && !config.server.corsOrigins) {
+    console.warn('⚠️  CORS_ORIGINS not set - set in .env for production (comma-separated origins)');
+  }
+  if (isProduction && !(process.env.BACKEND_URL || process.env.PUBLIC_URL)) {
+    console.warn('⚠️  BACKEND_URL or PUBLIC_URL not set - set in .env for production');
   }
 }

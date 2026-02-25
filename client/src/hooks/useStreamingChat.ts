@@ -7,6 +7,8 @@ export function useStreamingChat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [currentTools, setCurrentTools] = useState<ToolUsed[]>([]);
+  /** Backend-driven status label (e.g. "Checking invoices…"); null = use default */
+  const [activityLabel, setActivityLabel] = useState<string | null>(null);
   const conversationIdRef = useRef<string | null>(null);
 
   const loadConversation = useCallback(async (conversationId: string) => {
@@ -73,6 +75,7 @@ export function useStreamingChat() {
     setMessages(prev => [...prev, userMsg]);
     setIsLoading(true);
     setCurrentTools([]);
+    setActivityLabel(null);
 
     // Add placeholder for assistant message
     const assistantMsgId = `assistant-${Date.now()}`;
@@ -98,13 +101,13 @@ export function useStreamingChat() {
           formData.append('conversation_id', conversationIdRef.current);
         }
 
-        response = await fetch(`${API_URL}/chat/stream`, {
+        response = await fetch(`${API_URL}/agents/stream`, {
           method: 'POST',
           body: formData, // Send as FormData for file uploads
         });
       } else {
         // Regular text message
-        response = await fetch(`${API_URL}/chat/stream`, {
+        response = await fetch(`${API_URL}/agents/stream`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -141,6 +144,10 @@ export function useStreamingChat() {
               switch (event.type) {
                 case 'conversation_id':
                   conversationIdRef.current = event.conversation_id || null;
+                  break;
+
+                case 'status':
+                  if (event.label) setActivityLabel(event.label);
                   break;
 
                 case 'tool_use':
@@ -217,6 +224,7 @@ export function useStreamingChat() {
     } finally {
       setIsLoading(false);
       setCurrentTools([]);
+      setActivityLabel(null);
     }
   }, [isLoading]);
 
@@ -229,6 +237,8 @@ export function useStreamingChat() {
     messages,
     isLoading,
     currentTools,
+    /** Backend-driven status label; null = use default in ActivityStatus */
+    activityLabel,
     sendMessage,
     resetChat,
     loadConversation,

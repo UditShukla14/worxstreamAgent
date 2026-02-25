@@ -1,15 +1,18 @@
 import { useState } from 'react';
+import { Routes, Route } from 'react-router-dom';
 import { Header } from './components/Header';
 import { ChatContainer } from './components/ChatContainer';
 import { ConversationsSidebar } from './components/ConversationsSidebar';
+import { RexDashboard } from './components/RexDashboard';
 import { useStreamingChat } from './hooks/useStreamingChat';
 
-function App() {
+function ChatPage() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const { 
     messages, 
     isLoading, 
     currentTools, 
+    activityLabel, 
     sendMessage, 
     loadConversation, 
     resetChat, 
@@ -43,10 +46,20 @@ function App() {
           messages={messages}
           isLoading={isLoading}
           currentTools={currentTools}
+          activityLabel={activityLabel}
           sendMessage={sendMessage}
         />
       </div>
     </div>
+  );
+}
+
+function App() {
+  return (
+    <Routes>
+      <Route path="/" element={<ChatPage />} />
+      <Route path="/rex" element={<RexDashboard />} />
+    </Routes>
   );
 }
 

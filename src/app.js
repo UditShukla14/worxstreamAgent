@@ -11,8 +11,9 @@ import routes from './routes/index.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import { getAvailableTools } from './mcp/server.js';
 import { connectDB } from './db/connection.js';
+import { initializeAgents, getAgentKeys } from './agents/index.js';
 
-// Import tools to trigger registration
+// Import tools to trigger registration (must happen before agent init)
 import './mcp/tools/index.js';
 
 // Validate configuration
@@ -61,27 +62,40 @@ async function startServer() {
   try {
     // Connect to MongoDB
     await connectDB();
-    
+
+    // Initialize multi-agent system (after MCP tools are registered)
+    initializeAgents();
+
     app.listen(config.server.port, '0.0.0.0', () => {
+      const agentKeys = getAgentKeys();
+      const url = config.server.publicUrl;
+
       console.log('\n' + '='.repeat(60));
       console.log('🚀 Worxstream AI Agent Server');
       console.log('='.repeat(60));
       console.log(`📍 Server running on http://0.0.0.0:${config.server.port}`);
-      if (config.server.publicUrl) {
-        console.log(`🌐 Public URL: ${config.server.publicUrl}`);
+      if (url) {
+        console.log(`🌐 Public URL: ${url}`);
       }
       console.log(`🤖 Using model: ${config.anthropic.model}`);
       console.log(`🔧 Available MCP tools: ${getAvailableTools().length}`);
+      console.log(`🤖 Specialist agents: ${agentKeys.length} (${agentKeys.join(', ')})`);
       console.log(`📦 MongoDB connected`);
       console.log('='.repeat(60));
       console.log('\nEndpoints:');
-      console.log(`  POST ${config.server.publicUrl}/api/chat        - Send a message to the AI agent`);
-      console.log(`  POST ${config.server.publicUrl}/api/chat/stream - Send a message with streaming response (SSE)`);
-      console.log(`  GET  ${config.server.publicUrl}/api/chat/:id    - Get conversation history`);
-      console.log(`  DELETE ${config.server.publicUrl}/api/chat/:id  - Delete conversation`);
-      console.log(`  GET  ${config.server.publicUrl}/api/tools       - List available tools`);
-      console.log(`  POST/GET/DELETE ${config.server.publicUrl}/api/auth/session - Chat backend session`);
-      console.log(`  GET  ${config.server.publicUrl}/health          - Health check`);
+      console.log(`  POST   ${url}/api/chat             - Single-agent chat (legacy)`);
+      console.log(`  POST   ${url}/api/chat/stream       - Single-agent streaming (legacy)`);
+      console.log(`  GET    ${url}/api/agents             - List all agents`);
+      console.log(`  POST   ${url}/api/agents/stream      - Auto-route + SSE streaming`);
+      console.log(`  POST   ${url}/api/agents/route       - Auto-route to agent(s)`);
+      console.log(`  POST   ${url}/api/agents/:key        - Call a specific agent`);
+      console.log(`  POST   ${url}/api/agents/multi       - Call multiple agents`);
+      console.log(`  GET    ${url}/api/tools              - List available tools`);
+      console.log(`  GET    ${url}/api/rex/dashboard      - Rex: agent stats (JSON)`);
+      console.log(`  GET    ${url}/api/rex/stream         - Rex: real-time SSE feed`);
+      console.log(`  GET    ${url}/health                 - Health check`);
+      console.log('='.repeat(60));
+      console.log('🦖 Rex admin dashboard: open /rex in the frontend');
       console.log('='.repeat(60) + '\n');
     });
   } catch (error) {

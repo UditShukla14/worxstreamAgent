@@ -13,6 +13,9 @@ import { registerFinanceTools } from './finance.js';
 import { registerConfigTools } from './config.js';
 import { registerEstimateTools } from './estimates.js';
 import { registerInvoiceTools } from './invoices.js';
+import { registerCreditMemoTools } from './creditMemos.js';
+import { registerPurchaseOrderTools } from './purchaseOrders.js';
+import { registerBillTools } from './bills.js';
 import { registerTaskTools } from './tasks.js';
 import { registerJobTools } from './jobs.js';
 import { registerWorkflowTools } from './workflows.js';
@@ -60,6 +63,15 @@ export function registerAllTools() {
 
   registerInvoiceTools();
   console.log('  ✓ Invoice tools registered');
+
+  registerCreditMemoTools();
+  console.log('  ✓ Credit memo tools registered');
+
+  registerPurchaseOrderTools();
+  console.log('  ✓ Purchase order tools registered');
+
+  registerBillTools();
+  console.log('  ✓ Bill tools registered');
 
   registerTaskTools();
   console.log('  ✓ Task tools registered');

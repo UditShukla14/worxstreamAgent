@@ -62,6 +62,24 @@ const KEYWORD_TO_TOOLS = {
     'get_estimate_details',
     'create_estimate',
   ],
+
+  '@creditmemo': [
+    'list_credit_memos',
+    'get_credit_memo_details',
+    'create_credit_memo',
+  ],
+
+  '@purchaseorder': [
+    'list_purchase_orders',
+    'get_purchase_order_details',
+    'create_purchase_order',
+  ],
+
+  '@bill': [
+    'list_bills',
+    'get_bill_details',
+    'create_bill',
+  ],
   
   '@job': [
     'list_jobs',

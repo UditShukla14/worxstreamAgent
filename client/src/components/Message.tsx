@@ -1,9 +1,9 @@
 import { useMemo } from 'react';
 import { User, Bot } from './icons/AnimatedIcons';
 import { Message as MessageType } from '../types';
-import { parseXMLContent, extractWorkflowFromXML, extractMilestonesFromXML } from '../utils/parseXML';
+import { parseXMLContent, extractWorkflowFromXML } from '../utils/parseXML';
 import { WorkflowVisualization } from './WorkflowVisualization';
-import { Milestones } from './Milestones';
+import { ResponseSkeleton } from './ResponseSkeleton';
 import { extractKeywords, getKeywordDisplayName, getKeywordColor } from '../utils/extractKeywords';
 
 interface MessageProps {
@@ -27,23 +27,7 @@ export function Message({ message }: MessageProps) {
     return extracted;
   }, [message.content, isUser]);
 
-  // Extract milestones data from <milestones> XML tag (works with streaming content)
-  const milestonesData = useMemo(() => {
-    if (isUser) return null;
-    // Extract even from partial content during streaming
-    const extracted = extractMilestonesFromXML(message.content || '');
-    if (extracted && extracted.length > 0) {
-      console.log('Message component - Extracted milestones data:', extracted, 'isStreaming:', message.isStreaming);
-    }
-    return extracted;
-  }, [message.content, isUser, message.isStreaming]);
-
   const hasWorkflow = workflowData !== null;
-  const hasMilestones = milestonesData !== null && milestonesData.length > 0;
-  
-  if (hasWorkflow) {
-    console.log('Message component - Rendering workflow with data:', workflowData);
-  }
 
   return (
     <div className={`message ${message.role}`}>
@@ -72,27 +56,21 @@ export function Message({ message }: MessageProps) {
           </div>
         ) : (
           <>
-            {hasMilestones && (
-              <div style={{ marginBottom: '16px' }}>
-                <Milestones milestones={milestonesData} />
-              </div>
-            )}
-            {hasWorkflow && (
+            {hasWorkflow && !message.isStreaming && (
               <div style={{ marginBottom: '16px' }}>
                 <WorkflowVisualization data={workflowData} height={500} />
               </div>
             )}
-            <div 
-              className="message-text"
-              dangerouslySetInnerHTML={{ 
-                __html: parseXMLContent(message.content) 
-              }}
-            />
-            
-            {message.isStreaming && message.content && (
-              <span className="streaming-cursor" />
+            {message.isStreaming ? (
+              <ResponseSkeleton />
+            ) : (
+              <div
+                className="message-text message-text--wrapped"
+                dangerouslySetInnerHTML={{
+                  __html: parseXMLContent(message.content),
+                }}
+              />
             )}
-            
             {message.toolsUsed && message.toolsUsed.length > 0 && !message.isStreaming && (
               <div className="tools-used">
                 <span className="tools-label">Used:</span>

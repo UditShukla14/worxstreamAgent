@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import { Sparkles, PlusCircle } from './icons/AnimatedIcons';
 
 interface HeaderProps {
@@ -14,12 +15,17 @@ export function Header({ onNewChat }: HeaderProps) {
         <h1>Worxstream</h1>
         <span className="header-subtitle">AI Assistant</span>
       </div>
-      {onNewChat && (
-        <button className="new-chat-btn" onClick={onNewChat}>
-          <PlusCircle size={16} />
-          New chat
-        </button>
-      )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <Link to="/rex" className="rex-nav-link">
+          🦖 Rex
+        </Link>
+        {onNewChat && (
+          <button className="new-chat-btn" onClick={onNewChat}>
+            <PlusCircle size={16} />
+            New chat
+          </button>
+        )}
+      </div>
     </header>
   );
 }
