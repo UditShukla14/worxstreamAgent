@@ -5,24 +5,36 @@
 
 import { z } from 'zod';
 import { registerTool } from '../server.js';
-import { callWorxstreamAPI } from '../../services/httpClient.js';
+import { callWorxstreamAPI, normalizeFilter } from '../../services/httpClient.js';
 import { getWorxstreamContext } from '../../config/index.js';
 
 export function registerCustomerTools() {
+
+  const filterSchema = z.object({ search: z.string().optional() }).optional();
 
   registerTool(
     'list_customers',
     {
       title: 'List Customers',
-      description: 'Get all customers (customer records, not CRM contacts). Customers are business entities that can be associated with invoices, estimates, and jobs. Use list_contacts for CRM contacts instead.',
-      inputSchema: {},
+      description: 'List customers (customer records, not CRM contacts). Supports filter.search for name/search. Use list_contacts for CRM contacts instead.',
+      inputSchema: {
+        take: z.number().optional().describe('Number of results (default: 25)'),
+        page: z.number().optional().describe('Page number (default: 1)'),
+        filter: filterSchema.describe('Filter object, e.g. { "search": "green sc" }'),
+      },
     },
-    async () => {
+    async ({ take = 25, page = 1, filter } = {}) => {
       const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
-        method: 'GET',
+        method: 'POST',
         endpoint: '/master/customer/customer-list',
-        data: { company_id: companyId, user_id: userId },
+        data: {
+          companyId,
+          userId,
+          page: page ?? 1,
+          limit: take ?? 25,
+          filter: normalizeFilter(filter),
+        },
       });
 
       return {

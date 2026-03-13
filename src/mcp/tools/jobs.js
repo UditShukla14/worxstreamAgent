@@ -4,27 +4,36 @@
 
 import { z } from 'zod';
 import { registerTool } from '../server.js';
-import { callWorxstreamAPI } from '../../services/httpClient.js';
+import { callWorxstreamAPI, normalizeFilter } from '../../services/httpClient.js';
 import { getWorxstreamContext } from '../../config/index.js';
 
 export function registerJobTools() {
+
+  const filterSchema = z.object({ search: z.string().optional() }).optional();
 
   // List jobs
   registerTool(
     'list_jobs',
     {
       title: 'List Jobs',
-      description: 'Get all jobs.',
-      inputSchema: {},
+      description: 'List jobs. Supports take, page, and filter.search.',
+      inputSchema: {
+        take: z.number().optional().describe('Number of results (default: 25)'),
+        page: z.number().optional().describe('Page number (default: 1)'),
+        filter: filterSchema.describe('Filter object, e.g. { "search": "term" }'),
+      },
     },
-    async () => {
+    async ({ take = 25, page = 1, filter } = {}) => {
       const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
-        method: 'GET',
+        method: 'POST',
         endpoint: '/transaction/job/get-jobs',
         data: {
-          company_id: companyId,
-          user_id: userId,
+          companyId,
+          userId,
+          page: page ?? 1,
+          limit: take ?? 25,
+          filter: normalizeFilter(filter),
         },
       });
 

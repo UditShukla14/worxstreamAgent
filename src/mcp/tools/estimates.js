@@ -3,44 +3,79 @@
  */
 
 import { z } from 'zod';
+import crypto from 'crypto';
 import { registerTool } from '../server.js';
-import { callWorxstreamAPI } from '../../services/httpClient.js';
-import { getWorxstreamContext } from '../../config/index.js';
+import { callWorxstreamAPI, normalizeFilter } from '../../services/httpClient.js';
+import { config, getWorxstreamContext } from '../../config/index.js';
+import { redisGet, redisSet } from '../../services/redisClient.js';
+
+function inputHash(obj) {
+  const json = JSON.stringify(obj);
+  return crypto.createHash('sha256').update(json).digest('hex').slice(0, 24);
+}
 
 export function registerEstimateTools() {
+
+  const filterSchema = z.object({ search: z.string().optional() }).optional();
 
   // List estimates
   registerTool(
     'list_estimates',
     {
       title: 'List Estimates',
-      description: 'Get all estimates. Can filter by customer_id, vendor_id, and search.',
+      description: 'List estimates. Can filter by customer_id, vendor_id, and filter.search.',
       inputSchema: {
         customer_id: z.number().optional().describe('Customer ID'),
         vendor_id: z.number().optional().describe('Vendor ID'),
-        search: z.string().optional().describe('Search term'),
-        take: z.number().optional().describe('Number of results (default: 100)'),
+        take: z.number().optional().describe('Number of results (default: 25)'),
         page: z.number().optional().describe('Page number (default: 1)'),
-        sort: z.string().optional().describe('Sort field (default: "id")'),
+        sort: z.string().optional().describe('Sort field (default: "created_at")'),
+        filter: filterSchema.describe('Filter object, e.g. { "search": "term" }'),
       },
     },
-    async ({ customer_id, vendor_id, search, take = 100, page = 1, sort = 'id' }) => {
+    async ({ customer_id, vendor_id, take = 25, page = 1, sort = 'created_at', filter } = {}) => {
       const { companyId, userId } = getWorxstreamContext();
+      const filterObj = normalizeFilter(filter);
+
+      const ttl = Number.isFinite(config.redis?.cacheTtlSeconds) ? config.redis.cacheTtlSeconds : 60;
+      const cacheKey = `ws:cache:tool:list_estimates:${companyId}:${userId}:${inputHash({
+        customer_id: customer_id ?? null,
+        vendor_id: vendor_id ?? null,
+        take: take ?? 25,
+        page: page ?? 1,
+        sort: sort ?? 'created_at',
+        filter: filterObj ?? {},
+      })}`;
+
+      const cached = ttl > 0 ? await redisGet(cacheKey) : null;
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached);
+          return { content: [{ type: 'text', text: JSON.stringify(parsed, null, 2) }] };
+        } catch {
+          // ignore cache parse failures
+        }
+      }
+
       const result = await callWorxstreamAPI({
-        method: 'GET',
+        method: 'POST',
         endpoint: '/master-objects/list',
         data: {
-          company_id: companyId,
-          user_id: userId,
-          app_name: 'estimate',
+          companyId,
+          userId,
+          appName: 'estimate',
           customer_id,
           vendor_id,
-          take,
-          page,
+          page: page ?? 1,
+          limit: take ?? 25,
           sort,
-          filter: search ? { advance: { search } } : {},
+          filter: filterObj,
         },
       });
+
+      if (ttl > 0) {
+        await redisSet(cacheKey, JSON.stringify(result), { ex: ttl });
+      }
 
       return {
         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
@@ -60,6 +95,19 @@ export function registerEstimateTools() {
     },
     async ({ id }) => {
       const { companyId, userId } = getWorxstreamContext();
+
+      const ttl = Number.isFinite(config.redis?.cacheTtlSeconds) ? config.redis.cacheTtlSeconds : 60;
+      const cacheKey = `ws:cache:entity:get_estimate_details:${companyId}:${id}`;
+      const cached = ttl > 0 ? await redisGet(cacheKey) : null;
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached);
+          return { content: [{ type: 'text', text: JSON.stringify(parsed, null, 2) }] };
+        } catch {
+          // ignore cache parse failures
+        }
+      }
+
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/master-objects/show',
@@ -69,6 +117,10 @@ export function registerEstimateTools() {
           id,
         },
       });
+
+      if (ttl > 0) {
+        await redisSet(cacheKey, JSON.stringify(result), { ex: ttl });
+      }
 
       return {
         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],

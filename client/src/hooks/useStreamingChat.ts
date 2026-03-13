@@ -3,6 +3,14 @@ import { Message, StreamEvent, ToolUsed } from '../types';
 
 const API_URL = '/api';
 
+// TODO: Wire these from real auth/session state once available.
+function getIdentity() {
+  // For now, read from localStorage so the frontend can set them after login.
+  const companyId = window.localStorage.getItem('worxstream_company_id') || '';
+  const userId = window.localStorage.getItem('worxstream_user_id') || '';
+  return { companyId, userId };
+}
+
 export function useStreamingChat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -14,7 +22,14 @@ export function useStreamingChat() {
   const loadConversation = useCallback(async (conversationId: string) => {
     try {
       setIsLoading(true);
-      const response = await fetch(`${API_URL}/chat/${conversationId}`);
+      const { companyId, userId } = getIdentity();
+      const params = new URLSearchParams();
+      if (companyId) params.set('companyId', companyId);
+      if (userId) params.set('userId', userId);
+
+      const response = await fetch(
+        `${API_URL}/agents/conversations/${conversationId}?${params.toString()}`,
+      );
       
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -100,6 +115,9 @@ export function useStreamingChat() {
         if (conversationIdRef.current) {
           formData.append('conversation_id', conversationIdRef.current);
         }
+        const { companyId, userId } = getIdentity();
+        if (companyId) formData.append('companyId', companyId);
+        if (userId) formData.append('userId', userId);
 
         response = await fetch(`${API_URL}/agents/stream`, {
           method: 'POST',
@@ -107,12 +125,15 @@ export function useStreamingChat() {
         });
       } else {
         // Regular text message
+        const { companyId, userId } = getIdentity();
         response = await fetch(`${API_URL}/agents/stream`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             message: userMessage,
             conversation_id: conversationIdRef.current,
+            companyId,
+            userId,
           }),
         });
       }

@@ -9,16 +9,37 @@
  * Globally accessible by all agents: router, specialist, formatter.
  */
 
+import { config, getWorxstreamContext } from '../config/index.js';
+import { redisDel, redisGet, redisSet } from '../services/redisClient.js';
+
 const IGNORE_FIELDS = new Set([
   'take', 'page', 'sort', 'limit', 'offset', 'skip',
   'per_page', 'page_size', 'max_results',
 ]);
 
-// In-memory store: conversation_id → context object
-const store = new Map();
+function normalizeCtxRef(ref) {
+  // Backwards compatible: allow passing just conversationId.
+  if (typeof ref === 'string') {
+    const { companyId, userId } = getWorxstreamContext();
+    return { conversationId: ref, companyId: String(companyId), userId: String(userId) };
+  }
+  if (!ref || typeof ref !== 'object') {
+    return { conversationId: '', companyId: '', userId: '' };
+  }
+  const { companyId, userId } = ref.companyId || ref.userId ? ref : getWorxstreamContext();
+  return {
+    conversationId: String(ref.conversationId || ref.conversation_id || ''),
+    companyId: String(ref.companyId || ref.company_id || companyId || ''),
+    userId: String(ref.userId || ref.user_id || userId || ''),
+  };
+}
 
-// Auto-expire after 30 minutes of inactivity
-const TTL_MS = 30 * 60 * 1000;
+function ctxKey(ref) {
+  const r = normalizeCtxRef(ref);
+  if (!r.conversationId) return '';
+  // Scope by tenant + user to avoid collisions.
+  return `ws:ctx:${r.companyId}:${r.userId}:${r.conversationId}`;
+}
 
 /**
  * Extract all numeric-valued fields from a flat object,
@@ -94,26 +115,42 @@ function extractFromResult(result) {
  * Get the context for a conversation. Returns a plain object
  * with accumulated numeric fields + metadata.
  */
-export function getContext(conversationId) {
-  if (!conversationId) return { entities: {}, lastAgent: null, lastAction: null, lastSearch: null };
-  const entry = store.get(conversationId);
-  if (!entry) return { entities: {}, lastAgent: null, lastAction: null, lastSearch: null };
-  return entry.context;
+export async function getContext(ref) {
+  const key = ctxKey(ref);
+  if (!key) return { entities: {}, lastAgent: null, lastAction: null, lastSearch: null };
+  const raw = await redisGet(key);
+  if (!raw) return { entities: {}, lastAgent: null, lastAction: null, lastSearch: null };
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') {
+      return { entities: {}, lastAgent: null, lastAction: null, lastSearch: null };
+    }
+    return {
+      entities: parsed.entities && typeof parsed.entities === 'object' ? parsed.entities : {},
+      lastAgent: parsed.lastAgent ?? null,
+      lastAction: parsed.lastAction ?? null,
+      lastSearch: parsed.lastSearch ?? null,
+    };
+  } catch {
+    return { entities: {}, lastAgent: null, lastAction: null, lastSearch: null };
+  }
 }
 
 /**
  * Update the context after a request completes.
  *
- * @param {string} conversationId
+ * @param {string|object} ref - conversation context ref (conversationId or { companyId, userId, conversationId })
  * @param {string} agentKey       - Which agent handled this request
  * @param {string} toolName       - Last tool called (for lastAction)
  * @param {object[]} toolsUsed    - Array of { name, input, success }
  * @param {object[]} toolResults  - Array of raw tool result objects (parsed JSON)
  */
-export function updateContext(conversationId, agentKey, toolsUsed, toolResults = []) {
-  if (!conversationId) return;
+export async function updateContext(ref, agentKey, toolsUsed, toolResults = []) {
+  const key = ctxKey(ref);
+  if (!key) return;
 
-  const existing = store.get(conversationId)?.context || {
+  const existing = await getContext(ref);
+  const ctx = existing && typeof existing === 'object' ? existing : {
     entities: {},
     lastAgent: null,
     lastAction: null,
@@ -130,7 +167,7 @@ export function updateContext(conversationId, agentKey, toolsUsed, toolResults =
         existing.lastSearch = tool.input.search.trim();
       }
       if (typeof tool.input.name === 'string' && tool.input.name.trim()) {
-        existing.lastSearch = tool.input.name.trim();
+        ctx.lastSearch = tool.input.name.trim();
       }
     }
   }
@@ -141,29 +178,36 @@ export function updateContext(conversationId, agentKey, toolsUsed, toolResults =
     if (Object.keys(nums).length > 0) {
       console.log(`📎 Context extracted from result:`, nums);
     }
-    Object.assign(existing.entities, nums);
+    Object.assign(ctx.entities, nums);
   }
 
-  existing.lastAgent = agentKey;
-  existing.lastAction = toolsUsed.length > 0
+  ctx.lastAgent = agentKey;
+  ctx.lastAction = toolsUsed.length > 0
     ? toolsUsed[toolsUsed.length - 1].name
     : null;
 
-  store.set(conversationId, {
-    context: existing,
-    updatedAt: Date.now(),
-  });
+  // When Customer agent ran, expose id as customer_id so follow-up turns (e.g. "his estimates")
+  // can use it for list_estimates/list_invoices/etc. without re-resolving the customer.
+  if (agentKey === 'customer' && ctx.entities.id != null && ctx.entities.customer_id == null) {
+    ctx.entities.customer_id = ctx.entities.id;
+  }
 
-  // Cleanup expired entries
-  cleanupExpired();
+  const ttlSeconds = Number.isFinite(config.redis?.contextTtlSeconds)
+    ? config.redis.contextTtlSeconds
+    : 1800;
+  await redisSet(
+    key,
+    JSON.stringify({ ...ctx, updatedAt: Date.now() }),
+    { ex: ttlSeconds > 0 ? ttlSeconds : 1800 },
+  );
 }
 
 /**
  * Build a short context string to inject into prompts.
  * Returns empty string if no context exists.
  */
-export function buildContextPrompt(conversationId) {
-  const ctx = getContext(conversationId);
+export async function buildContextPrompt(ref) {
+  const ctx = await getContext(ref);
   const entries = Object.entries(ctx.entities);
   if (entries.length === 0 && !ctx.lastAgent && !ctx.lastSearch) return '';
 
@@ -171,6 +215,9 @@ export function buildContextPrompt(conversationId) {
   if (entries.length > 0) {
     const entityStr = entries.map(([k, v]) => `${k}=${v}`).join(', ');
     parts.push(`Known IDs: ${entityStr}`);
+  }
+  if (ctx.entities.customer_id != null) {
+    parts.push(`Use customer_id=${ctx.entities.customer_id} for list_estimates, list_invoices, list_credit_memos, list_bills, or list_purchase_orders when the user refers to "his/their/its" or the previously discussed customer`);
   }
   if (ctx.lastSearch) {
     parts.push(`Last search: "${ctx.lastSearch}"`);
@@ -184,18 +231,11 @@ export function buildContextPrompt(conversationId) {
   return `[Context from previous turn] ${parts.join('. ')}. Use these to resolve references like "its", "that", "their", etc.`;
 }
 
-function cleanupExpired() {
-  const now = Date.now();
-  for (const [id, entry] of store) {
-    if (now - entry.updatedAt > TTL_MS) {
-      store.delete(id);
-    }
-  }
-}
-
 /**
  * Clear context for a conversation (e.g., on "new chat").
  */
-export function clearContext(conversationId) {
-  store.delete(conversationId);
+export async function clearContext(ref) {
+  const key = ctxKey(ref);
+  if (!key) return;
+  await redisDel(key);
 }

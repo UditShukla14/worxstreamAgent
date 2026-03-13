@@ -318,6 +318,106 @@ body {
   cursor: not-allowed;
 }
 
+/* Identity Modal (Company/User ID) */
+.identity-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 40;
+}
+
+.identity-modal {
+  width: 100%;
+  max-width: 420px;
+  background: var(--bg-chat);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  border: 1px solid var(--border-color);
+  padding: 24px 24px 20px;
+}
+
+.identity-modal h2 {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: var(--text-primary);
+}
+
+.identity-modal-subtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 18px;
+}
+
+.identity-modal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.identity-modal-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.identity-modal-form input {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--bg-input);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+}
+
+.identity-modal-form input:focus {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.08);
+  background: #ffffff;
+}
+
+.identity-modal-error {
+  font-size: 12px;
+  color: var(--accent-red);
+  margin-top: 4px;
+}
+
+.identity-modal-submit {
+  margin-top: 6px;
+  padding: 8px 12px;
+  border-radius: var(--radius-full);
+  border: none;
+  background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-shadow: 0 6px 18px rgba(234, 88, 12, 0.25);
+  transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease;
+  width: 100%;
+}
+
+.identity-modal-submit:hover {
+  filter: brightness(1.02);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(234, 88, 12, 0.3);
+}
+
+.identity-modal-submit:active {
+  transform: translateY(0);
+  box-shadow: 0 4px 14px rgba(234, 88, 12, 0.2);
+}
+
 /* Scrollbar styling for sidebar */
 .sidebar-content::-webkit-scrollbar {
   width: 6px;

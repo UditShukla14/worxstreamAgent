@@ -57,6 +57,20 @@ export const config = {
   database: {
     url: process.env.MONGODB_URL || '',
   },
+  redis: {
+    /** Set REDIS_URL to enable Redis-backed context/cache. */
+    url: process.env.REDIS_URL || '',
+    /** Optional Redis database index. */
+    db: process.env.REDIS_DB ? parseInt(process.env.REDIS_DB, 10) : undefined,
+    /** Force TLS (useful for hosted Redis). */
+    tls: process.env.REDIS_TLS === 'true' ? true : undefined,
+    /** Allow self-signed certs if required by environment. */
+    rejectUnauthorized: process.env.REDIS_TLS_REJECT_UNAUTHORIZED === 'false' ? false : undefined,
+    /** ConversationContext TTL in seconds (default 30 minutes). */
+    contextTtlSeconds: parseInt(process.env.REDIS_CONTEXT_TTL_SECONDS || '1800', 10),
+    /** Optional tool cache TTL in seconds (default 60 seconds). */
+    cacheTtlSeconds: parseInt(process.env.REDIS_CACHE_TTL_SECONDS || '60', 10),
+  },
   contextWindow: {
     maxMessages: parseInt(process.env.MAX_CONTEXT_MESSAGES || '50', 10),
     maxTokens: parseInt(process.env.MAX_CONTEXT_TOKENS || '150000', 10),
@@ -100,5 +114,11 @@ export function validateConfig() {
   }
   if (isProduction && !(process.env.BACKEND_URL || process.env.PUBLIC_URL)) {
     console.warn('⚠️  BACKEND_URL or PUBLIC_URL not set - set in .env for production');
+  }
+  if (config.redis.url) {
+    const ttl = config.redis.contextTtlSeconds;
+    if (!Number.isFinite(ttl) || ttl <= 0) {
+      console.warn('⚠️  REDIS_CONTEXT_TTL_SECONDS is invalid; using default behavior may be unexpected');
+    }
   }
 }

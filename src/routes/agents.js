@@ -10,6 +10,7 @@
 import { Router } from 'express';
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config/index.js';
+import Conversation from '../models/Conversation.js';
 import {
   routeToAgents,
   resolveAgentKeys,
@@ -32,6 +33,76 @@ const router = Router();
 
 const anthropic = new Anthropic({ apiKey: config.anthropic.apiKey });
 
+/**
+ * Ask Nova (orchestrator) how to plan agent calls for this request.
+ * Returns a normalized plan object or null on failure.
+ */
+async function getNovaPlan(message, conversationContext, routing) {
+  try {
+    const suggestedKeys = routing.agentKeys || [];
+    const allDefs = AGENT_DEFINITIONS;
+    const lines = [];
+
+    for (const [key, def] of Object.entries(allDefs)) {
+      // Skip Nova itself in the summaries; Nova coordinates specialists.
+      if (key === 'nova') continue;
+      lines.push(`- ${key}: ${def.description}`);
+    }
+
+    const agentCatalog = lines.join('\n');
+    const suggestedList = suggestedKeys.length > 0 ? suggestedKeys.join(', ') : 'none';
+
+    const userPromptParts = [];
+    if (conversationContext) {
+      userPromptParts.push(`Conversation context:\n${conversationContext}`);
+    }
+    userPromptParts.push(
+      `User message:\n${message}`,
+      '',
+      `Router-suggested agents: [${suggestedList}]`,
+      '',
+      'Available agents:',
+      agentCatalog,
+      '',
+      'Decide how to orchestrate this request and return ONLY a JSON object with fields mode, agents, and reason as previously described.',
+    );
+
+    const response = await anthropic.messages.create({
+      model: config.anthropic.model,
+      max_tokens: 256,
+      system: AGENT_DEFINITIONS.nova.systemPrompt,
+      messages: [
+        {
+          role: 'user',
+          content: userPromptParts.join('\n'),
+        },
+      ],
+    });
+
+    const text = response.content[0]?.text?.trim() || '';
+    let plan;
+    try {
+      plan = JSON.parse(text);
+    } catch (err) {
+      console.warn('⚠️ Nova returned non-JSON plan, falling back to router-only plan:', text);
+      return null;
+    }
+
+    if (!plan || !Array.isArray(plan.agents) || !plan.mode) {
+      console.warn('⚠️ Nova plan missing required fields, falling back to router-only plan:', plan);
+      return null;
+    }
+
+    // Normalize mode and agents
+    const mode = plan.mode === 'sequential' ? 'sequential' : 'single';
+    const agents = plan.agents.map(String);
+    return { mode, agents, reason: plan.reason || '' };
+  } catch (error) {
+    console.error('❌ Error getting Nova plan:', error);
+    return null;
+  }
+}
+
 // ── GET /api/agents — list available agents ──────────────────────────
 router.get('/', (req, res) => {
   const agents = Object.entries(AGENT_DEFINITIONS).map(([key, def]) => ({
@@ -42,6 +113,136 @@ router.get('/', (req, res) => {
   }));
 
   res.json({ success: true, agents, count: agents.length });
+});
+
+// ── Conversations CRUD (scoped by companyId + userId) ───────────────────
+
+// GET /api/agents/conversations?companyId=...&userId=...
+router.get('/conversations', async (req, res) => {
+  try {
+    const { companyId, userId, limit } = req.query || {};
+    if (!companyId || !userId) {
+      return res.status(400).json({
+        success: false,
+        error: 'companyId and userId are required',
+      });
+    }
+
+    const company_id = String(companyId);
+    const user_id = String(userId);
+    const limitNum = Math.min(parseInt(limit || '50', 10) || 50, 200);
+
+    const conversations = await Conversation.find({
+      company_id,
+      user_id,
+    })
+      .sort({ updated_at: -1 })
+      .limit(limitNum)
+      .select('conversation_id created_at updated_at messages')
+      .lean();
+
+    const conversationsList = conversations.map((conv) => {
+      const messages = conv.messages || [];
+      const firstUserMessage = messages.find((m) => m.role === 'user');
+      let preview = 'New conversation';
+
+      if (firstUserMessage) {
+        if (typeof firstUserMessage.content === 'string') {
+          preview = firstUserMessage.content.substring(0, 100);
+        } else {
+          preview = JSON.stringify(firstUserMessage.content).substring(0, 100);
+        }
+      }
+
+      return {
+        conversation_id: conv.conversation_id,
+        preview,
+        created_at: conv.created_at,
+        updated_at: conv.updated_at,
+        message_count: messages.length,
+      };
+    });
+
+    res.json({
+      success: true,
+      conversations: conversationsList,
+    });
+  } catch (error) {
+    console.error('❌ Error fetching conversations list:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// GET /api/agents/conversations/:conversation_id?companyId=...&userId=...
+router.get('/conversations/:conversation_id', async (req, res) => {
+  try {
+    const { companyId, userId } = req.query || {};
+    const { conversation_id } = req.params;
+
+    if (!companyId || !userId) {
+      return res.status(400).json({
+        success: false,
+        error: 'companyId and userId are required',
+      });
+    }
+
+    const company_id = String(companyId);
+    const user_id = String(userId);
+
+    const conversation = await Conversation.findOne({
+      company_id,
+      user_id,
+      conversation_id,
+    }).lean();
+
+    if (!conversation) {
+      return res.status(404).json({ success: false, error: 'Conversation not found' });
+    }
+
+    res.json({
+      success: true,
+      conversation_id: conversation.conversation_id,
+      messages: conversation.messages,
+      created_at: conversation.created_at,
+      updated_at: conversation.updated_at,
+    });
+  } catch (error) {
+    console.error('❌ Error fetching conversation:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// DELETE /api/agents/conversations/:conversation_id?companyId=...&userId=...
+router.delete('/conversations/:conversation_id', async (req, res) => {
+  try {
+    const { companyId, userId } = req.query || {};
+    const { conversation_id } = req.params;
+
+    if (!companyId || !userId) {
+      return res.status(400).json({
+        success: false,
+        error: 'companyId and userId are required',
+      });
+    }
+
+    const company_id = String(companyId);
+    const user_id = String(userId);
+
+    const result = await Conversation.deleteOne({
+      company_id,
+      user_id,
+      conversation_id,
+    });
+
+    if (result.deletedCount > 0) {
+      res.json({ success: true, message: 'Conversation deleted' });
+    } else {
+      res.status(404).json({ success: false, error: 'Conversation not found' });
+    }
+  } catch (error) {
+    console.error('❌ Error deleting conversation:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 // ── POST /api/agents/stream — auto-route + SSE streaming ─────────────
@@ -62,11 +263,19 @@ router.post('/stream', async (req, res) => {
   const requestId = randomUUID();
 
   try {
-    const { message, conversation_id } = req.body;
+    const { message, conversation_id, companyId, userId } = req.body || {};
     if (!message) {
       sse({ type: 'error', error: 'message is required' });
       return res.end();
     }
+
+    if (!companyId || !userId) {
+      sse({ type: 'error', error: 'companyId and userId are required' });
+      return res.end();
+    }
+
+    const company_id = String(companyId);
+    const user_id = String(userId);
 
     // Rex: start tracking this request
     rex.startRequest(requestId, message);
@@ -75,17 +284,18 @@ router.post('/stream', async (req, res) => {
     const convId = conversation_id || randomUUID();
     sse({ type: 'conversation_id', conversation_id: convId });
 
-    // Load accumulated context for this conversation
-    const contextPrompt = buildContextPrompt(convId);
+    // Load accumulated numeric/tool context for this conversation (Redis-backed when enabled)
+    const contextPrompt = await buildContextPrompt({ company_id, user_id, conversation_id: convId });
     if (contextPrompt) {
       console.log(`📎 Context: ${contextPrompt}`);
     }
 
-    // 1. Router decides which agent(s) to invoke (with context)
+    // 1. Router proposes candidate agents (with context)
     const routerStart = Date.now();
     const routing = await resolveAgentKeys(message, contextPrompt);
     const routerDuration = Date.now() - routerStart;
 
+    // Conversational-only: no specialists suggested
     if (routing.type === 'conversation') {
       rex.routerResolved(requestId, 'general', routerDuration, routing.routerUsage ?? null);
       sse({ type: 'status', label: STATUS_LABEL_THINKING });
@@ -101,10 +311,45 @@ router.post('/stream', async (req, res) => {
         messages: [{ role: 'user', content: generalPrompt }],
       });
 
+      let fullText = '';
       for await (const event of stream) {
         if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+          fullText += event.delta.text;
           sse({ type: 'text', content: event.delta.text });
         }
+      }
+
+      // Persist this conversational turn as well
+      try {
+        const existing = await Conversation.findOne({
+          company_id,
+          user_id,
+          conversation_id: convId,
+        }).lean();
+
+        const messages = existing?.messages || [];
+        messages.push(
+          { role: 'user', content: message },
+          { role: 'assistant', content: fullText },
+        );
+
+        await Conversation.findOneAndUpdate(
+          { company_id, user_id, conversation_id: convId },
+          {
+            company_id,
+            user_id,
+            conversation_id: convId,
+            messages,
+            updated_at: new Date(),
+          },
+          {
+            upsert: true,
+            new: true,
+            setDefaultsOnInsert: true,
+          },
+        );
+      } catch (persistError) {
+        console.error('❌ Error saving conversational multi-agent conversation:', persistError);
       }
 
       sse({ type: 'done', agent: 'general', toolsUsed: [] });
@@ -113,41 +358,206 @@ router.post('/stream', async (req, res) => {
       return res.end();
     }
 
-    // 2. Run the specialist agent — with conversation context injected
-    const primaryKey = routing.agentKeys[0];
-    rex.routerResolved(requestId, primaryKey, routerDuration, routing.routerUsage ?? null);
+    // 2. Nova decides how to orchestrate the agents (single vs sequential)
+    const novaPlan = await getNovaPlan(message, contextPrompt, routing);
+    const fallbackMode = routing.type === 'single' ? 'single' : 'sequential';
+    const fallbackAgents = routing.agentKeys && routing.agentKeys.length > 0
+      ? routing.agentKeys
+      : [];
 
-    const agent = getAgentInstance(primaryKey);
-    if (!agent) {
-      sse({ type: 'error', error: `Agent "${primaryKey}" not found` });
-      rex.endRequest(requestId, new Error(`Agent "${primaryKey}" not found`));
+    const mode = novaPlan?.mode || fallbackMode;
+    const plannedAgentsRaw = novaPlan?.agents && novaPlan.agents.length > 0
+      ? novaPlan.agents
+      : fallbackAgents;
+
+    // Filter to valid, known agents (excluding nova itself)
+    const validAgentSet = new Set(getAgentKeys().filter(k => k !== 'nova'));
+    const plannedAgents = (plannedAgentsRaw || []).filter(k => validAgentSet.has(k));
+
+    if (plannedAgents.length === 0) {
+      // Fallback: treat as conversational if Nova + router both failed
+      console.warn('⚠️ Nova/router produced no valid agents; falling back to conversational response.');
+      rex.routerResolved(requestId, 'general', routerDuration, routing.routerUsage ?? null);
+      sse({ type: 'status', label: STATUS_LABEL_THINKING });
+
+      const generalPrompt = contextPrompt
+        ? `${contextPrompt}\n\nUser message: ${message}`
+        : message;
+
+      const stream = await anthropic.messages.stream({
+        model: config.anthropic.model,
+        max_tokens: 4096,
+        system: 'You are a helpful assistant for Worxstream, a business management platform. Be concise and helpful.',
+        messages: [{ role: 'user', content: generalPrompt }],
+      });
+
+      let fullText = '';
+      for await (const event of stream) {
+        if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+          fullText += event.delta.text;
+          sse({ type: 'text', content: event.delta.text });
+        }
+      }
+
+      try {
+        const existing = await Conversation.findOne({
+          company_id,
+          user_id,
+          conversation_id: convId,
+        }).lean();
+        const messagesArr = existing?.messages || [];
+        messagesArr.push(
+          { role: 'user', content: message },
+          { role: 'assistant', content: fullText },
+        );
+        await Conversation.findOneAndUpdate(
+          { company_id, user_id, conversation_id: convId },
+          {
+            company_id,
+            user_id,
+            conversation_id: convId,
+            messages: messagesArr,
+            updated_at: new Date(),
+          },
+          {
+            upsert: true,
+            new: true,
+            setDefaultsOnInsert: true,
+          },
+        );
+      } catch (persistError) {
+        console.error('❌ Error saving conversational fallback conversation:', persistError);
+      }
+
+      sse({ type: 'done', agent: 'general', toolsUsed: [] });
+      rex.agentFinished(requestId, 'general', Date.now() - routerStart, null);
+      rex.endRequest(requestId);
       return res.end();
     }
 
-    sse({ type: 'agent_selected', agent: primaryKey });
-    sse({ type: 'status', label: getStatusLabelForAgent(primaryKey) });
+    const primaryKey = plannedAgents[0];
+    rex.routerResolved(requestId, primaryKey, routerDuration, routing.routerUsage ?? null);
 
-    const agentStart = Date.now();
-    const { rawText, toolsUsed, toolResultPayloads, usage } = await agent.runWithEvents(
-      message,
-      { _rexRequestId: requestId, _conversationContext: contextPrompt },
-      sse,
-    );
-    rex.agentFinished(requestId, agent.name, Date.now() - agentStart, usage ?? null);
+    // 3. Run one or more specialist agents according to Nova's plan
+    const allToolsUsed = [];
+    const allToolResultPayloads = [];
+    const agentRawTexts = [];
 
-    // Save context: extract numeric fields from tool inputs + results
-    updateContext(convId, primaryKey, toolsUsed, toolResultPayloads);
+    if (mode === 'single' || plannedAgents.length === 1) {
+      const agent = getAgentInstance(primaryKey);
+      if (!agent) {
+        sse({ type: 'error', error: `Agent "${primaryKey}" not found` });
+        rex.endRequest(requestId, new Error(`Agent "${primaryKey}" not found`));
+        return res.end();
+      }
 
-    // 3. Formatter streams the final XML-formatted response
+      sse({ type: 'agent_selected', agent: primaryKey });
+      sse({ type: 'status', label: getStatusLabelForAgent(primaryKey) });
+
+      const agentStart = Date.now();
+      const { rawText, toolsUsed, toolResultPayloads, usage } = await agent.runWithEvents(
+        message,
+        { _rexRequestId: requestId, _conversationContext: contextPrompt },
+        sse,
+      );
+      rex.agentFinished(requestId, agent.name, Date.now() - agentStart, usage ?? null);
+
+      allToolsUsed.push(...toolsUsed);
+      allToolResultPayloads.push(...toolResultPayloads);
+      agentRawTexts.push(rawText);
+
+      await updateContext({ company_id, user_id, conversation_id: convId }, primaryKey, toolsUsed, toolResultPayloads);
+    } else {
+      // Sequential multi-agent orchestration
+      let previousRawText = '';
+      let previousAgentName = '';
+
+      for (const key of plannedAgents) {
+        const agent = getAgentInstance(key);
+        if (!agent) {
+          console.warn(`⚠️ Planned agent "${key}" not found, skipping.`);
+          continue;
+        }
+
+        sse({ type: 'agent_selected', agent: key });
+        sse({ type: 'status', label: getStatusLabelForAgent(key) });
+
+        const parts = [];
+        if (contextPrompt) parts.push(contextPrompt);
+        if (previousRawText) {
+          parts.push(
+            'You are running after another agent. Use the response below as shared context: use any IDs, names, or data it already found. Do NOT make the same or equivalent API calls again when that data is already provided here.',
+            `[Context from ${previousAgentName || 'previous agent'}]: ${previousRawText}`,
+          );
+        }
+        const chainedContext = parts.length > 0 ? parts.join('\n\n') : '';
+
+        const agentStart = Date.now();
+        const { rawText, toolsUsed, toolResultPayloads, usage } = await agent.runWithEvents(
+          message,
+          { _rexRequestId: requestId, _conversationContext: chainedContext, fromAgent: previousAgentName },
+          sse,
+        );
+        rex.agentFinished(requestId, agent.name, Date.now() - agentStart, usage ?? null);
+
+        allToolsUsed.push(...toolsUsed);
+        allToolResultPayloads.push(...toolResultPayloads);
+        agentRawTexts.push(rawText);
+
+        // Update context after each agent so subsequent agents can benefit in future turns
+        await updateContext({ company_id, user_id, conversation_id: convId }, key, toolsUsed, toolResultPayloads);
+
+        previousRawText = rawText;
+        previousAgentName = agent.name;
+      }
+    }
+
+    const combinedRawText = agentRawTexts.join('\n\n').trim();
+
+    // Persist this turn to MongoDB for sidebar/history, scoped by company/user
+    try {
+      const existing = await Conversation.findOne({
+        company_id,
+        user_id,
+        conversation_id: convId,
+      }).lean();
+
+      const messagesArr = existing?.messages || [];
+      messagesArr.push(
+        { role: 'user', content: message },
+        { role: 'assistant', content: combinedRawText },
+      );
+
+      await Conversation.findOneAndUpdate(
+        { company_id, user_id, conversation_id: convId },
+        {
+          company_id,
+          user_id,
+          conversation_id: convId,
+          messages: messagesArr,
+          updated_at: new Date(),
+        },
+        {
+          upsert: true,
+          new: true,
+          setDefaultsOnInsert: true,
+        },
+      );
+    } catch (persistError) {
+      console.error('❌ Error saving multi-agent conversation:', persistError);
+      // Do not fail the SSE response on persistence problems
+    }
+
+    // 4. Formatter streams the final XML-formatted response
     sse({ type: 'status', label: STATUS_LABEL_FORMATTING });
     const fmtStart = Date.now();
-    await formatOutputStreaming(message, rawText, res);
+    await formatOutputStreaming(message, combinedRawText, res);
     rex.formatterFinished(requestId, Date.now() - fmtStart);
 
     sse({
       type: 'done',
-      agent: agent.name,
-      toolsUsed: toolsUsed.map(t => ({ name: t.name, input: t.input, success: t.success })),
+      agent: plannedAgents.join(', '),
+      toolsUsed: allToolsUsed.map(t => ({ name: t.name, input: t.input, success: t.success })),
     });
 
     rex.endRequest(requestId);

@@ -5,42 +5,44 @@
 
 import { z } from 'zod';
 import { registerTool } from '../server.js';
-import { callWorxstreamAPI } from '../../services/httpClient.js';
+import { callWorxstreamAPI, normalizeFilter } from '../../services/httpClient.js';
 import { getWorxstreamContext } from '../../config/index.js';
 
 const APP_NAME = 'bill';
 
 export function registerBillTools() {
 
+  const filterSchema = z.object({ search: z.string().optional() }).optional();
+
   registerTool(
     'list_bills',
     {
       title: 'List Bills',
-      description: 'Get all bills. Can filter by customer_id, vendor_id, and search.',
+      description: 'List bills. Can filter by customer_id, vendor_id, and filter.search.',
       inputSchema: {
         customer_id: z.number().optional().describe('Customer ID'),
         vendor_id: z.number().optional().describe('Vendor ID'),
-        search: z.string().optional().describe('Search term'),
-        take: z.number().optional().describe('Number of results (default: 100)'),
+        take: z.number().optional().describe('Number of results (default: 25)'),
         page: z.number().optional().describe('Page number (default: 1)'),
         sort: z.string().optional().describe('Sort field (default: "id")'),
+        filter: filterSchema.describe('Filter object, e.g. { "search": "term" }'),
       },
     },
-    async ({ customer_id, vendor_id, search, take = 100, page = 1, sort = 'id' }) => {
+    async ({ customer_id, vendor_id, take = 25, page = 1, sort = 'id', filter } = {}) => {
       const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
-        method: 'GET',
+        method: 'POST',
         endpoint: '/master-objects/list',
         data: {
-          company_id: companyId,
-          user_id: userId,
-          app_name: APP_NAME,
+          companyId,
+          userId,
+          appName: APP_NAME,
           customer_id,
           vendor_id,
-          take,
-          page,
+          page: page ?? 1,
+          limit: take ?? 25,
           sort,
-          filter: search ? { advance: { search } } : {},
+          filter: normalizeFilter(filter),
         },
       });
 

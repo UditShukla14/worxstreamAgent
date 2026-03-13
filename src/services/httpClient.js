@@ -47,6 +47,23 @@ httpClient.interceptors.response.use(
 );
 
 /**
+ * Normalize filter from tool input (LLM may pass JSON string or object).
+ * API expects filter as object e.g. { search: "term" }.
+ */
+export function normalizeFilter(filter) {
+  if (filter == null) return {};
+  if (typeof filter === 'string') {
+    try {
+      const parsed = JSON.parse(filter);
+      return typeof parsed === 'object' && parsed !== null ? parsed : { search: filter };
+    } catch {
+      return { search: filter };
+    }
+  }
+  return typeof filter === 'object' && filter !== null ? filter : {};
+}
+
+/**
  * Call Worxstream API
  * 
  * For GET requests: data is sent as query params

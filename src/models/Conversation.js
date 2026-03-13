@@ -17,10 +17,18 @@ const messageSchema = new mongoose.Schema({
 }, { _id: false });
 
 const conversationSchema = new mongoose.Schema({
+  // Worxstream tenant + user scoping so conversations are isolated
+  company_id: {
+    type: String,
+    required: true,
+  },
+  user_id: {
+    type: String,
+    required: true,
+  },
   conversation_id: {
     type: String,
     required: true,
-    unique: true,
   },
   messages: {
     type: [messageSchema],
@@ -44,8 +52,10 @@ conversationSchema.pre('save', function(next) {
   next();
 });
 
-// Index for efficient queries (unique: true already creates an index on conversation_id)
-conversationSchema.index({ created_at: -1 });
+// Compound index so a conversation_id is unique per (company_id, user_id)
+conversationSchema.index({ company_id: 1, user_id: 1, conversation_id: 1 }, { unique: true });
+// Index for efficient per-user/company listing by recency
+conversationSchema.index({ company_id: 1, user_id: 1, updated_at: -1 });
 
 const Conversation = mongoose.model('Conversation', conversationSchema);
 

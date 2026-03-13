@@ -3,6 +3,12 @@ import { MessageSquare, Plus, ChevronLeft, ChevronRight, Trash2, Loader2 } from 
 
 const API_URL = '/api';
 
+function getIdentity() {
+  const companyId = window.localStorage.getItem('worxstream_company_id') || '';
+  const userId = window.localStorage.getItem('worxstream_user_id') || '';
+  return { companyId, userId };
+}
+
 export interface ConversationItem {
   conversation_id: string;
   preview: string;
@@ -33,7 +39,12 @@ export function ConversationsSidebar({
   const fetchConversations = useCallback(async () => {
     try {
       setIsLoading(true);
-      const response = await fetch(`${API_URL}/chat`);
+      const { companyId, userId } = getIdentity();
+      const params = new URLSearchParams();
+      if (companyId) params.set('companyId', companyId);
+      if (userId) params.set('userId', userId);
+
+      const response = await fetch(`${API_URL}/agents/conversations?${params.toString()}`);
       if (!response.ok) throw new Error('Failed to fetch conversations');
       
       const data = await response.json();
@@ -60,9 +71,17 @@ export function ConversationsSidebar({
 
     try {
       setDeletingId(conversationId);
-      const response = await fetch(`${API_URL}/chat/${conversationId}`, {
-        method: 'DELETE',
-      });
+      const { companyId, userId } = getIdentity();
+      const params = new URLSearchParams();
+      if (companyId) params.set('companyId', companyId);
+      if (userId) params.set('userId', userId);
+
+      const response = await fetch(
+        `${API_URL}/agents/conversations/${conversationId}?${params.toString()}`,
+        {
+          method: 'DELETE',
+        },
+      );
 
       if (response.ok) {
         setConversations(prev => prev.filter(c => c.conversation_id !== conversationId));

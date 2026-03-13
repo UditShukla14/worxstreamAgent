@@ -5,35 +5,37 @@
 
 import { z } from 'zod';
 import { registerTool } from '../server.js';
-import { callWorxstreamAPI } from '../../services/httpClient.js';
+import { callWorxstreamAPI, normalizeFilter } from '../../services/httpClient.js';
 import { getWorxstreamContext } from '../../config/index.js';
 
 export function registerContactTools() {
+  const filterSchema = z.object({ search: z.string().optional() }).optional();
+
   // List contacts
   registerTool(
     'list_contacts',
     {
       title: 'List Contacts',
-      description: 'Get all contacts (CRM contacts, not customers). Contacts are CRM entities used for lead management. Can filter by contact_type ("contact" or "company") and search. Use list_customers for customer records instead.',
+      description: 'List contacts (CRM contacts, not customers). Supports filter.search. Use list_customers for customer records instead.',
       inputSchema: {
         contact_type: z.string().optional().describe('"contact" or "company"'),
-        search: z.string().optional().describe('Search term'),
-        take: z.number().optional().describe('Number of results'),
-        page: z.number().optional().describe('Page number'),
+        take: z.number().optional().describe('Number of results (default: 25)'),
+        page: z.number().optional().describe('Page number (default: 1)'),
+        filter: filterSchema.describe('Filter object, e.g. { "search": "term" }'),
       },
     },
-    async ({ contact_type, search, take = 100, page = 1 }) => {
+    async ({ contact_type, take = 25, page = 1, filter } = {}) => {
       const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
-        method: 'GET',
+        method: 'POST',
         endpoint: '/master/contact/contact-list',
         data: {
-          company_id: companyId,
-          user_id: userId,
+          companyId,
+          userId,
           contact_type: contact_type || 'contact',
-          take,
-          page,
-          filter: { search: search || '' },
+          page: page ?? 1,
+          limit: take ?? 25,
+          filter: normalizeFilter(filter),
         },
       });
 

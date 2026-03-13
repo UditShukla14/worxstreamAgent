@@ -11,6 +11,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config/index.js';
 import { getAnthropicTools, executeMcpTool } from '../mcp/server.js';
 import { rex } from './AgentTracker.js';
+import { getSoulSystemPrompt } from './soul.js';
 
 const MAX_TOOL_ITERATIONS = 15;
 
@@ -26,7 +27,10 @@ export class BaseAgent {
     this.name = definition.name;
     this.description = definition.description;
     this.toolNames = definition.tools;
-    this.systemPrompt = definition.systemPrompt;
+    const soul = getSoulSystemPrompt();
+    this.systemPrompt = soul
+      ? `${soul}\n\n${definition.systemPrompt}`
+      : definition.systemPrompt;
     this.anthropic = new Anthropic({ apiKey: config.anthropic.apiKey });
   }
 

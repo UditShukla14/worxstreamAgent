@@ -6,43 +6,44 @@
 
 import { z } from 'zod';
 import { registerTool } from '../server.js';
-import { callWorxstreamAPI } from '../../services/httpClient.js';
+import { callWorxstreamAPI, normalizeFilter } from '../../services/httpClient.js';
 import { getWorxstreamContext } from '../../config/index.js';
 
 const APP_NAME = 'purchase_order';
 
 export function registerPurchaseOrderTools() {
 
+  const filterSchema = z.object({ search: z.string().optional() }).optional();
+
   registerTool(
     'list_purchase_orders',
     {
       title: 'List Purchase Orders',
-      description: 'Get all purchase orders. Can filter by customer_id, vendor_id, and search.',
+      description: 'List purchase orders. Can filter by customer_id, vendor_id, and filter.search.',
       inputSchema: {
         customer_id: z.number().optional().describe('Customer ID'),
         vendor_id: z.number().optional().describe('Vendor ID'),
-        search: z.string().optional().describe('Search term'),
-        take: z.number().optional().describe('Number of results (default: 100)'),
+        take: z.number().optional().describe('Number of results (default: 25)'),
         page: z.number().optional().describe('Page number (default: 1)'),
         sort: z.string().optional().describe('Sort field (default: "id")'),
+        filter: filterSchema.describe('Filter object, e.g. { "search": "term" }'),
       },
     },
-    async ({ customer_id, vendor_id, search, take = 100, page = 1, sort = 'id' }) => {
+    async ({ customer_id, vendor_id, take = 25, page = 1, sort = 'id', filter } = {}) => {
       const { companyId, userId } = getWorxstreamContext();
-      // master-objects/list expects camelCase and "limit" (see api2.worxstream.io URL)
       const result = await callWorxstreamAPI({
-        method: 'GET',
+        method: 'POST',
         endpoint: '/master-objects/list',
         data: {
           companyId,
           userId,
           appName: APP_NAME,
-          page,
-          limit: take,
-          ...(customer_id != null && { customer_id }),
-          ...(vendor_id != null && { vendor_id }),
-          ...(sort && { sort }),
-          ...(search && { filter: { advance: { search } } }),
+          customer_id,
+          vendor_id,
+          page: page ?? 1,
+          limit: take ?? 25,
+          sort,
+          filter: normalizeFilter(filter),
         },
       });
 

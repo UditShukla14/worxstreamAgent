@@ -4,7 +4,7 @@
 
 import { z } from 'zod';
 import { registerTool } from '../server.js';
-import { callWorxstreamAPI } from '../../services/httpClient.js';
+import { callWorxstreamAPI, normalizeFilter } from '../../services/httpClient.js';
 import { getWorxstreamContext } from '../../config/index.js';
 
 export function registerProductTools() {
@@ -237,30 +237,32 @@ export function registerProductTools() {
   // PRODUCTS & SERVICES
   // ============================================
 
+  const filterSchema = z.object({ search: z.string().optional() }).optional();
+
   registerTool(
     'list_products',
     {
       title: 'List Products',
-      description: 'Get all products and services. Search with filter. Type can be "product" or "service".',
+      description: 'List products and services. Type can be "product" or "service". Supports filter.search.',
       inputSchema: {
         type: z.string().optional().describe('Type: "product" or "service" (default: "product")'),
-        search: z.string().optional().describe('Search keyword'),
-        take: z.number().optional().describe('Number of results (default: 100)'),
-        page: z.number().optional().describe('Page number'),
+        take: z.number().optional().describe('Number of results (default: 25)'),
+        page: z.number().optional().describe('Page number (default: 1)'),
+        filter: filterSchema.describe('Filter object, e.g. { "search": "term" }'),
       },
     },
-    async ({ type = 'product', search, take = 100, page = 1 }) => {
+    async ({ type = 'product', take = 25, page = 1, filter } = {}) => {
       const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
-        method: 'GET',
+        method: 'POST',
         endpoint: '/master/product/product-service-list',
         data: {
-          company_id: companyId,
-          user_id: userId,
+          companyId,
+          userId,
           type,
-          take,
-          page,
-          filter: { search: search || '' },
+          page: page ?? 1,
+          limit: take ?? 25,
+          filter: normalizeFilter(filter),
         },
       });
 
