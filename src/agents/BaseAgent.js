@@ -9,11 +9,23 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config/index.js';
-import { getAnthropicTools, executeMcpTool } from '../mcp/server.js';
+import { getAnthropicTools, getAnthropicToolsForToolSearch, executeMcpTool } from '../mcp/server.js';
 import { rex } from './AgentTracker.js';
 import { getSoulSystemPrompt } from './soul.js';
+import { getToolIndex } from '../mcp/toolIndex.js';
+import {
+  shouldFetchAllPages,
+  inferDesiredStatus,
+  normalizeListInput,
+  filterRowsByStatus,
+} from './policies/listPolicies.js';
 
-const MAX_TOOL_ITERATIONS = 15;
+const MAX_TOOL_ITERATIONS = Number.isFinite(config.agentRuntime?.maxToolIterations)
+  ? config.agentRuntime.maxToolIterations
+  : 15;
+const MAX_AUTO_PAGES = Number.isFinite(config.agentRuntime?.maxAutoPages)
+  ? config.agentRuntime.maxAutoPages
+  : 10;
 
 export class BaseAgent {
   /**
@@ -23,10 +35,11 @@ export class BaseAgent {
    * @param {string[]} definition.tools       - Array of MCP tool names this agent can use
    * @param {string} definition.systemPrompt  - System prompt for this agent
    */
-  constructor(definition) {
+  constructor(agentKey, definition) {
+    this.agentKey = agentKey;
     this.name = definition.name;
     this.description = definition.description;
-    this.toolNames = definition.tools;
+    this.domain = definition.domain || null;
     const soul = getSoulSystemPrompt();
     this.systemPrompt = soul
       ? `${soul}\n\n${definition.systemPrompt}`
@@ -38,7 +51,26 @@ export class BaseAgent {
    * Returns ONLY this agent's tools from the shared MCP registry.
    */
   getTools() {
-    return getAnthropicTools(this.toolNames);
+    // Nova never calls tools.
+    if (this.agentKey === 'nova') return [];
+
+    const index = getToolIndex();
+
+    // Domain selection (preferred). Fall back to agentKey heuristics.
+    const domainKey = String(this.domain || this.agentKey || '').toLowerCase();
+    const byDomain = index.byDomain?.[domainKey];
+
+    const allowList = Array.isArray(byDomain) && byDomain.length > 0
+      ? byDomain.map(t => t.name)
+      : null; // null = allow all tools
+
+    // Prefer tool-search mode when enabled, but scope to allowed tools if available.
+    if (config.anthropic.useToolSearch) {
+      return getAnthropicToolsForToolSearch(allowList);
+    }
+
+    // Otherwise, pass full (or domain-filtered) tools to Anthropic.
+    return getAnthropicTools(allowList);
   }
 
   /**
@@ -69,7 +101,7 @@ export class BaseAgent {
 
       const params = {
         model: config.anthropic.model,
-        max_tokens: 4096,
+        max_tokens: config.anthropic.maxTokens?.agent ?? 4096,
         system: this.systemPrompt,
         messages,
       };
@@ -94,7 +126,7 @@ export class BaseAgent {
         for (const block of toolUseBlocks) {
           console.log(`  🔧 [${this.name}] → ${block.name}`);
           const toolStart = Date.now();
-          const result = await executeMcpTool(block.name, block.input);
+          const result = await executeMcpTool(block.name, block.input, { agent: this.name, userMessage: message });
           const toolDuration = Date.now() - toolStart;
           toolsUsed.push({ name: block.name, input: block.input, success: result.success });
           if (context._rexRequestId) {
@@ -165,7 +197,7 @@ export class BaseAgent {
 
       const params = {
         model: config.anthropic.model,
-        max_tokens: 4096,
+        max_tokens: config.anthropic.maxTokens?.agent ?? 4096,
         system: this.systemPrompt,
         messages,
       };
@@ -188,12 +220,76 @@ export class BaseAgent {
         const toolResults = [];
         for (const block of toolUseBlocks) {
           console.log(`  🔧 [${this.name}] → ${block.name}`);
-          onEvent({ type: 'tool_use', tool: block.name, input: block.input });
+          const originalInput = block.input || {};
+          const normalizedInput = block.name?.startsWith('list_')
+            ? normalizeListInput(originalInput)
+            : originalInput;
+          onEvent({ type: 'tool_use', tool: block.name, input: normalizedInput });
 
           const toolStart = Date.now();
-          const result = await executeMcpTool(block.name, block.input);
+          let result = await executeMcpTool(block.name, normalizedInput, { agent: this.name, userMessage: message });
           const toolDuration = Date.now() - toolStart;
-          toolsUsed.push({ name: block.name, input: block.input, success: result.success });
+
+          // Runtime policy: if user asked for "all" and this is a list_* tool with pagination,
+          // auto-fetch additional pages up to a safe cap and merge results.
+          if (block.name?.startsWith('list_') && result?.success) {
+            const wantsAll = shouldFetchAllPages(message);
+            if (wantsAll) {
+              try {
+                const textBlock = result?.content?.find((c) => c?.type === 'text');
+                const parsed = textBlock?.text ? JSON.parse(textBlock.text) : null;
+                const payload = parsed?.data;
+                const pagination = payload?.pagination;
+                const currentPage = pagination?.currentPage ?? normalizedInput.page ?? 1;
+                const lastPage = pagination?.lastPage;
+                const limit = normalizedInput.take ?? normalizedInput.limit ?? 25;
+
+                if (Number.isFinite(currentPage) && Number.isFinite(lastPage) && currentPage < lastPage) {
+                  const combined = Array.isArray(payload?.data) ? [...payload.data] : [];
+                  const maxPages = Math.min(MAX_AUTO_PAGES, Math.max(1, lastPage - currentPage));
+
+                  for (let p = currentPage + 1; p <= lastPage && p < currentPage + 1 + maxPages; p++) {
+                    const nextInput = { ...normalizedInput, page: p };
+                    const next = await executeMcpTool(block.name, nextInput, { agent: this.name, userMessage: message });
+                    if (!next?.success) break;
+                    const nextText = next?.content?.find((c) => c?.type === 'text')?.text;
+                    const nextParsed = nextText ? JSON.parse(nextText) : null;
+                    const nextRows = Array.isArray(nextParsed?.data?.data) ? nextParsed.data.data : [];
+                    combined.push(...nextRows);
+                    if (Number.isFinite(limit) && limit > 0 && nextRows.length < limit) break;
+                  }
+
+                  // Optional: apply status filtering for common status requests (open/paid/etc.)
+                  const desiredStatus = inferDesiredStatus(message);
+                  const filtered = filterRowsByStatus(combined, desiredStatus);
+
+                  const merged = {
+                    ...parsed,
+                    data: {
+                      ...payload,
+                      data: filtered,
+                      pagination: {
+                        ...(pagination || {}),
+                        aggregated: true,
+                        aggregatedPagesMax: MAX_AUTO_PAGES,
+                        aggregatedCount: filtered.length,
+                        requestedAll: true,
+                      },
+                    },
+                  };
+
+                  result = {
+                    ...result,
+                    content: [{ type: 'text', text: JSON.stringify(merged, null, 2) }],
+                  };
+                }
+              } catch {
+                // If parsing/merging fails, fall back to the original result.
+              }
+            }
+          }
+
+          toolsUsed.push({ name: block.name, input: normalizedInput, success: result.success });
           toolResultPayloads.push(result);
           onEvent({ type: 'tool_result', tool: block.name, success: result.success });
           if (context._rexRequestId) {

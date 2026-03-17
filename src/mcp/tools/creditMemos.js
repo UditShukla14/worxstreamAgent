@@ -13,24 +13,31 @@ const APP_NAME = 'credit_memo';
 
 export function registerCreditMemoTools() {
 
-  const filterSchema = z.object({ search: z.string().optional() }).optional();
+  const filterSchema = z.object({
+    search: z.string().optional(),
+    advance: z.array(z.object({
+      db_attribute: z.string().describe('e.g. created_at'),
+      operator: z.string().describe('e.g. BETWEEN, >=, <='),
+      value: z.union([z.string(), z.number(), z.array(z.string())]).describe('For BETWEEN use [from_date, to_date] as YYYY-MM-DD'),
+    })).optional().describe('Date range filters, e.g. [{ db_attribute: "created_at", operator: "BETWEEN", value: ["2025-02-01","2025-02-28"] }]'),
+  }).optional();
 
   registerTool(
     'list_credit_memos',
     {
       title: 'List Credit Memos',
-      description: 'List credit memos. Can filter by customer_id, vendor_id, and filter.search.',
+      description: 'List credit memos. Can filter by customer_id, vendor_id, filter.search, and filter.advance for date ranges (created_at).',
       inputSchema: {
         customer_id: z.number().optional().describe('Customer ID'),
         vendor_id: z.number().optional().describe('Vendor ID'),
-        take: z.number().optional().describe('Number of results (default: 25)'),
+        limit: z.number().optional().describe('Number of results (default: 25)'),
         page: z.number().optional().describe('Page number (default: 1)'),
-        sort: z.string().optional().describe('Sort field (default: "id")'),
         filter: filterSchema.describe('Filter object, e.g. { "search": "term" }'),
       },
     },
-    async ({ customer_id, vendor_id, take = 25, page = 1, sort = 'id', filter } = {}) => {
+    async ({ customer_id, vendor_id, limit = 25, page = 1, filter } = {}) => {
       const { companyId, userId } = getWorxstreamContext();
+      const effectiveLimit = limit;
       const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/master-objects/list',
@@ -41,8 +48,7 @@ export function registerCreditMemoTools() {
           customer_id,
           vendor_id,
           page: page ?? 1,
-          limit: take ?? 25,
-          sort,
+          limit: effectiveLimit ?? 25,
           filter: normalizeFilter(filter),
         },
       });

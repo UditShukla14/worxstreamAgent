@@ -17,12 +17,12 @@ export function registerVendorTools() {
       title: 'List Vendors',
       description: 'List vendors/suppliers. Supports filter.search.',
       inputSchema: {
-        take: z.number().optional().describe('Number of results (default: 25)'),
+        limit: z.number().optional().describe('Number of results (default: 25)'),
         page: z.number().optional().describe('Page number (default: 1)'),
         filter: filterSchema.describe('Filter object, e.g. { "search": "term" }'),
       },
     },
-    async ({ take = 25, page = 1, filter } = {}) => {
+    async ({ limit = 25, page = 1, filter } = {}) => {
       const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
@@ -31,7 +31,7 @@ export function registerVendorTools() {
           companyId,
           userId,
           page: page ?? 1,
-          limit: take ?? 25,
+          limit: limit ?? 25,
           filter: normalizeFilter(filter),
         },
       });

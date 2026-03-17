@@ -26,6 +26,24 @@ export const config = {
     model: anthropicModel,
     /** Enabled when model supports tool search; set ANTHROPIC_USE_TOOL_SEARCH=false/true to override. */
     useToolSearch: useToolSearchEnv === 'false' ? false : useToolSearchEnv === 'true' ? true : TOOL_SEARCH_SUPPORTED_MODELS.includes(anthropicModel),
+    /**
+     * Centralized token limits. These are intentionally conservative defaults
+     * and can be tuned via env without touching code.
+     */
+    maxTokens: {
+      /** For specialist agent runs (tool loop). */
+      agent: parseInt(process.env.ANTHROPIC_MAX_TOKENS_AGENT || '4096', 10),
+      /** For OutputFormatter pass. */
+      formatter: parseInt(process.env.ANTHROPIC_MAX_TOKENS_FORMATTER || '4096', 10),
+      /** For router key selection. */
+      router: parseInt(process.env.ANTHROPIC_MAX_TOKENS_ROUTER || '100', 10),
+      /** For Nova orchestration plan. */
+      nova: parseInt(process.env.ANTHROPIC_MAX_TOKENS_NOVA || '256', 10),
+      /** For conversational fallback streaming in agents/stream and legacy flows. */
+      conversation: parseInt(process.env.ANTHROPIC_MAX_TOKENS_CONVERSATION || '4096', 10),
+      /** For conversation-only (non-stream) replies. */
+      conversationShort: parseInt(process.env.ANTHROPIC_MAX_TOKENS_CONVERSATION_SHORT || '1024', 10),
+    },
   },
   worxstream: {
     baseUrl: process.env.WORXSTREAM_BASE_URL || '',
@@ -75,6 +93,16 @@ export const config = {
     maxMessages: parseInt(process.env.MAX_CONTEXT_MESSAGES || '50', 10),
     maxTokens: parseInt(process.env.MAX_CONTEXT_TOKENS || '150000', 10),
     reserveTokens: parseInt(process.env.RESERVE_TOKENS || '10000', 10),
+  },
+  agentRuntime: {
+    /** Safety cap to prevent infinite tool loops. */
+    maxToolIterations: parseInt(process.env.AGENT_MAX_TOOL_ITERATIONS || '15', 10),
+    /** When user asks for \"all\", how many additional pages to auto-fetch. */
+    maxAutoPages: parseInt(process.env.AGENT_MAX_AUTO_PAGES || '10', 10),
+    /** Legacy chat loop iteration cap (if used). */
+    maxLegacyIterations: parseInt(process.env.CHAT_MAX_ITERATIONS || '20', 10),
+    /** After agents run, how many self-check retry loops are allowed. */
+    maxSelfCheckLoops: parseInt(process.env.AGENTS_SELF_CHECK_MAX_LOOPS || '1', 10),
   },
 };
 

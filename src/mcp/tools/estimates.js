@@ -16,34 +16,40 @@ function inputHash(obj) {
 
 export function registerEstimateTools() {
 
-  const filterSchema = z.object({ search: z.string().optional() }).optional();
+  const filterSchema = z.object({
+    search: z.string().optional(),
+    advance: z.array(z.object({
+      db_attribute: z.string().describe('e.g. created_at'),
+      operator: z.string().describe('e.g. BETWEEN, >=, <='),
+      value: z.union([z.string(), z.number(), z.array(z.string())]).describe('For BETWEEN use [from_date, to_date] as YYYY-MM-DD'),
+    })).optional().describe('Date range filters, e.g. [{ db_attribute: "issue_date", operator: "BETWEEN", value: ["2025-02-01","2025-02-28"] }]'),
+  }).optional();
 
   // List estimates
   registerTool(
     'list_estimates',
     {
       title: 'List Estimates',
-      description: 'List estimates. Can filter by customer_id, vendor_id, and filter.search.',
+      description: 'List estimates. Can filter by customer_id, vendor_id, filter.search, and filter.advance for date ranges (created_at).',
       inputSchema: {
         customer_id: z.number().optional().describe('Customer ID'),
         vendor_id: z.number().optional().describe('Vendor ID'),
-        take: z.number().optional().describe('Number of results (default: 25)'),
+        limit: z.number().optional().describe('Number of results (default: 25)'),
         page: z.number().optional().describe('Page number (default: 1)'),
-        sort: z.string().optional().describe('Sort field (default: "created_at")'),
         filter: filterSchema.describe('Filter object, e.g. { "search": "term" }'),
       },
     },
-    async ({ customer_id, vendor_id, take = 25, page = 1, sort = 'created_at', filter } = {}) => {
+    async ({ customer_id, vendor_id, limit = 25, page = 1, filter } = {}) => {
       const { companyId, userId } = getWorxstreamContext();
       const filterObj = normalizeFilter(filter);
+      const effectiveLimit = limit;
 
       const ttl = Number.isFinite(config.redis?.cacheTtlSeconds) ? config.redis.cacheTtlSeconds : 60;
       const cacheKey = `ws:cache:tool:list_estimates:${companyId}:${userId}:${inputHash({
         customer_id: customer_id ?? null,
         vendor_id: vendor_id ?? null,
-        take: take ?? 25,
+        limit: effectiveLimit ?? 25,
         page: page ?? 1,
-        sort: sort ?? 'created_at',
         filter: filterObj ?? {},
       })}`;
 
@@ -67,8 +73,7 @@ export function registerEstimateTools() {
           customer_id,
           vendor_id,
           page: page ?? 1,
-          limit: take ?? 25,
-          sort,
+          limit: effectiveLimit ?? 25,
           filter: filterObj,
         },
       });

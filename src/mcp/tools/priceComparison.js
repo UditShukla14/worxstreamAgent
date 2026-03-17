@@ -11,6 +11,7 @@ export function registerPriceComparisonTools() {
     {
       title: 'Compare Stock Prices',
       description: 'Compare two Excel files containing stock/price data to identify changes, additions, and removals. Returns detailed comparison results including cost changes and percentage differences. Use this tool when you have comparison data from file uploads.',
+      capabilities: { domain: 'price_comparison', entity: 'price_comparison', action: 'compare', safety: 'read' },
       inputSchema: {
         comparisonData: z.object({
           summary: z.object({

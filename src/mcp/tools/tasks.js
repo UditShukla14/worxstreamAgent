@@ -20,12 +20,12 @@ export function registerTaskTools() {
         object_name: z.string().optional().describe('Object name (optional)'),
         object_id: z.number().optional().describe('Object ID (optional)'),
         app_id: z.number().optional().describe('App ID (optional)'),
-        take: z.number().optional().describe('Number of results (default: 25)'),
+        limit: z.number().optional().describe('Number of results (default: 25)'),
         page: z.number().optional().describe('Page number (default: 1)'),
         filter: filterSchema.describe('Filter object, e.g. { "search": "term" }'),
       },
     },
-    async ({ object_name, object_id, app_id, take = 25, page = 1, filter } = {}) => {
+    async ({ object_name, object_id, app_id, limit = 25, page = 1, filter } = {}) => {
       const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
@@ -37,7 +37,7 @@ export function registerTaskTools() {
           object_id: object_id || null,
           app_id: app_id || null,
           page: page ?? 1,
-          limit: take ?? 25,
+          limit: limit ?? 25,
           filter: normalizeFilter(filter),
         },
       });

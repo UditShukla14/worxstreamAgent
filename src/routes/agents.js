@@ -27,11 +27,44 @@ import {
 import { formatOutputStreaming } from '../agents/OutputFormatter.js';
 import { rex } from '../agents/AgentTracker.js';
 import { buildContextPrompt, updateContext } from '../agents/ConversationContext.js';
+import { getPlanState, setPlanState } from '../agents/PlanState.js';
+import { getCurrentDateTimeContext } from '../utils/dateContext.js';
 import { randomUUID } from 'crypto';
 
 const router = Router();
 
 const anthropic = new Anthropic({ apiKey: config.anthropic.apiKey });
+
+function stripJsonCodeFence(text) {
+  const t = String(text || '').trim();
+  // Handles ```json\n{...}\n``` and ```\n{...}\n```
+  const m = t.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return m ? m[1].trim() : t;
+}
+
+async function selfCheckCompletion(userMessage, rawText) {
+  const response = await anthropic.messages.create({
+    model: config.anthropic.model,
+    max_tokens: 192,
+    system: `You are a strict completion checker.\nReturn ONLY strict JSON: {"done": boolean, "next_instruction": string|null}.\nRules:\n- done=true if the user request is fully satisfied.\n- done=false only if more tool calls or steps are clearly required.\n- If done=false, next_instruction must be a short imperative instruction for the agent to continue.\n- If the agent asked the user a question to proceed, set done=true (we should wait for user input).`,
+    messages: [
+      {
+        role: 'user',
+        content: `User request:\n${userMessage}\n\nAgent raw output:\n${rawText}`,
+      },
+    ],
+  });
+  const text = response.content?.find(b => b.type === 'text')?.text?.trim() || '';
+  try {
+    const parsed = JSON.parse(text);
+    const done = Boolean(parsed?.done);
+    const next_instruction = parsed?.next_instruction == null ? null : String(parsed.next_instruction);
+    return { done, next_instruction };
+  } catch {
+    // If checker fails, default to done (avoid infinite loops / regressions).
+    return { done: true, next_instruction: null };
+  }
+}
 
 /**
  * Ask Nova (orchestrator) how to plan agent calls for this request.
@@ -69,7 +102,7 @@ async function getNovaPlan(message, conversationContext, routing) {
 
     const response = await anthropic.messages.create({
       model: config.anthropic.model,
-      max_tokens: 256,
+      max_tokens: config.anthropic.maxTokens?.nova ?? 256,
       system: AGENT_DEFINITIONS.nova.systemPrompt,
       messages: [
         {
@@ -82,7 +115,7 @@ async function getNovaPlan(message, conversationContext, routing) {
     const text = response.content[0]?.text?.trim() || '';
     let plan;
     try {
-      plan = JSON.parse(text);
+      plan = JSON.parse(stripJsonCodeFence(text));
     } catch (err) {
       console.warn('⚠️ Nova returned non-JSON plan, falling back to router-only plan:', text);
       return null;
@@ -94,7 +127,11 @@ async function getNovaPlan(message, conversationContext, routing) {
     }
 
     // Normalize mode and agents
-    const mode = plan.mode === 'sequential' ? 'sequential' : 'single';
+    const mode = plan.mode === 'sequential'
+      ? 'sequential'
+      : plan.mode === 'parallel'
+        ? 'parallel'
+        : 'single';
     const agents = plan.agents.map(String);
     return { mode, agents, reason: plan.reason || '' };
   } catch (error) {
@@ -285,7 +322,9 @@ router.post('/stream', async (req, res) => {
     sse({ type: 'conversation_id', conversation_id: convId });
 
     // Load accumulated numeric/tool context for this conversation (Redis-backed when enabled)
-    const contextPrompt = await buildContextPrompt({ company_id, user_id, conversation_id: convId });
+    const baseContext = await buildContextPrompt({ company_id, user_id, conversation_id: convId });
+    const dateContext = getCurrentDateTimeContext();
+    const contextPrompt = [dateContext, baseContext].filter(Boolean).join('\n\n');
     if (contextPrompt) {
       console.log(`📎 Context: ${contextPrompt}`);
     }
@@ -306,7 +345,7 @@ router.post('/stream', async (req, res) => {
 
       const stream = await anthropic.messages.stream({
         model: config.anthropic.model,
-        max_tokens: 4096,
+        max_tokens: config.anthropic.maxTokens?.conversation ?? 4096,
         system: 'You are a helpful assistant for Worxstream, a business management platform. Be concise and helpful.',
         messages: [{ role: 'user', content: generalPrompt }],
       });
@@ -386,7 +425,7 @@ router.post('/stream', async (req, res) => {
 
       const stream = await anthropic.messages.stream({
         model: config.anthropic.model,
-        max_tokens: 4096,
+        max_tokens: config.anthropic.maxTokens?.conversation ?? 4096,
         system: 'You are a helpful assistant for Worxstream, a business management platform. Be concise and helpful.',
         messages: [{ role: 'user', content: generalPrompt }],
       });
@@ -442,60 +481,35 @@ router.post('/stream', async (req, res) => {
     const allToolsUsed = [];
     const allToolResultPayloads = [];
     const agentRawTexts = [];
+    const planRef = { company_id, user_id, conversation_id: convId };
+    const planState = await getPlanState(planRef);
+    const maxSelfCheckLoops = Number.isFinite(config.agentRuntime?.maxSelfCheckLoops)
+      ? config.agentRuntime.maxSelfCheckLoops
+      : 1;
 
-    if (mode === 'single' || plannedAgents.length === 1) {
-      const agent = getAgentInstance(primaryKey);
-      if (!agent) {
-        sse({ type: 'error', error: `Agent "${primaryKey}" not found` });
-        rex.endRequest(requestId, new Error(`Agent "${primaryKey}" not found`));
-        return res.end();
-      }
+    const runAgentsOnce = async (overrideMessage = null) => {
+      const msg = overrideMessage || message;
 
-      sse({ type: 'agent_selected', agent: primaryKey });
-      sse({ type: 'status', label: getStatusLabelForAgent(primaryKey) });
+      // Clear per-run buffers
+      allToolsUsed.length = 0;
+      allToolResultPayloads.length = 0;
+      agentRawTexts.length = 0;
 
-      const agentStart = Date.now();
-      const { rawText, toolsUsed, toolResultPayloads, usage } = await agent.runWithEvents(
-        message,
-        { _rexRequestId: requestId, _conversationContext: contextPrompt },
-        sse,
-      );
-      rex.agentFinished(requestId, agent.name, Date.now() - agentStart, usage ?? null);
-
-      allToolsUsed.push(...toolsUsed);
-      allToolResultPayloads.push(...toolResultPayloads);
-      agentRawTexts.push(rawText);
-
-      await updateContext({ company_id, user_id, conversation_id: convId }, primaryKey, toolsUsed, toolResultPayloads);
-    } else {
-      // Sequential multi-agent orchestration
-      let previousRawText = '';
-      let previousAgentName = '';
-
-      for (const key of plannedAgents) {
-        const agent = getAgentInstance(key);
+      if (mode === 'single' || plannedAgents.length === 1) {
+        const agent = getAgentInstance(primaryKey);
         if (!agent) {
-          console.warn(`⚠️ Planned agent "${key}" not found, skipping.`);
-          continue;
+          sse({ type: 'error', error: `Agent "${primaryKey}" not found` });
+          rex.endRequest(requestId, new Error(`Agent "${primaryKey}" not found`));
+          return res.end();
         }
 
-        sse({ type: 'agent_selected', agent: key });
-        sse({ type: 'status', label: getStatusLabelForAgent(key) });
-
-        const parts = [];
-        if (contextPrompt) parts.push(contextPrompt);
-        if (previousRawText) {
-          parts.push(
-            'You are running after another agent. Use the response below as shared context: use any IDs, names, or data it already found. Do NOT make the same or equivalent API calls again when that data is already provided here.',
-            `[Context from ${previousAgentName || 'previous agent'}]: ${previousRawText}`,
-          );
-        }
-        const chainedContext = parts.length > 0 ? parts.join('\n\n') : '';
+        sse({ type: 'agent_selected', agent: primaryKey });
+        sse({ type: 'status', label: getStatusLabelForAgent(primaryKey) });
 
         const agentStart = Date.now();
         const { rawText, toolsUsed, toolResultPayloads, usage } = await agent.runWithEvents(
-          message,
-          { _rexRequestId: requestId, _conversationContext: chainedContext, fromAgent: previousAgentName },
+          msg,
+          { _rexRequestId: requestId, _conversationContext: contextPrompt },
           sse,
         );
         rex.agentFinished(requestId, agent.name, Date.now() - agentStart, usage ?? null);
@@ -504,15 +518,98 @@ router.post('/stream', async (req, res) => {
         allToolResultPayloads.push(...toolResultPayloads);
         agentRawTexts.push(rawText);
 
-        // Update context after each agent so subsequent agents can benefit in future turns
-        await updateContext({ company_id, user_id, conversation_id: convId }, key, toolsUsed, toolResultPayloads);
+        await updateContext({ company_id, user_id, conversation_id: convId }, primaryKey, toolsUsed, toolResultPayloads);
+      } else if (mode === 'parallel') {
+        // Parallel multi-agent orchestration (independent agents; no chained context)
+        const runs = plannedAgents.map(async (key) => {
+          const agent = getAgentInstance(key);
+          if (!agent) {
+            console.warn(`⚠️ Planned agent "${key}" not found, skipping.`);
+            return null;
+          }
 
-        previousRawText = rawText;
-        previousAgentName = agent.name;
+          sse({ type: 'agent_selected', agent: key });
+          sse({ type: 'status', label: getStatusLabelForAgent(key) });
+
+          const agentStart = Date.now();
+          const { rawText, toolsUsed, toolResultPayloads, usage } = await agent.runWithEvents(
+            msg,
+            { _rexRequestId: requestId, _conversationContext: contextPrompt },
+            sse,
+          );
+          rex.agentFinished(requestId, agent.name, Date.now() - agentStart, usage ?? null);
+
+          // Update context so future turns can benefit, but do not chain within this run.
+          await updateContext({ company_id, user_id, conversation_id: convId }, key, toolsUsed, toolResultPayloads);
+
+          return { rawText, toolsUsed, toolResultPayloads };
+        });
+
+        const settled = await Promise.all(runs);
+        for (const r of settled) {
+          if (!r) continue;
+          allToolsUsed.push(...(r.toolsUsed || []));
+          allToolResultPayloads.push(...(r.toolResultPayloads || []));
+          agentRawTexts.push(r.rawText || '');
+        }
+      } else {
+        // Sequential multi-agent orchestration
+        let previousRawText = '';
+        let previousAgentName = '';
+
+        for (const key of plannedAgents) {
+          const agent = getAgentInstance(key);
+          if (!agent) {
+            console.warn(`⚠️ Planned agent "${key}" not found, skipping.`);
+            continue;
+          }
+
+          sse({ type: 'agent_selected', agent: key });
+          sse({ type: 'status', label: getStatusLabelForAgent(key) });
+
+          const parts = [];
+          if (contextPrompt) parts.push(contextPrompt);
+          if (previousRawText) {
+            parts.push(
+              'You are running after another agent. Use the response below as shared context: use any IDs, names, or data it already found. Do NOT make the same or equivalent API calls again when that data is already provided here.',
+              `[Context from ${previousAgentName || 'previous agent'}]: ${previousRawText}`,
+            );
+          }
+          const chainedContext = parts.length > 0 ? parts.join('\n\n') : '';
+
+          const agentStart = Date.now();
+          const { rawText, toolsUsed, toolResultPayloads, usage } = await agent.runWithEvents(
+            msg,
+            { _rexRequestId: requestId, _conversationContext: chainedContext, fromAgent: previousAgentName },
+            sse,
+          );
+          rex.agentFinished(requestId, agent.name, Date.now() - agentStart, usage ?? null);
+
+          allToolsUsed.push(...toolsUsed);
+          allToolResultPayloads.push(...toolResultPayloads);
+          agentRawTexts.push(rawText);
+
+          // Update context after each agent so subsequent agents can benefit in future turns
+          await updateContext({ company_id, user_id, conversation_id: convId }, key, toolsUsed, toolResultPayloads);
+
+          previousRawText = rawText;
+          previousAgentName = agent.name;
+        }
       }
-    }
+      return agentRawTexts.join('\n\n').trim();
+    };
 
-    const combinedRawText = agentRawTexts.join('\n\n').trim();
+    // Run agents + bounded self-check continuation (no user-facing change unless incomplete)
+    let combinedRawText = await runAgentsOnce();
+    let attempts = planState.attempts || 0;
+    for (let i = 0; i < Math.max(0, maxSelfCheckLoops); i++) {
+      const check = await selfCheckCompletion(message, combinedRawText);
+      if (check.done) break;
+      if (!check.next_instruction) break;
+      attempts += 1;
+      await setPlanState(planRef, { attempts });
+      combinedRawText = await runAgentsOnce(`${message}\n\n${check.next_instruction}`);
+    }
 
     // Persist this turn to MongoDB for sidebar/history, scoped by company/user
     try {
@@ -584,7 +681,7 @@ router.post('/route', async (req, res) => {
     if (routerResult.type === 'conversation') {
       const conversationResponse = await anthropic.messages.create({
         model: config.anthropic.model,
-        max_tokens: 1024,
+        max_tokens: config.anthropic.maxTokens?.conversationShort ?? 1024,
         system: 'You are a helpful assistant for Worxstream, a business management platform. Be concise.',
         messages: [{ role: 'user', content: message }],
       });

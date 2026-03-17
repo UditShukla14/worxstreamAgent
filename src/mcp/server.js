@@ -6,6 +6,8 @@
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { normalizeToolCapabilities } from './toolCapabilities.js';
+import { afterToolCall, beforeToolCall, onToolError } from './toolPolicyPipeline.js';
 
 // Tool registry - tracks all registered tools
 const toolRegistry = new Map();
@@ -26,12 +28,14 @@ const mcpServer = new McpServer({
  * Wrapper to register tools and track them in our registry
  */
 export function registerTool(name, options, callback) {
+  const capabilities = normalizeToolCapabilities(name, options?.capabilities);
   // Store in our registry
   toolRegistry.set(name, {
     name,
     title: options.title,
     description: options.description,
     inputSchema: options.inputSchema,
+    capabilities,
     callback,
   });
 
@@ -73,9 +77,10 @@ export function getAnthropicTools(filterToolNames = null) {
  * Use this for on-demand tool loading (no static keyword/phrase matching).
  * @returns {Array} Tools array for Messages API with tool search + defer_loading
  */
-export function getAnthropicToolsForToolSearch() {
+export function getAnthropicToolsForToolSearch(filterToolNames = null) {
   const deferredTools = [];
   for (const [name, tool] of toolRegistry) {
+    if (filterToolNames && !filterToolNames.includes(name)) continue;
     deferredTools.push({
       name,
       description: tool.description || tool.title || name,
@@ -93,7 +98,7 @@ export function getAnthropicToolsForToolSearch() {
 /**
  * Execute a tool by name
  */
-export async function executeMcpTool(toolName, toolInput) {
+export async function executeMcpTool(toolName, toolInput, context = {}) {
   console.log(`\n🔧 Executing MCP tool: ${toolName}`);
   console.log('📝 Input:', JSON.stringify(toolInput, null, 2));
 
@@ -101,26 +106,32 @@ export async function executeMcpTool(toolName, toolInput) {
     const tool = toolRegistry.get(toolName);
     
     if (!tool) {
-      return { success: false, error: `Unknown tool: ${toolName}` };
+      return {
+        success: false,
+        error: `Unknown tool: ${toolName}`,
+        error_type: 'unknown_tool',
+      };
     }
 
-    const result = await tool.callback(toolInput);
+    const normalizedInput = beforeToolCall(toolName, toolInput, context);
+    const result = await tool.callback(normalizedInput);
     console.log(`✅ Tool ${toolName} completed`);
 
     // Parse the result content
     const content = result.content?.[0];
     if (content?.type === 'text') {
       try {
-        return JSON.parse(content.text);
+        const parsed = JSON.parse(content.text);
+        return afterToolCall(toolName, normalizedInput, parsed, context);
       } catch {
-        return { success: true, data: content.text };
+        return afterToolCall(toolName, normalizedInput, { success: true, data: content.text }, context);
       }
     }
 
-    return { success: true, data: result };
+    return afterToolCall(toolName, normalizedInput, { success: true, data: result }, context);
   } catch (error) {
     console.error(`❌ Tool ${toolName} failed:`, error.message);
-    return { success: false, error: error.message };
+    return onToolError(toolName, toolInput, error);
   }
 }
 
@@ -188,6 +199,23 @@ export function getAvailableTools() {
  */
 export function getToolCount() {
   return toolRegistry.size;
+}
+
+/**
+ * Get a snapshot of the tool registry including capability metadata.
+ * Used to build dynamic indexes for routing and tool selection.
+ */
+export function getToolRegistrySnapshot() {
+  const out = [];
+  for (const [name, tool] of toolRegistry) {
+    out.push({
+      name,
+      title: tool.title,
+      description: tool.description,
+      capabilities: tool.capabilities,
+    });
+  }
+  return out;
 }
 
 export { mcpServer };

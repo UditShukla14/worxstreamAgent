@@ -9,26 +9,37 @@ import { getWorxstreamContext } from '../../config/index.js';
 
 export function registerInvoiceTools() {
 
-  const filterSchema = z.object({ search: z.string().optional() }).optional();
+  const filterSchema = z.object({
+    search: z.string().optional(),
+    advance: z.array(z.object({
+      db_attribute: z.string().describe('e.g. created_date, created_at'),
+      operator: z.string().describe('e.g. BETWEEN, >=, <='),
+      value: z.union([z.string(), z.number(), z.array(z.string())]).describe('For BETWEEN use [from_date, to_date] as YYYY-MM-DD'),
+    })).optional().describe('Date range filters, e.g. [{ db_attribute: "created_date", operator: "BETWEEN", value: ["2025-02-01","2025-02-28"] }]'),
+  }).optional();
 
   // List invoices
   registerTool(
     'list_invoices',
     {
       title: 'List Invoices',
-      description: 'List invoices. Can filter by customer_id, vendor_id, and filter.search.',
+      description: 'List invoices. Defaults to page=1 and limit=25. Supports automatic pagination hints (has_more, next_page, total). Use all_pages=true to fetch multiple pages (up to max_pages). filter.search is text only (invoice #, customer names — NOT status). For "paid/open invoices": use only date range in filter.advance; filter results by status when presenting.',
       inputSchema: {
         customer_id: z.number().optional().describe('Customer ID'),
         vendor_id: z.number().optional().describe('Vendor ID'),
-        take: z.number().optional().describe('Number of results (default: 25)'),
+        limit: z.number().optional().describe('Number of results (default: 25)'),
         page: z.number().optional().describe('Page number (default: 1)'),
-        sort: z.string().optional().describe('Sort field (default: "id")'),
-        filter: filterSchema.describe('Filter object, e.g. { "search": "term" }'),
+        all_pages: z.boolean().optional().describe('If true, fetch pages sequentially and combine results'),
+        max_pages: z.number().optional().describe('Safety cap when all_pages=true (default: 10)'),
+        filter: filterSchema.describe('Filter object. search: text only (invoice #, customer name). advance: date ranges. Do NOT put status (paid/draft) in search.'),
       },
     },
-    async ({ customer_id, vendor_id, take = 25, page = 1, sort = 'id', filter } = {}) => {
+    async ({ customer_id, vendor_id, limit = 25, page = 1, all_pages = false, max_pages = 10, filter } = {}) => {
       const { companyId, userId } = getWorxstreamContext();
-      const result = await callWorxstreamAPI({
+      const normalized = normalizeFilter(filter);
+      const effectiveLimit = limit;
+
+      const fetchPage = async (p) => callWorxstreamAPI({
         method: 'POST',
         endpoint: '/master-objects/list',
         data: {
@@ -37,15 +48,85 @@ export function registerInvoiceTools() {
           appName: 'invoice',
           customer_id,
           vendor_id,
-          page: page ?? 1,
-          limit: take ?? 25,
-          sort,
-          filter: normalizeFilter(filter),
+          page: p ?? 1,
+          limit: effectiveLimit ?? 25,
+          filter: normalized,
         },
       });
 
+      // Default: single page
+      if (!all_pages) {
+        const result = await fetchPage(page ?? 1);
+        // Attach pagination hints for agents/UI
+        if (result?.success && result?.data && typeof result.data === 'object') {
+          const payload = result.data;
+          const rows = Array.isArray(payload?.data) ? payload.data : [];
+          const pagination = payload?.pagination && typeof payload.pagination === 'object' ? payload.pagination : null;
+          const currentPage = pagination?.currentPage;
+          const lastPage = pagination?.lastPage;
+          const total = pagination?.total;
+          const hasMore = Number.isFinite(currentPage) && Number.isFinite(lastPage)
+            ? currentPage < lastPage
+            : (Number.isFinite(total) ? rows.length < total : false);
+          const nextPage = Number.isFinite(currentPage) && Number.isFinite(lastPage) && currentPage < lastPage
+            ? currentPage + 1
+            : null;
+
+          result.data = {
+            ...payload,
+            pagination: {
+              ...(pagination || {}),
+              returned: rows.length,
+              has_more: Boolean(hasMore),
+              next_page: nextPage,
+            },
+          };
+        }
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      // all_pages: aggregate up to max_pages
+      const safeMaxPages = Number.isFinite(max_pages) && max_pages > 0 ? Math.min(max_pages, 50) : 10;
+      const startPage = page ?? 1;
+
+      const first = await fetchPage(startPage);
+      if (!first?.success) {
+        return { content: [{ type: 'text', text: JSON.stringify(first, null, 2) }] };
+      }
+
+      const payload = first.data;
+      const combined = Array.isArray(payload?.data) ? [...payload.data] : [];
+      const lastPage = payload?.pagination?.lastPage;
+      const totalPages = Number.isFinite(lastPage) ? lastPage : (startPage + safeMaxPages - 1);
+
+      for (let p = startPage + 1; p <= totalPages && p < startPage + safeMaxPages; p++) {
+        const next = await fetchPage(p);
+        if (!next?.success) break;
+        const nextPayload = next.data;
+        const nextRows = Array.isArray(nextPayload?.data) ? nextPayload.data : [];
+        combined.push(...nextRows);
+        // Stop early if API returns fewer than limit items
+        if ((effectiveLimit ?? 25) > 0 && nextRows.length < (effectiveLimit ?? 25)) break;
+      }
+
+      const merged = {
+        ...first,
+        data: {
+          ...payload,
+          data: combined,
+          pagination: {
+            ...(payload?.pagination || {}),
+            aggregated: true,
+            aggregatedPagesMax: safeMaxPages,
+            aggregatedCount: combined.length,
+          },
+        },
+      };
+
       return {
-        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        content: [{ type: 'text', text: JSON.stringify(merged, null, 2) }],
       };
     }
   );

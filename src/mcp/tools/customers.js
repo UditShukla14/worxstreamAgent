@@ -18,12 +18,12 @@ export function registerCustomerTools() {
       title: 'List Customers',
       description: 'List customers (customer records, not CRM contacts). Supports filter.search for name/search. Use list_contacts for CRM contacts instead.',
       inputSchema: {
-        take: z.number().optional().describe('Number of results (default: 25)'),
+        limit: z.number().optional().describe('Number of results (default: 25)'),
         page: z.number().optional().describe('Page number (default: 1)'),
         filter: filterSchema.describe('Filter object, e.g. { "search": "green sc" }'),
       },
     },
-    async ({ take = 25, page = 1, filter } = {}) => {
+    async ({ limit = 25, page = 1, filter } = {}) => {
       const { companyId, userId } = getWorxstreamContext();
       const result = await callWorxstreamAPI({
         method: 'POST',
@@ -32,7 +32,7 @@ export function registerCustomerTools() {
           companyId,
           userId,
           page: page ?? 1,
-          limit: take ?? 25,
+          limit: limit ?? 25,
           filter: normalizeFilter(filter),
         },
       });

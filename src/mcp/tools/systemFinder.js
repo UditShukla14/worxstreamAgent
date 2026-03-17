@@ -16,6 +16,7 @@ export function registerSystemFinderTools() {
     {
       title: 'Get System Finder Options',
       description: 'Get available system finder options including system types, configurations, and tonnages.',
+      capabilities: { domain: 'system_finder', entity: 'system_finder', action: 'get', safety: 'read' },
       inputSchema: {},
     },
     async () => {
@@ -38,6 +39,7 @@ export function registerSystemFinderTools() {
     {
       title: 'Get System Finder Matchup Products',
       description: 'Get matching products for a specific system configuration (system type, config, and tonnage).',
+      capabilities: { domain: 'system_finder', entity: 'system_finder', action: 'get', safety: 'read' },
       inputSchema: {
         system_type: z.string().describe('System type (e.g., "Split System (SEER2) - Gas Heating 15.3 SEER")'),
         config: z.string().describe('Configuration (e.g., "Horizontal Flow", "Up Flow", "Modular & Single Piece")'),

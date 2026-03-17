@@ -17,7 +17,7 @@ const agentInstances = new Map();
 
 export function initializeAgentInstances() {
   for (const [key, def] of Object.entries(AGENT_DEFINITIONS)) {
-    agentInstances.set(key, new BaseAgent(def));
+    agentInstances.set(key, new BaseAgent(key, def));
   }
   console.log(`🤖 Initialized ${agentInstances.size} specialist agents`);
 }
@@ -83,7 +83,7 @@ export async function routeToAgents(message) {
 
   const routeResponse = await routerClient.messages.create({
     model: config.anthropic.model,
-    max_tokens: 100,
+    max_tokens: config.anthropic.maxTokens?.router ?? 100,
     system: buildRouterPrompt(),
     messages: [{ role: 'user', content: message }],
   });
@@ -166,7 +166,7 @@ export async function resolveAgentKeys(message, conversationContext = '') {
 
   const routeResponse = await routerClient.messages.create({
     model: config.anthropic.model,
-    max_tokens: 100,
+    max_tokens: config.anthropic.maxTokens?.router ?? 100,
     system: buildRouterPrompt(),
     messages: [{ role: 'user', content: userContent }],
   });

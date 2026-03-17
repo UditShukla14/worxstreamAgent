@@ -17,6 +17,8 @@ const IGNORE_FIELDS = new Set([
   'per_page', 'page_size', 'max_results',
 ]);
 
+const LABEL_FIELDS = ['name', 'title', 'custom_number', 'number', 'email', 'phone'];
+
 function normalizeCtxRef(ref) {
   // Backwards compatible: allow passing just conversationId.
   if (typeof ref === 'string') {
@@ -117,23 +119,63 @@ function extractFromResult(result) {
  */
 export async function getContext(ref) {
   const key = ctxKey(ref);
-  if (!key) return { entities: {}, lastAgent: null, lastAction: null, lastSearch: null };
+  if (!key) return { entities: {}, entityRefs: {}, recentResults: [], lastAgent: null, lastAction: null, lastSearch: null };
   const raw = await redisGet(key);
-  if (!raw) return { entities: {}, lastAgent: null, lastAction: null, lastSearch: null };
+  if (!raw) return { entities: {}, entityRefs: {}, recentResults: [], lastAgent: null, lastAction: null, lastSearch: null };
   try {
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') {
-      return { entities: {}, lastAgent: null, lastAction: null, lastSearch: null };
+      return { entities: {}, entityRefs: {}, recentResults: [], lastAgent: null, lastAction: null, lastSearch: null };
     }
     return {
       entities: parsed.entities && typeof parsed.entities === 'object' ? parsed.entities : {},
+      entityRefs: parsed.entityRefs && typeof parsed.entityRefs === 'object' ? parsed.entityRefs : {},
+      recentResults: Array.isArray(parsed.recentResults) ? parsed.recentResults : [],
       lastAgent: parsed.lastAgent ?? null,
       lastAction: parsed.lastAction ?? null,
       lastSearch: parsed.lastSearch ?? null,
     };
   } catch {
-    return { entities: {}, lastAgent: null, lastAction: null, lastSearch: null };
+    return { entities: {}, entityRefs: {}, recentResults: [], lastAgent: null, lastAction: null, lastSearch: null };
   }
+}
+
+function pickLabel(obj) {
+  if (!obj || typeof obj !== 'object') return null;
+  for (const f of LABEL_FIELDS) {
+    const v = obj[f];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  // Common nested shapes
+  const statusLabel = obj?.status?.label ?? obj?.status?.name;
+  if (typeof statusLabel === 'string' && statusLabel.trim()) return statusLabel.trim();
+  return null;
+}
+
+function inferEntityTypeFromTool(toolName) {
+  const name = String(toolName || '').toLowerCase();
+  if (name.startsWith('list_')) return name.slice('list_'.length);
+  if (name.startsWith('get_')) return name.slice('get_'.length).replace(/_details$/, '');
+  if (name.startsWith('create_')) return name.slice('create_'.length);
+  if (name.startsWith('update_')) return name.slice('update_'.length);
+  if (name.startsWith('quick_update_')) return name.slice('quick_update_'.length);
+  return null;
+}
+
+function extractItemsArray(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  const data = payload.data;
+  // list_*: often { data: { data: [...] } }
+  if (data && typeof data === 'object' && Array.isArray(data.data)) return data.data;
+  // sometimes { data: [...] }
+  if (Array.isArray(data)) return data;
+  // sometimes { data: { rows/items/results/... } }
+  if (data && typeof data === 'object') {
+    for (const k of ['rows', 'items', 'results', 'records', 'list']) {
+      if (Array.isArray(data[k])) return data[k];
+    }
+  }
+  return null;
 }
 
 /**
@@ -152,6 +194,8 @@ export async function updateContext(ref, agentKey, toolsUsed, toolResults = []) 
   const existing = await getContext(ref);
   const ctx = existing && typeof existing === 'object' ? existing : {
     entities: {},
+    entityRefs: {},
+    recentResults: [],
     lastAgent: null,
     lastAction: null,
     lastSearch: null,
@@ -161,10 +205,10 @@ export async function updateContext(ref, agentKey, toolsUsed, toolResults = []) 
   for (const tool of toolsUsed) {
     if (tool.input && tool.success !== false) {
       const nums = extractNumericFields(tool.input);
-      Object.assign(existing.entities, nums);
+      Object.assign(ctx.entities, nums);
       // Also keep string search terms — crucial for follow-ups like "get its details"
       if (typeof tool.input.search === 'string' && tool.input.search.trim()) {
-        existing.lastSearch = tool.input.search.trim();
+        ctx.lastSearch = tool.input.search.trim();
       }
       if (typeof tool.input.name === 'string' && tool.input.name.trim()) {
         ctx.lastSearch = tool.input.name.trim();
@@ -173,12 +217,54 @@ export async function updateContext(ref, agentKey, toolsUsed, toolResults = []) 
   }
 
   // Merge numeric fields from tool results
-  for (const result of toolResults) {
+  for (let i = 0; i < toolResults.length; i++) {
+    const result = toolResults[i];
     const nums = extractFromResult(result);
     if (Object.keys(nums).length > 0) {
       console.log(`📎 Context extracted from result:`, nums);
     }
     Object.assign(ctx.entities, nums);
+
+    // Best-effort: capture structured entity refs + recent result sets
+    // Unwrap MCP text JSON if needed (same as extractFromResult)
+    let payload = result;
+    if (result?.content && Array.isArray(result.content)) {
+      const textBlock = result.content.find(b => b.type === 'text');
+      if (textBlock?.text) {
+        try { payload = JSON.parse(textBlock.text); } catch { /* ignore */ }
+      }
+    }
+
+    const toolName = toolsUsed?.[i]?.name || null;
+    const entityType = inferEntityTypeFromTool(toolName);
+    const items = extractItemsArray(payload);
+
+    if (entityType) {
+      // For list tools, keep a small “recent results” window for reference resolution (\"the second one\").
+      if (toolName && toolName.startsWith('list_') && Array.isArray(items) && items.length > 0) {
+        const top = items.slice(0, 10).map((row) => ({
+          id: row?.id ?? row?.[`${entityType}_id`] ?? null,
+          label: pickLabel(row),
+        })).filter(x => x.id != null || x.label);
+
+        if (top.length > 0) {
+          ctx.recentResults = [
+            { tool: toolName, entityType, items: top, at: Date.now() },
+            ...(Array.isArray(ctx.recentResults) ? ctx.recentResults : []),
+          ].slice(0, 5);
+        }
+      }
+
+      // For detail tools, store a single “last seen entity ref” per entityType
+      if (toolName && (toolName.startsWith('get_') || toolName.startsWith('create_')) && payload && typeof payload === 'object') {
+        const dataObj = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
+        const id = dataObj?.id ?? ctx.entities?.id ?? null;
+        const label = pickLabel(dataObj);
+        if (id != null || label) {
+          ctx.entityRefs[entityType] = { id, label, tool: toolName, at: Date.now() };
+        }
+      }
+    }
   }
 
   ctx.lastAgent = agentKey;
@@ -209,12 +295,28 @@ export async function updateContext(ref, agentKey, toolsUsed, toolResults = []) 
 export async function buildContextPrompt(ref) {
   const ctx = await getContext(ref);
   const entries = Object.entries(ctx.entities);
-  if (entries.length === 0 && !ctx.lastAgent && !ctx.lastSearch) return '';
+  const hasRecent = Array.isArray(ctx.recentResults) && ctx.recentResults.length > 0;
+  const hasRefs = ctx.entityRefs && typeof ctx.entityRefs === 'object' && Object.keys(ctx.entityRefs).length > 0;
+  if (entries.length === 0 && !hasRecent && !hasRefs && !ctx.lastAgent && !ctx.lastSearch) return '';
 
   const parts = [];
   if (entries.length > 0) {
     const entityStr = entries.map(([k, v]) => `${k}=${v}`).join(', ');
     parts.push(`Known IDs: ${entityStr}`);
+  }
+  if (hasRefs) {
+    const refs = Object.entries(ctx.entityRefs)
+      .map(([k, v]) => `${k}(${v?.label || 'unknown'}):${v?.id ?? 'unknown'}`)
+      .join(', ');
+    parts.push(`Known entities: ${refs}`);
+  }
+  if (hasRecent) {
+    const latest = ctx.recentResults[0];
+    const items = Array.isArray(latest?.items) ? latest.items.slice(0, 5) : [];
+    if (latest?.entityType && items.length > 0) {
+      const s = items.map((it, idx) => `#${idx + 1}=${it.label || it.id}`).join(', ');
+      parts.push(`Recent ${latest.entityType} results: ${s}`);
+    }
   }
   if (ctx.entities.customer_id != null) {
     parts.push(`Use customer_id=${ctx.entities.customer_id} for list_estimates, list_invoices, list_credit_memos, list_bills, or list_purchase_orders when the user refers to "his/their/its" or the previously discussed customer`);

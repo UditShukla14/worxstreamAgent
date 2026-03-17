@@ -91,7 +91,7 @@ Do NOT output <milestones> — we use a simple status in the UI instead.
 export async function formatOutput(userMessage, rawOutput) {
   const response = await anthropic.messages.create({
     model: config.anthropic.model,
-    max_tokens: 4096,
+    max_tokens: config.anthropic.maxTokens?.formatter ?? 4096,
     system: FORMATTER_PROMPT,
     messages: [
       {
@@ -117,7 +117,7 @@ export async function formatOutputStreaming(userMessage, rawOutput, res) {
 
   const stream = await anthropic.messages.stream({
     model: config.anthropic.model,
-    max_tokens: 4096,
+    max_tokens: config.anthropic.maxTokens?.formatter ?? 4096,
     system: FORMATTER_PROMPT,
     messages: [
       {

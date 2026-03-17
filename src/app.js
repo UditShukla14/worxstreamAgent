@@ -83,8 +83,6 @@ async function startServer() {
       console.log(`📦 MongoDB connected`);
       console.log('='.repeat(60));
       console.log('\nEndpoints:');
-      console.log(`  POST   ${url}/api/chat             - Single-agent chat (legacy)`);
-      console.log(`  POST   ${url}/api/chat/stream       - Single-agent streaming (legacy)`);
       console.log(`  GET    ${url}/api/agents             - List all agents`);
       console.log(`  POST   ${url}/api/agents/stream      - Auto-route + SSE streaming`);
       console.log(`  POST   ${url}/api/agents/route       - Auto-route to agent(s)`);
