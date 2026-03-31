@@ -21,7 +21,9 @@ async function getClient() {
   clientPromise = (async () => {
     const url = config.redis.url;
     const socket = {};
-    if (config.redis.tls === true) {
+    /** `rediss://` (e.g. DigitalOcean Valkey) or explicit REDIS_TLS=true with `redis://`. */
+    const useTls = url.startsWith('rediss:') || config.redis.tls === true;
+    if (useTls) {
       socket.tls = true;
       if (config.redis.rejectUnauthorized === false) {
         socket.rejectUnauthorized = false;

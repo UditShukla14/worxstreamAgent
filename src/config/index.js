@@ -7,6 +7,38 @@ import * as worxstreamSession from '../session/worxstreamSession.js';
 
 dotenv.config();
 
+/**
+ * Build a Redis URL from discrete env vars when `REDIS_URL` is not set.
+ * Used for hosted Valkey/Redis (e.g. DigitalOcean) where TLS on port 25061 is typical.
+ * Usernames/passwords are URL-encoded for special characters.
+ */
+function buildRedisUrlFromEnv() {
+  const direct = (process.env.REDIS_URL || '').trim();
+  if (direct) return direct;
+
+  const host = (process.env.REDIS_HOST || '').trim();
+  if (!host) return '';
+
+  const port = (process.env.REDIS_PORT || '6379').trim();
+  const username = (process.env.REDIS_USERNAME || 'default').trim();
+  const password = process.env.REDIS_PASSWORD ?? '';
+
+  const portNum = parseInt(port, 10);
+  const tlsEnv = process.env.REDIS_TLS;
+  /** DO managed Valkey often uses 25061 with TLS; allow override via REDIS_TLS. */
+  const useTls =
+    tlsEnv === 'true' ||
+    (tlsEnv !== 'false' && Number.isFinite(portNum) && portNum === 25061);
+
+  const scheme = useTls ? 'rediss' : 'redis';
+  const auth =
+    password !== ''
+      ? `${encodeURIComponent(username)}:${encodeURIComponent(password)}@`
+      : `${encodeURIComponent(username)}@`;
+
+  return `${scheme}://${auth}${host}:${port}`;
+}
+
 /** Model IDs that support tool_search_tool_bm25 (on-demand tool loading). GA Feb 2026. */
 const TOOL_SEARCH_SUPPORTED_MODELS = [
   'claude-sonnet-4-6',
@@ -76,8 +108,8 @@ export const config = {
     url: process.env.MONGODB_URL || '',
   },
   redis: {
-    /** Set REDIS_URL to enable Redis-backed context/cache. */
-    url: process.env.REDIS_URL || '',
+    /** Set REDIS_URL or REDIS_HOST/REDIS_PASSWORD/… to enable Redis-backed context/cache. */
+    url: buildRedisUrlFromEnv(),
     /** Optional Redis database index. */
     db: process.env.REDIS_DB ? parseInt(process.env.REDIS_DB, 10) : undefined,
     /** Force TLS (useful for hosted Redis). */
