@@ -611,7 +611,14 @@ router.post('/stream', async (req, res) => {
       combinedRawText = await runAgentsOnce(`${message}\n\n${check.next_instruction}`);
     }
 
-    // Persist this turn to MongoDB for sidebar/history, scoped by company/user
+    // 4. Formatter streams the final XML-formatted response (what the UI parses as <table>, etc.)
+    sse({ type: 'status', label: STATUS_LABEL_FORMATTING });
+    const fmtStart = Date.now();
+    const formattedForUi = await formatOutputStreaming(message, combinedRawText, res);
+    rex.formatterFinished(requestId, Date.now() - fmtStart);
+
+    // Persist the same formatted text users saw live — not combinedRawText (raw agent output),
+    // or history would not match streamed styling/content.
     try {
       const existing = await Conversation.findOne({
         company_id,
@@ -622,7 +629,7 @@ router.post('/stream', async (req, res) => {
       const messagesArr = existing?.messages || [];
       messagesArr.push(
         { role: 'user', content: message },
-        { role: 'assistant', content: combinedRawText },
+        { role: 'assistant', content: formattedForUi || combinedRawText },
       );
 
       await Conversation.findOneAndUpdate(
@@ -644,12 +651,6 @@ router.post('/stream', async (req, res) => {
       console.error('❌ Error saving multi-agent conversation:', persistError);
       // Do not fail the SSE response on persistence problems
     }
-
-    // 4. Formatter streams the final XML-formatted response
-    sse({ type: 'status', label: STATUS_LABEL_FORMATTING });
-    const fmtStart = Date.now();
-    await formatOutputStreaming(message, combinedRawText, res);
-    rex.formatterFinished(requestId, Date.now() - fmtStart);
 
     sse({
       type: 'done',

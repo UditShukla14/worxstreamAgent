@@ -81,19 +81,19 @@ Calls updateContext(convId, key, toolsUsed, toolResultPayloads) after each agent
 Updates previousRawText and previousAgentName for the next agent.
 At the end, it builds combinedRawText = agentRawTexts.join('\n\n').trim().
 
-Step 5 – Persist the orchestrated turn & format output
+Step 5 – Format output, then persist (same text as streamed)
+
+Emits status SSE with STATUS_LABEL_FORMATTING.
+Calls formatOutputStreaming(message, combinedRawText, res), which streams XML to the client and returns the full formatted string.
 
 Persists the whole turn for the given (company_id, user_id, conversation_id):
 
 Fetches existing doc from Conversation with those keys.
 Appends:
 { role: 'user', content: message }
-{ role: 'assistant', content: combinedRawText }
+{ role: 'assistant', content: formattedForUi } (the formatter output — not combinedRawText — so chat history matches what the user saw live).
 Upserts back with updated_at set to new Date().
-Sends the final formatted response:
 
-Emits status SSE with STATUS_LABEL_FORMATTING.
-Calls formatOutputStreaming(message, combinedRawText, res) so the OutputFormatter still handles XML/structure.
 Emits a final done SSE event:
 agent: a comma-separated list of all agents Nova used.
 toolsUsed: merged list of tool calls (name, input, success) across all agents.

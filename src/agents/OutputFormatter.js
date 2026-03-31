@@ -107,13 +107,16 @@ export async function formatOutput(userMessage, rawOutput) {
 
 /**
  * Format raw agent output and stream it via SSE.
+ * Returns the full formatted text (same as streamed) so callers can persist it for history.
  *
  * @param {string} userMessage
  * @param {string} rawOutput
  * @param {import('express').Response} res - Express response (SSE headers already set)
+ * @returns {Promise<string>} Complete formatted XML/markdown string
  */
 export async function formatOutputStreaming(userMessage, rawOutput, res) {
   const sse = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+  let formatted = '';
 
   const stream = await anthropic.messages.stream({
     model: config.anthropic.model,
@@ -129,7 +132,10 @@ export async function formatOutputStreaming(userMessage, rawOutput, res) {
 
   for await (const event of stream) {
     if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+      formatted += event.delta.text;
       sse({ type: 'text', content: event.delta.text });
     }
   }
+
+  return formatted;
 }
