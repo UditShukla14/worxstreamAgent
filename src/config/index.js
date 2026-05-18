@@ -49,6 +49,7 @@ const TOOL_SEARCH_SUPPORTED_MODELS = [
 ];
 
 const anthropicModel = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
+const reportsModel = process.env.ANTHROPIC_REPORTS_MODEL || 'claude-haiku-4-5-20251001';
 const useToolSearchEnv = process.env.ANTHROPIC_USE_TOOL_SEARCH;
 
 export const config = {
@@ -56,6 +57,8 @@ export const config = {
     apiKey: process.env.ANTHROPIC_API_KEY,
     /** Default to Sonnet 4.6 for tool search support; override with ANTHROPIC_MODEL. */
     model: anthropicModel,
+    /** Reports model - defaults to Haiku for cost optimization */
+    reportsModel: reportsModel,
     /** Enabled when model supports tool search; set ANTHROPIC_USE_TOOL_SEARCH=false/true to override. */
     useToolSearch: useToolSearchEnv === 'false' ? false : useToolSearchEnv === 'true' ? true : TOOL_SEARCH_SUPPORTED_MODELS.includes(anthropicModel),
     /**

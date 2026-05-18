@@ -41,7 +41,7 @@ export function MessageList({ messages, isLoading, currentTools, activityLabel }
             <Bot size={16} />
           </div>
           <div className="message-content">
-            <ActivityStatus hasActivity={currentTools.length > 0} label={activityLabel ?? undefined} />
+            <ActivityStatus isLoading={isLoading} currentTools={currentTools} activityLabel={activityLabel || 'Processing...'} />
           </div>
         </div>
       )}

@@ -26,6 +26,7 @@ RULES:
 
 - **Search / List queries**: <table> only. NO stats cards.
 - **Summary / Overview queries** (user said "overview", "summary", "dashboard", "stats"): <stats> cards + <table>.
+- **Report / Analytics queries** (user said "report", "chart", "analytics", "trends"): **MANDATORY**: <chart> + <stats> cards + <table>. Charts are required for all numerical data.
 - **Detail queries** (user said "details", "full info", "tell me more"): <details> card.
 - **Action queries** (create, update, delete): <alert> with brief confirmation.
 
@@ -72,6 +73,46 @@ Badge colors: badge="success", badge="warning", badge="error"
 ### <workflow> — document flow (wrap JSON)
 <workflow>{ ... }</workflow>
 
+### <chart> — data visualizations for reports
+<chart type="bar" title="Monthly Sales" color="blue">
+<chart-data label="Sales ($)">
+<bar category="Jan" value="50000" percentage="80"/>
+<bar category="Feb" value="62500" percentage="100"/>
+</chart-data>
+</chart>
+
+<chart type="line" title="Sales Trend" color="green">
+<chart-data label="Revenue ($)">
+<point period="Q1" value="150000"/>
+<point period="Q2" value="180000"/>
+</chart-data>
+</chart>
+
+<chart type="pie" title="Sales by Status">
+<chart-data label="Amount">
+<slice label="Paid" value="75000" percentage="60"/>
+<slice label="Pending" value="50000" percentage="40"/>
+</chart-data>
+</chart>
+
+### <gauge> — performance indicators
+<gauge title="Sales Goal Progress" status="success">
+<current value="$125,000"/>
+<target value="$150,000"/>
+<percentage value="83%"/>
+</gauge>
+
+### <trend> — trend indicators
+<trend label="Monthly Growth" direction="up" color="green">
+<current value="$62,500"/>
+<change value="$12,500" percentage="25%"/>
+</trend>
+
+Chart types: bar, line, pie, multi-bar
+Chart colors: blue, green, purple, yellow, red, cyan
+Gauge status: success, warning, error
+Trend directions: up, down, flat
+
 Do NOT output <milestones> — we use a simple status in the UI instead.
 
 ## CRITICAL RULES
@@ -79,7 +120,8 @@ Do NOT output <milestones> — we use a simple status in the UI instead.
 2. Keep table columns to 4-5 max
 3. ALL lists MUST use <table> — no bullet-point lists for data
 4. Status MUST use badge/status attributes with correct colors
-5. Output the formatted result directly — no explanations about formatting`;
+5. **CHARTS ARE MANDATORY**: For reports/analytics, always include charts with numerical data
+6. Output the formatted result directly — no explanations about formatting`;
 
 /**
  * Format raw agent output for the frontend (non-streaming).

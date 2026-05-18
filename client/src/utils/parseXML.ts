@@ -292,6 +292,182 @@ export function parseXMLContent(content: string): string {
     `;
   });
 
+  // Parse <chart> blocks - NEW for Reports Agent
+  html = html.replace(/<chart\s+([^>]*)>([\s\S]*?)<\/chart>/gi, (_match, attrs, inner) => {
+    const chartAttrs = parseAttributes(attrs);
+    const type = chartAttrs.type || 'bar';
+    const title = chartAttrs.title || 'Chart';
+    const color = chartAttrs.color || 'blue';
+    
+    // Parse chart-data
+    const dataMatch = inner.match(/<chart-data\s+([^>]*)>([\s\S]*?)<\/chart-data>/i);
+    if (!dataMatch) return `<div class="chart-error">Invalid chart data</div>`;
+    
+    // Parse chart data attributes (may be used for future enhancements)
+    // const dataAttrs = parseAttributes(dataMatch[1]);
+    // const valueLabel = dataAttrs.label || 'Value';
+    const dataContent = dataMatch[2];
+    
+    if (type === 'bar') {
+      // Parse bar data
+      const bars: { category: string; value: string; percentage: string }[] = [];
+      const barMatches = dataContent.matchAll(/<bar\s+([^>]*)\/>/gi);
+      for (const bar of barMatches) {
+        const barAttrs = parseAttributes(bar[1]);
+        bars.push({
+          category: barAttrs.category || '',
+          value: barAttrs.value || '0',
+          percentage: barAttrs.percentage || '0'
+        });
+      }
+      
+      return `
+        <div class="chart-container">
+          <div class="chart-header">
+            <h3 class="chart-title">${escapeHtml(title)}</h3>
+          </div>
+          <div class="bar-chart">
+            ${bars.map(bar => `
+              <div class="bar-item">
+                <div class="bar-label">${escapeHtml(bar.category)}</div>
+                <div class="bar-container">
+                  <div class="bar-fill ${color}" style="width: ${bar.percentage}%"></div>
+                  <span class="bar-value">${escapeHtml(bar.value)}</span>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    } else if (type === 'line') {
+      // Parse line data
+      const points: { period: string; value: string }[] = [];
+      const pointMatches = dataContent.matchAll(/<point\s+([^>]*)\/>/gi);
+      for (const point of pointMatches) {
+        const pointAttrs = parseAttributes(point[1]);
+        points.push({
+          period: pointAttrs.period || '',
+          value: pointAttrs.value || '0'
+        });
+      }
+      
+      return `
+        <div class="chart-container">
+          <div class="chart-header">
+            <h3 class="chart-title">${escapeHtml(title)}</h3>
+          </div>
+          <div class="line-chart">
+            <div class="line-chart-data">
+              ${points.map(point => `
+                <div class="line-point">
+                  <div class="line-period">${escapeHtml(point.period)}</div>
+                  <div class="line-value ${color}">${escapeHtml(point.value)}</div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        </div>
+      `;
+    } else if (type === 'pie') {
+      // Parse pie data
+      const slices: { label: string; value: string; percentage: string }[] = [];
+      const sliceMatches = dataContent.matchAll(/<slice\s+([^>]*)\/>/gi);
+      for (const slice of sliceMatches) {
+        const sliceAttrs = parseAttributes(slice[1]);
+        slices.push({
+          label: sliceAttrs.label || '',
+          value: sliceAttrs.value || '0',
+          percentage: sliceAttrs.percentage || '0'
+        });
+      }
+      
+      return `
+        <div class="chart-container">
+          <div class="chart-header">
+            <h3 class="chart-title">${escapeHtml(title)}</h3>
+          </div>
+          <div class="pie-chart">
+            <div class="pie-legend">
+              ${slices.map((slice, index) => `
+                <div class="pie-legend-item">
+                  <div class="pie-color-box color-${index % 6}"></div>
+                  <span class="pie-label">${escapeHtml(slice.label)}</span>
+                  <span class="pie-value">${escapeHtml(slice.value)} (${escapeHtml(slice.percentage)}%)</span>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+    
+    return `<div class="chart-error">Unsupported chart type: ${escapeHtml(type)}</div>`;
+  });
+
+  // Parse <gauge> blocks - NEW for Reports Agent
+  html = html.replace(/<gauge\s+([^>]*)>([\s\S]*?)<\/gauge>/gi, (_match, attrs, inner) => {
+    const gaugeAttrs = parseAttributes(attrs);
+    const title = gaugeAttrs.title || 'Progress';
+    const status = gaugeAttrs.status || 'success';
+    
+    const currentMatch = inner.match(/<current\s+value="([^"]*)"\/>/i);
+    const targetMatch = inner.match(/<target\s+value="([^"]*)"\/>/i);
+    const percentageMatch = inner.match(/<percentage\s+value="([^"]*)"\/>/i);
+    
+    const current = currentMatch ? currentMatch[1] : '0';
+    const target = targetMatch ? targetMatch[1] : '100';
+    const percentage = percentageMatch ? percentageMatch[1] : '0%';
+    
+    return `
+      <div class="gauge-container">
+        <div class="gauge-header">
+          <h3 class="gauge-title">${escapeHtml(title)}</h3>
+        </div>
+        <div class="gauge-body">
+          <div class="gauge-circle ${status}">
+            <div class="gauge-percentage">${escapeHtml(percentage)}</div>
+          </div>
+          <div class="gauge-details">
+            <div class="gauge-current">Current: ${escapeHtml(current)}</div>
+            <div class="gauge-target">Target: ${escapeHtml(target)}</div>
+          </div>
+        </div>
+      </div>
+    `;
+  });
+
+  // Parse <trend> blocks - NEW for Reports Agent
+  html = html.replace(/<trend\s+([^>]*)>([\s\S]*?)<\/trend>/gi, (_match, attrs, inner) => {
+    const trendAttrs = parseAttributes(attrs);
+    const label = trendAttrs.label || 'Trend';
+    const direction = trendAttrs.direction || 'flat';
+    const color = trendAttrs.color || 'blue';
+    
+    const currentMatch = inner.match(/<current\s+value="([^"]*)"\/>/i);
+    const changeMatch = inner.match(/<change\s+value="([^"]*)" percentage="([^"]*)"\/>/i);
+    
+    const current = currentMatch ? currentMatch[1] : '0';
+    const changeValue = changeMatch ? changeMatch[1] : '0';
+    const changePercentage = changeMatch ? changeMatch[2] : '0%';
+    
+    const trendIcon = direction === 'up' ? '📈' : direction === 'down' ? '📉' : '➡️';
+    
+    return `
+      <div class="trend-container">
+        <div class="trend-header">
+          <span class="trend-icon">${trendIcon}</span>
+          <h3 class="trend-label">${escapeHtml(label)}</h3>
+        </div>
+        <div class="trend-body">
+          <div class="trend-current ${color}">${escapeHtml(current)}</div>
+          <div class="trend-change ${direction}">
+            ${direction === 'up' ? '+' : direction === 'down' ? '-' : ''}${escapeHtml(changeValue)} (${escapeHtml(changePercentage)})
+          </div>
+        </div>
+      </div>
+    `;
+  });
+
   // Parse <alert> blocks
   html = html.replace(/<alert\s+type="([^"]*)">([\s\S]*?)<\/alert>/gi, (_match, type, content) => {
     const iconClass = type === 'success' ? 'icon-check-circle' : type === 'error' ? 'icon-alert-circle' : type === 'warning' ? 'icon-alert-circle' : 'icon-info';

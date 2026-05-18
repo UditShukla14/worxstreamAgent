@@ -24,6 +24,7 @@ import { registerAddressTools } from './addresses.js';
 import { registerSystemFinderTools } from './systemFinder.js';
 import { registerProjectTools } from './projects.js';
 import { registerPriceComparisonTools } from './priceComparison.js';
+import { registerReportTools } from './reports.js';
 
 /**
  * Register all tools
@@ -96,6 +97,9 @@ export function registerAllTools() {
 
   registerPriceComparisonTools();
   console.log('  ✓ Price Comparison tools registered');
+
+  registerReportTools();
+  console.log('  ✓ Report tools registered');
 
   console.log('✅ All MCP tools registered');
 }

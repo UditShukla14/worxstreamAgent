@@ -99,8 +99,13 @@ export class BaseAgent {
     while (iterations < MAX_TOOL_ITERATIONS) {
       iterations++;
 
+      // Use specialized model for reports agent to optimize costs
+      const modelToUse = this.agentKey === 'reports' 
+        ? config.anthropic.reportsModel 
+        : config.anthropic.model;
+
       const params = {
-        model: config.anthropic.model,
+        model: modelToUse,
         max_tokens: config.anthropic.maxTokens?.agent ?? 4096,
         system: this.systemPrompt,
         messages,
@@ -195,8 +200,13 @@ export class BaseAgent {
     while (iterations < MAX_TOOL_ITERATIONS) {
       iterations++;
 
+      // Use specialized model for reports agent to optimize costs
+      const modelToUse = this.agentKey === 'reports' 
+        ? config.anthropic.reportsModel 
+        : config.anthropic.model;
+
       const params = {
-        model: config.anthropic.model,
+        model: modelToUse,
         max_tokens: config.anthropic.maxTokens?.agent ?? 4096,
         system: this.systemPrompt,
         messages,

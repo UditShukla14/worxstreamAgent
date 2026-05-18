@@ -22,6 +22,11 @@ router.use('/api/agents', agentRoutes);
 router.use('/api/rex', rexRoutes);
 router.use('/api/price-comparison', priceComparisonRoutes);
 
+// Rex UI route - handled by frontend routing
+router.get('/rex', (req, res) => {
+  res.redirect('/');
+});
+
 // Root: API info and endpoint contract (for frontend baseURL + apiEndpoints alignment)
 router.get('/', (req, res) => {
   res.json({

@@ -53,35 +53,41 @@ export function inferCapabilitiesFromToolName(toolName) {
   const rest = lc.replace(/^(list|get|create|update|delete|clone|bulk_action|quick_update|compare|link|cancel|verify|initialize|restore|soft|permanently)\_?/, '');
  
   // Domain/entity heuristics
-  // Prefer explicit domain based on stable substrings.
-  const domainCandidates = [
-    'invoice',
-    'estimate',
-    'credit_memo',
-    'purchase_order',
-    'bill',
-    'customer',
-    'contact',
-    'product',
-    'vendor',
-    'job',
-    'task',
-    'project',
-    'workflow',
-    'company',
-    'address',
-    'finance',
-    'config',
-    'hr',
-    'system_finder',
-    'price_comparison',
-  ];
- 
-  for (const d of domainCandidates) {
-    if (lc.includes(d)) {
-      caps.domain = d;
-      caps.entity = d;
-      break;
+  // Handle special cases first (tools that end with _report should go to reports domain)
+  if (lc.includes('_report') || lc.includes('goal') || lc.startsWith('get_report') || lc.startsWith('export_') && lc.includes('report')) {
+    caps.domain = 'reports';
+    caps.entity = 'reports';
+  } else {
+    // Prefer explicit domain based on stable substrings.
+    const domainCandidates = [
+      'invoice',
+      'estimate',
+      'credit_memo',
+      'purchase_order',
+      'bill',
+      'customer',
+      'contact',
+      'product',
+      'vendor',
+      'job',
+      'task',
+      'project',
+      'workflow',
+      'company',
+      'address',
+      'finance',
+      'config',
+      'hr',
+      'system_finder',
+      'price_comparison',
+    ];
+
+    for (const d of domainCandidates) {
+      if (lc.includes(d)) {
+        caps.domain = d;
+        caps.entity = d;
+        break;
+      }
     }
   }
  
