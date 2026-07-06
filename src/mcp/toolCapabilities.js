@@ -31,9 +31,73 @@ const ACTIONS = /** @type {const} */ ({
  * @property {string[]} [idFields]     - Preferred identifier fields (e.g. ['customer_id','id'])
  */
  
-function isNonEmptyString(x) {
-  return typeof x === 'string' && x.trim().length > 0;
-}
+/**
+ * Ordered domain rules: first matching substring wins, so the most specific
+ * patterns MUST come first. Every rule maps to one of the agent domains in
+ * src/agents/agentDefinitions.js (plus 'reports', handled separately).
+ *
+ * Ordering traps encoded here:
+ * - 'organization_contact' (company.js) before 'contact' (CRM)
+ * - 'department'/'team' (hr.js) before 'branch' (get_departments_by_branch)
+ * - finance dropdown VALUES ('dropdown_value', 'default_dropdowns') vs
+ *   config dropdown/column CONFIGS ('dropdown_config', 'column_config')
+ *
+ * @type {Array<[string, string]>}
+ */
+const DOMAIN_RULES = [
+  ['organization_contact', 'company'],
+  ['credit_memo', 'credit_memo'],
+  ['purchase_order', 'purchase_order'],
+  ['system_finder', 'system_finder'],
+  ['price_comparison', 'price_comparison'],
+  ['compare_stock_prices', 'price_comparison'],
+  // HR (hr.js): departments, teams, team members
+  ['department', 'hr'],
+  ['team', 'hr'],
+  ['hr', 'hr'],
+  // Finance (finance.js): taxes, chart of accounts, dropdown values, fields, app filters
+  ['tax', 'finance'],
+  ['chart_of_account', 'finance'],
+  ['account_chart', 'finance'],
+  ['dropdown_value', 'finance'],
+  ['default_dropdowns', 'finance'],
+  ['fields_group', 'finance'],
+  ['all_fields', 'finance'],
+  ['app_filters', 'finance'],
+  // Config (config.js/helpers.js): UI configs, menus, forms, reference data
+  ['dropdown_config', 'config'],
+  ['column_config', 'config'],
+  ['menus', 'config'],
+  ['forms', 'config'],
+  ['country_code', 'config'],
+  ['timezone', 'config'],
+  ['currencies', 'config'],
+  ['all_apps', 'config'],
+  ['config', 'config'],
+  // Company (company.js/subscriptions.js): org-level settings and DB ops
+  ['branch', 'company'],
+  ['signature', 'company'],
+  ['payment_instruction', 'company'],
+  ['custom_number_range', 'company'],
+  ['subscription', 'company'],
+  ['database', 'company'],
+  ['company', 'company'],
+  // Address (addresses.js), incl. tax exemptions
+  ['exemption', 'address'],
+  ['address', 'address'],
+  // Core CRM/ERP entities
+  ['invoice', 'invoice'],
+  ['estimate', 'estimate'],
+  ['bill', 'bill'],
+  ['customer', 'customer'],
+  ['contact', 'contact'],
+  ['product', 'product'],
+  ['vendor', 'vendor'],
+  ['job', 'job'],
+  ['task', 'task'],
+  ['project', 'project'],
+  ['workflow', 'workflow'],
+];
  
 /**
  * Infer capabilities from a tool name using conventions.
@@ -49,60 +113,20 @@ export function inferCapabilitiesFromToolName(toolName) {
   /** @type {ToolCapabilities} */
   const caps = {};
  
-  const verb = lc.split('_')[0] || '';
-  const rest = lc.replace(/^(list|get|create|update|delete|clone|bulk_action|quick_update|compare|link|cancel|verify|initialize|restore|soft|permanently)\_?/, '');
- 
   // Domain/entity heuristics
   // Handle special cases first (tools that end with _report should go to reports domain)
   if (lc.includes('_report') || lc.includes('goal') || lc.startsWith('get_report') || lc.startsWith('export_') && lc.includes('report')) {
     caps.domain = 'reports';
     caps.entity = 'reports';
   } else {
-    // Prefer explicit domain based on stable substrings.
-    const domainCandidates = [
-      'invoice',
-      'estimate',
-      'credit_memo',
-      'purchase_order',
-      'bill',
-      'customer',
-      'contact',
-      'product',
-      'vendor',
-      'job',
-      'task',
-      'project',
-      'workflow',
-      'company',
-      'address',
-      'finance',
-      'config',
-      'hr',
-      'system_finder',
-      'price_comparison',
-    ];
-
-    for (const d of domainCandidates) {
-      if (lc.includes(d)) {
-        caps.domain = d;
-        caps.entity = d;
+    // Ordered rule list: first match wins. Unmatched tools stay domain-less
+    // (indexed as 'unknown') so misses are loud instead of landing in junk buckets.
+    for (const [pattern, domain] of DOMAIN_RULES) {
+      if (lc.includes(pattern)) {
+        caps.domain = domain;
+        caps.entity = domain;
         break;
       }
-    }
-  }
- 
-  // Normalize a few common “tool prefix” domains
-  if (!caps.domain) {
-    if (lc.includes('system_finder')) {
-      caps.domain = 'system_finder';
-      caps.entity = 'system_finder';
-    } else if (lc.includes('compare_stock_prices')) {
-      caps.domain = 'price_comparison';
-      caps.entity = 'price_comparison';
-    } else if (isNonEmptyString(rest)) {
-      // Rough guess: first token after verb
-      caps.domain = rest.split('_')[0];
-      caps.entity = caps.domain;
     }
   }
  

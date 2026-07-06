@@ -14,6 +14,13 @@ const messageSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.Mixed,
     required: true,
   },
+  // Compact per-turn tool transcript: [{ tool, input, ok, error? }].
+  // Replayed into agent history so later turns know what was already
+  // called, what worked, and what failed (Cursor/Claude-style memory).
+  tool_activity: {
+    type: [mongoose.Schema.Types.Mixed],
+    default: undefined,
+  },
 }, { _id: false });
 
 const conversationSchema = new mongoose.Schema({
@@ -33,6 +40,14 @@ const conversationSchema = new mongoose.Schema({
   messages: {
     type: [messageSchema],
     default: [],
+  },
+  conversation_summary: {
+    type: String,
+    default: '',
+  },
+  summary_through_turn: {
+    type: Number,
+    default: 0,
   },
   created_at: {
     type: Date,

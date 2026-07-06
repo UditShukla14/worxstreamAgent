@@ -19,6 +19,12 @@ import {
   normalizeListInput,
   filterRowsByStatus,
 } from './policies/listPolicies.js';
+import { appendPlaybookToPrompt } from './playbooks.js';
+import {
+  isWriteTool,
+  shouldConfirmWrites,
+  storePendingConfirm,
+} from './pendingConfirm.js';
 
 const MAX_TOOL_ITERATIONS = Number.isFinite(config.agentRuntime?.maxToolIterations)
   ? config.agentRuntime.maxToolIterations
@@ -40,10 +46,18 @@ export class BaseAgent {
     this.name = definition.name;
     this.description = definition.description;
     this.domain = definition.domain || null;
+    this.domains = Array.isArray(definition.domains) && definition.domains.length > 0
+      ? definition.domains
+      : null;
+    /** Cross-domain helper tools (e.g. dropdown lookups) this agent may call. */
+    this.extraTools = Array.isArray(definition.extraTools) ? definition.extraTools : [];
     const soul = getSoulSystemPrompt();
-    this.systemPrompt = soul
+    const base = soul
       ? `${soul}\n\n${definition.systemPrompt}`
       : definition.systemPrompt;
+    const resumeNote = '\n\nIf [Session focus] shows a failed last action, attempt recovery (correct IDs/parameters) before asking the user to repeat.';
+    const lookupNote = '\n\nID RESOLUTION: NEVER ask the user for an internal ID (user, customer, contact, product, vendor, tax, job, project...). When the user gives a name, call the resolve_entity tool (entity_type + the name) — or a domain lookup tool you have — to get the ID yourself. Only ask the user when the lookup finds nothing or returns multiple ambiguous matches (then show the matching names, never raw IDs).';
+    this.systemPrompt = appendPlaybookToPrompt(base + resumeNote + lookupNote, definition.domain);
     this.anthropic = new Anthropic({ apiKey: config.anthropic.apiKey });
   }
 
@@ -56,20 +70,46 @@ export class BaseAgent {
 
     const index = getToolIndex();
 
-    // Domain selection (preferred). Fall back to agentKey heuristics.
-    const domainKey = String(this.domain || this.agentKey || '').toLowerCase();
-    const byDomain = index.byDomain?.[domainKey];
+    // Union of the agent's domain buckets (definition.domains beats definition.domain).
+    // 'lookup' (resolve_entity) is universal: every agent can resolve names → IDs.
+    const domainKeys = (this.domains || [this.domain || this.agentKey])
+      .map(d => String(d || '').toLowerCase())
+      .concat('lookup');
 
-    const allowList = Array.isArray(byDomain) && byDomain.length > 0
-      ? byDomain.map(t => t.name)
-      : null; // null = allow all tools
+    const allowSet = new Set();
+    for (const key of domainKeys) {
+      const bucket = index.byDomain?.[key];
+      if (!Array.isArray(bucket)) continue;
+      for (const t of bucket) allowSet.add(t.name);
+    }
 
-    // Prefer tool-search mode when enabled, but scope to allowed tools if available.
+    // Cross-domain helper tools (resolve assignees, customers, products, taxes
+    // referenced by name) so single-domain agents don't have to ask the user
+    // for IDs that another domain's lookup tool can provide.
+    const registered = new Set(index.tools.map((t) => t.name));
+    for (const name of this.extraTools) {
+      if (registered.has(name)) {
+        allowSet.add(name);
+      } else {
+        console.error(`❌ [${this.name}] extraTools entry "${name}" is not a registered tool`);
+      }
+    }
+
+    // Never fall back to ALL tools: an empty bucket is a domain-mapping bug
+    // (see src/mcp/toolCapabilities.js), not a reason to expose ~193 tools.
+    if (allowSet.size === 0) {
+      console.error(`❌ [${this.name}] no tools in domain bucket(s) [${domainKeys.join(', ')}] — check DOMAIN_RULES in src/mcp/toolCapabilities.js; running with NO tools`);
+      return [];
+    }
+
+    const allowList = [...allowSet];
+
+    // Prefer tool-search mode when enabled, scoped to allowed tools.
     if (config.anthropic.useToolSearch) {
       return getAnthropicToolsForToolSearch(allowList);
     }
 
-    // Otherwise, pass full (or domain-filtered) tools to Anthropic.
+    // Otherwise, pass domain-filtered tools to Anthropic.
     return getAnthropicTools(allowList);
   }
 
@@ -84,9 +124,7 @@ export class BaseAgent {
    */
   async run(message, context = {}) {
     const tools = this.getTools();
-    const messages = [
-      { role: 'user', content: this._buildPrompt(message, context) },
-    ];
+    const messages = this._buildInitialMessages(message, context);
 
     let response;
     let iterations = 0;
@@ -99,13 +137,8 @@ export class BaseAgent {
     while (iterations < MAX_TOOL_ITERATIONS) {
       iterations++;
 
-      // Use specialized model for reports agent to optimize costs
-      const modelToUse = this.agentKey === 'reports' 
-        ? config.anthropic.reportsModel 
-        : config.anthropic.model;
-
       const params = {
-        model: modelToUse,
+        model: config.anthropic.model,
         max_tokens: config.anthropic.maxTokens?.agent ?? 4096,
         system: this.systemPrompt,
         messages,
@@ -133,7 +166,12 @@ export class BaseAgent {
           const toolStart = Date.now();
           const result = await executeMcpTool(block.name, block.input, { agent: this.name, userMessage: message });
           const toolDuration = Date.now() - toolStart;
-          toolsUsed.push({ name: block.name, input: block.input, success: result.success });
+          toolsUsed.push({
+            name: block.name,
+            input: block.input,
+            success: result.success,
+            ...(result.success === false && result.error ? { error: String(result.error).slice(0, 300) } : {}),
+          });
           if (context._rexRequestId) {
             rex.toolCall(context._rexRequestId, block.name, toolDuration, result.success);
           }
@@ -185,9 +223,7 @@ export class BaseAgent {
    */
   async runWithEvents(message, context = {}, onEvent = () => {}) {
     const tools = this.getTools();
-    const messages = [
-      { role: 'user', content: this._buildPrompt(message, context) },
-    ];
+    const messages = this._buildInitialMessages(message, context);
 
     let iterations = 0;
     const toolsUsed = [];
@@ -200,13 +236,8 @@ export class BaseAgent {
     while (iterations < MAX_TOOL_ITERATIONS) {
       iterations++;
 
-      // Use specialized model for reports agent to optimize costs
-      const modelToUse = this.agentKey === 'reports' 
-        ? config.anthropic.reportsModel 
-        : config.anthropic.model;
-
       const params = {
-        model: modelToUse,
+        model: config.anthropic.model,
         max_tokens: config.anthropic.maxTokens?.agent ?? 4096,
         system: this.systemPrompt,
         messages,
@@ -235,6 +266,40 @@ export class BaseAgent {
             ? normalizeListInput(originalInput)
             : originalInput;
           onEvent({ type: 'tool_use', tool: block.name, input: normalizedInput });
+
+          if (
+            shouldConfirmWrites(context)
+            && isWriteTool(block.name)
+            && !context._approvedConfirmations?.includes(block.id)
+          ) {
+            const confirmationId = await storePendingConfirm(
+              context._planRef || {},
+              {
+                tool: block.name,
+                input: normalizedInput,
+                agentKey: this.agentKey,
+                userMessage: message,
+              },
+            );
+            onEvent({
+              type: 'confirmation_required',
+              confirmationId,
+              tool: block.name,
+              input: normalizedInput,
+            });
+            return {
+              rawText: '',
+              toolsUsed,
+              toolResultPayloads,
+              usage: {
+                input_tokens: totalInputTokens,
+                output_tokens: totalOutputTokens,
+                total_tokens: totalInputTokens + totalOutputTokens,
+              },
+              needsConfirmation: true,
+              confirmationId,
+            };
+          }
 
           const toolStart = Date.now();
           let result = await executeMcpTool(block.name, normalizedInput, { agent: this.name, userMessage: message });
@@ -299,7 +364,12 @@ export class BaseAgent {
             }
           }
 
-          toolsUsed.push({ name: block.name, input: normalizedInput, success: result.success });
+          toolsUsed.push({
+            name: block.name,
+            input: normalizedInput,
+            success: result.success,
+            ...(result.success === false && result.error ? { error: String(result.error).slice(0, 300) } : {}),
+          });
           toolResultPayloads.push(result);
           onEvent({ type: 'tool_result', tool: block.name, success: result.success });
           if (context._rexRequestId) {
@@ -336,6 +406,24 @@ export class BaseAgent {
       total_tokens: totalInputTokens + totalOutputTokens,
     };
     return { rawText: '', toolsUsed, toolResultPayloads, usage };
+  }
+
+  /**
+   * Anthropic messages array: prior turns (if any) + this turn's user prompt.
+   * @param {string} message
+   * @param {object} context
+   * @param {Array<{ role: string, content: string }>} [context._conversationHistory]
+   */
+  _buildInitialMessages(message, context = {}) {
+    const turnPrompt = this._buildPrompt(message, context);
+    const history = Array.isArray(context._conversationHistory)
+      ? context._conversationHistory.filter(m => m && (m.role === 'user' || m.role === 'assistant'))
+      : [];
+
+    if (history.length > 0) {
+      return [...history, { role: 'user', content: turnPrompt }];
+    }
+    return [{ role: 'user', content: turnPrompt }];
   }
 
   /**

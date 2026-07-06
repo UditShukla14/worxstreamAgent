@@ -4,6 +4,7 @@
 
 import dotenv from 'dotenv';
 import * as worxstreamSession from '../session/worxstreamSession.js';
+import { getRequestContext } from '../request/requestContext.js';
 
 dotenv.config();
 
@@ -39,26 +40,62 @@ function buildRedisUrlFromEnv() {
   return `${scheme}://${auth}${host}:${port}`;
 }
 
-/** Model IDs that support tool_search_tool_bm25 (on-demand tool loading). GA Feb 2026. */
+/** Single Anthropic model for all calls — dateless ID, not a dated snapshot. */
+const DEFAULT_MODEL = 'claude-sonnet-4-6';
+
+/** Retired snapshot IDs → main model (auto-migrated at startup). */
+const RETIRED_MODEL_MAP = {
+  'claude-sonnet-4-20250514': DEFAULT_MODEL,
+  'claude-opus-4-20250514': DEFAULT_MODEL,
+  'claude-sonnet-4-0': DEFAULT_MODEL,
+  'claude-opus-4-0': DEFAULT_MODEL,
+  'claude-3-7-sonnet-20250219': DEFAULT_MODEL,
+  'claude-3-5-haiku-20241022': DEFAULT_MODEL,
+  'claude-3-haiku-20240307': DEFAULT_MODEL,
+};
+
+/** Pre-4.6 models use YYYYMMDD suffixes; those IDs expire when Anthropic retires the snapshot. */
+const DATED_SNAPSHOT_RE = /-\d{8}$/;
+
+/** Dateless model IDs that support tool_search_tool_bm25 (on-demand tool loading). */
 const TOOL_SEARCH_SUPPORTED_MODELS = [
   'claude-sonnet-4-6',
   'claude-opus-4-6',
-  'claude-sonnet-4-5-20250929',
-  'claude-opus-4-5-20251101',
-  'claude-haiku-4-5-20251001',
+  'claude-opus-4-8',
+  'claude-sonnet-4-5',
+  'claude-opus-4-5',
+  'claude-haiku-4-5',
 ];
 
-const anthropicModel = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
-const reportsModel = process.env.ANTHROPIC_REPORTS_MODEL || 'claude-haiku-4-5-20251001';
+/**
+ * Resolve ANTHROPIC_MODEL: reject dated snapshots and map retired IDs to the main model.
+ * @param {string|undefined} envValue
+ */
+function resolveAnthropicModel(envValue) {
+  let modelId = (envValue || '').trim() || DEFAULT_MODEL;
+  if (RETIRED_MODEL_MAP[modelId]) {
+    console.warn(
+      `⚠️  ANTHROPIC_MODEL "${modelId}" is retired; using "${DEFAULT_MODEL}". Update the env var.`
+    );
+    return DEFAULT_MODEL;
+  }
+  if (DATED_SNAPSHOT_RE.test(modelId)) {
+    console.warn(
+      `⚠️  ANTHROPIC_MODEL "${modelId}" is a dated snapshot; using "${DEFAULT_MODEL}". Set ANTHROPIC_MODEL to a dateless ID.`
+    );
+    return DEFAULT_MODEL;
+  }
+  return modelId;
+}
+
+const anthropicModel = resolveAnthropicModel(process.env.ANTHROPIC_MODEL);
 const useToolSearchEnv = process.env.ANTHROPIC_USE_TOOL_SEARCH;
 
 export const config = {
   anthropic: {
     apiKey: process.env.ANTHROPIC_API_KEY,
-    /** Default to Sonnet 4.6 for tool search support; override with ANTHROPIC_MODEL. */
+    /** Sonnet 4.6 for all agent, router, formatter, and summary calls; override with ANTHROPIC_MODEL. */
     model: anthropicModel,
-    /** Reports model - defaults to Haiku for cost optimization */
-    reportsModel: reportsModel,
     /** Enabled when model supports tool search; set ANTHROPIC_USE_TOOL_SEARCH=false/true to override. */
     useToolSearch: useToolSearchEnv === 'false' ? false : useToolSearchEnv === 'true' ? true : TOOL_SEARCH_SUPPORTED_MODELS.includes(anthropicModel),
     /**
@@ -83,16 +120,13 @@ export const config = {
   worxstream: {
     baseUrl: process.env.WORXSTREAM_BASE_URL || '',
     get apiToken() {
-      const s = worxstreamSession.getSession();
-      return s ? s.apiToken : process.env.WORXSTREAM_API_TOKEN;
+      return getWorxstreamApiToken();
     },
     get defaultCompanyId() {
-      const s = worxstreamSession.getSession();
-      return s ? s.companyId : (process.env.DEFAULT_COMPANY_ID || '1');
+      return getWorxstreamContext().companyId;
     },
     get defaultUserId() {
-      const s = worxstreamSession.getSession();
-      return s ? s.userId : (process.env.DEFAULT_USER_ID || '1');
+      return getWorxstreamContext().userId;
     },
   },
   server: {
@@ -128,6 +162,11 @@ export const config = {
     maxMessages: parseInt(process.env.MAX_CONTEXT_MESSAGES || '50', 10),
     maxTokens: parseInt(process.env.MAX_CONTEXT_TOKENS || '150000', 10),
     reserveTokens: parseInt(process.env.RESERVE_TOKENS || '10000', 10),
+    /** Specialist agents: only the last N stored messages (user+assistant pairs). */
+    specialistMaxMessages: parseInt(process.env.SPECIALIST_CONTEXT_MESSAGES || '6', 10),
+    specialistMaxTokens: parseInt(process.env.SPECIALIST_CONTEXT_TOKENS || '12000', 10),
+    specialistReserveTokens: parseInt(process.env.SPECIALIST_RESERVE_TOKENS || '4000', 10),
+    specialistMessagesActive: parseInt(process.env.SPECIALIST_CONTEXT_MESSAGES_ACTIVE || '12', 10),
   },
   agentRuntime: {
     /** Safety cap to prevent infinite tool loops. */
@@ -139,14 +178,47 @@ export const config = {
     /** After agents run, how many self-check retry loops are allowed. */
     maxSelfCheckLoops: parseInt(process.env.AGENTS_SELF_CHECK_MAX_LOOPS || '1', 10),
   },
+  coworker: {
+    confirmWrites: process.env.COWORKER_CONFIRM_WRITES === 'true',
+    summaryEveryN: parseInt(process.env.CONVERSATION_SUMMARY_EVERY_N || '10', 10),
+    workingMemoryLlmEveryN: parseInt(process.env.WORKING_MEMORY_LLM_EVERY_N || '0', 10),
+    specialistMessagesActive: parseInt(process.env.SPECIALIST_CONTEXT_MESSAGES_ACTIVE || '12', 10),
+    pendingConfirmTtlSeconds: parseInt(process.env.COWORKER_PENDING_CONFIRM_TTL || '300', 10),
+  },
 };
 
-/** Resolve current Worxstream context (session or .env). Call at invocation time, not at module load. */
-export function getWorxstreamContext() {
+/**
+ * Worxstream API credentials, resolved per field with this precedence:
+ *   1. Per-request context (AsyncLocalStorage, set by requestContextMiddleware
+ *      from request body/headers) — safe under concurrent multi-tenant requests.
+ *   2. In-memory session (POST /session) — single global session per process.
+ *   3. .env fallbacks (DEFAULT_COMPANY_ID / DEFAULT_USER_ID / WORXSTREAM_API_TOKEN).
+ */
+function resolveWorxstreamCredentials() {
+  const req = getRequestContext() || {};
+  const s = worxstreamSession.getSession() || {};
   return {
-    companyId: config.worxstream.defaultCompanyId,
-    userId: config.worxstream.defaultUserId,
+    companyId: req.companyId || s.companyId || process.env.DEFAULT_COMPANY_ID || '1',
+    userId: req.userId || s.userId || process.env.DEFAULT_USER_ID || '1',
+    apiToken: req.apiToken || s.apiToken || process.env.WORXSTREAM_API_TOKEN || '',
   };
+}
+
+/** API token for Worxstream HTTP client — session, then WORXSTREAM_API_TOKEN. */
+export function getWorxstreamApiToken() {
+  const { apiToken } = resolveWorxstreamCredentials();
+  return apiToken || process.env.WORXSTREAM_API_TOKEN || '';
+}
+
+/** companyId / userId for MCP tool calls — session, then DEFAULT_* env vars. */
+export function getWorxstreamContext() {
+  const { companyId, userId } = resolveWorxstreamCredentials();
+  return { companyId, userId };
+}
+
+/** Default tenant for Mongo/Redis when the client omits companyId/userId. */
+export function getDefaultTenantIds() {
+  return getWorxstreamContext();
 }
 
 // Validation

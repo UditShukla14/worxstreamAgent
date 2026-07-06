@@ -6,6 +6,7 @@
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
 import { normalizeToolCapabilities } from './toolCapabilities.js';
 import { afterToolCall, beforeToolCall, onToolError } from './toolPolicyPipeline.js';
 
@@ -17,12 +18,6 @@ const TOOL_SEARCH_BM25 = {
   type: 'tool_search_tool_bm25_20251119',
   name: 'tool_search_tool_bm25',
 };
-
-// Create the MCP server instance
-const mcpServer = new McpServer({
-  name: 'worxstream-agent',
-  version: '1.0.0',
-});
 
 /**
  * Wrapper to register tools and track them in our registry
@@ -38,9 +33,32 @@ export function registerTool(name, options, callback) {
     capabilities,
     callback,
   });
+}
 
-  // Also register with MCP server
-  mcpServer.registerTool(name, options, callback);
+/**
+ * Create a fresh SDK McpServer with every registered tool.
+ * Each instance can only connect to one transport, so the stateless
+ * Streamable HTTP route calls this per request.
+ */
+export function createMcpServer() {
+  const server = new McpServer({
+    name: 'worxstream-agent',
+    version: '1.0.0',
+  });
+
+  for (const [name, tool] of toolRegistry) {
+    server.registerTool(
+      name,
+      {
+        title: tool.title,
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+      },
+      tool.callback
+    );
+  }
+
+  return server;
 }
 
 /**
@@ -60,11 +78,7 @@ export function getAnthropicTools(filterToolNames = null) {
     tools.push({
       name,
       description: tool.description || tool.title || name,
-      input_schema: tool.inputSchema ? zodSchemaToJsonSchema(tool.inputSchema) : {
-        type: 'object',
-        properties: {},
-        required: [],
-      },
+      input_schema: getAnthropicInputSchema(tool),
     });
   }
   
@@ -84,11 +98,7 @@ export function getAnthropicToolsForToolSearch(filterToolNames = null) {
     deferredTools.push({
       name,
       description: tool.description || tool.title || name,
-      input_schema: tool.inputSchema ? zodSchemaToJsonSchema(tool.inputSchema) : {
-        type: 'object',
-        properties: {},
-        required: [],
-      },
+      input_schema: getAnthropicInputSchema(tool),
       defer_loading: true,
     });
   }
@@ -102,6 +112,8 @@ export async function executeMcpTool(toolName, toolInput, context = {}) {
   console.log(`\n🔧 Executing MCP tool: ${toolName}`);
   console.log('📝 Input:', JSON.stringify(toolInput, null, 2));
 
+  const enrichedContext = { ...context };
+
   try {
     const tool = toolRegistry.get(toolName);
     
@@ -113,7 +125,7 @@ export async function executeMcpTool(toolName, toolInput, context = {}) {
       };
     }
 
-    const normalizedInput = beforeToolCall(toolName, toolInput, context);
+    const normalizedInput = beforeToolCall(toolName, toolInput, enrichedContext);
     const result = await tool.callback(normalizedInput);
     console.log(`✅ Tool ${toolName} completed`);
 
@@ -122,68 +134,61 @@ export async function executeMcpTool(toolName, toolInput, context = {}) {
     if (content?.type === 'text') {
       try {
         const parsed = JSON.parse(content.text);
-        return afterToolCall(toolName, normalizedInput, parsed, context);
+        return afterToolCall(toolName, normalizedInput, parsed, enrichedContext);
       } catch {
-        return afterToolCall(toolName, normalizedInput, { success: true, data: content.text }, context);
+        return afterToolCall(toolName, normalizedInput, { success: true, data: content.text }, enrichedContext);
       }
     }
 
-    return afterToolCall(toolName, normalizedInput, { success: true, data: result }, context);
+    return afterToolCall(toolName, normalizedInput, { success: true, data: result }, enrichedContext);
   } catch (error) {
     console.error(`❌ Tool ${toolName} failed:`, error.message);
     return onToolError(toolName, toolInput, error);
   }
 }
 
+const EMPTY_INPUT_SCHEMA = Object.freeze({
+  type: 'object',
+  properties: {},
+  required: [],
+});
+
 /**
- * Convert Zod schema to JSON Schema for Anthropic
+ * Get the Anthropic input_schema for a registry entry, converting the zod
+ * raw shape via zod v4's native toJSONSchema. Memoized on the entry since
+ * getAnthropicTools is called every agent turn.
  */
-function zodSchemaToJsonSchema(zodSchema) {
-  const properties = {};
-  const required = [];
-
-  for (const [key, schema] of Object.entries(zodSchema)) {
-    const schemaType = getZodType(schema);
-    properties[key] = {
-      type: schemaType.type,
-      description: schema.description || key,
-    };
-    
-    if (schemaType.items) {
-      properties[key].items = schemaType.items;
-    }
-    
-    if (!schema.isOptional?.()) {
-      required.push(key);
-    }
+function getAnthropicInputSchema(tool) {
+  if (tool.anthropicInputSchema) {
+    return tool.anthropicInputSchema;
   }
-
-  return {
-    type: 'object',
-    properties,
-    required,
-  };
+  tool.anthropicInputSchema = zodShapeToAnthropicSchema(tool.name, tool.inputSchema);
+  return tool.anthropicInputSchema;
 }
 
 /**
- * Get the JSON Schema type from a Zod schema
+ * Convert a ZodRawShape to a valid Anthropic input_schema
  */
-function getZodType(schema) {
-  const typeName = schema._def?.typeName;
-  
-  switch (typeName) {
-    case 'ZodString':
-      return { type: 'string' };
-    case 'ZodNumber':
-      return { type: 'number' };
-    case 'ZodBoolean':
-      return { type: 'boolean' };
-    case 'ZodArray':
-      return { type: 'array', items: { type: 'string' } };
-    case 'ZodOptional':
-      return getZodType(schema._def.innerType);
-    default:
-      return { type: 'string' };
+function zodShapeToAnthropicSchema(toolName, shape) {
+  if (!shape || Object.keys(shape).length === 0) {
+    return EMPTY_INPUT_SCHEMA;
+  }
+
+  try {
+    const jsonSchema = z.toJSONSchema(z.object(shape), {
+      io: 'input',
+      unrepresentable: 'any',
+    });
+    delete jsonSchema.$schema;
+    delete jsonSchema.additionalProperties;
+    return {
+      type: 'object',
+      properties: jsonSchema.properties || {},
+      required: jsonSchema.required || [],
+    };
+  } catch (error) {
+    console.warn(`⚠️ Failed to convert input schema for tool "${toolName}", falling back to permissive schema:`, error.message);
+    return EMPTY_INPUT_SCHEMA;
   }
 }
 
@@ -217,5 +222,3 @@ export function getToolRegistrySnapshot() {
   }
   return out;
 }
-
-export { mcpServer };

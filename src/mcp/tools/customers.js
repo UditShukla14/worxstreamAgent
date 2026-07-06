@@ -49,7 +49,7 @@ export function registerCustomerTools() {
       title: 'Get Customer Details',
       description: 'Get customer details by ID (customer record, not CRM contact). Customers are business entities used for invoices, estimates, and jobs. Use get_contact_details for CRM contacts instead.',
       inputSchema: {
-        id: z.number().describe('Customer ID'),
+        id: z.number().describe('Customer master ID (300-series, e.g. 30000000037). From list_customers use customer_id/customerId on the row — NOT the 200-series list row id.'),
       },
     },
     async ({ id }) => {

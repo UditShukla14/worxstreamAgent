@@ -143,6 +143,12 @@ export function extractMilestonesFromXML(content: string): Milestone[] | null {
 export function parseXMLContent(content: string): string {
   let html = content;
 
+  // Strip markdown code fences the formatter model sometimes wraps around
+  // its output (```xml ... ```). Handles both complete and still-streaming
+  // fences: drop a leading fence line, and a trailing fence if present.
+  html = html.replace(/^\s*```(?:xml|html|markdown)?\s*\n?/i, '');
+  html = html.replace(/\n?\s*```\s*$/, '');
+
   // Remove <workflow> tags (they're handled separately for visualization)
   html = html.replace(/<workflow\s*([^>]*)>([\s\S]*?)<\/workflow>/gi, '');
 
@@ -468,10 +474,17 @@ export function parseXMLContent(content: string): string {
     `;
   });
 
-  // Parse <alert> blocks
+  // Parse <alert> blocks.
+  // Newlines inside the alert must become <br> BEFORE the paragraph-split pass
+  // below — otherwise the alert div gets sliced into fragments that flex lays
+  // out as side-by-side columns.
   html = html.replace(/<alert\s+type="([^"]*)">([\s\S]*?)<\/alert>/gi, (_match, type, content) => {
     const iconClass = type === 'success' ? 'icon-check-circle' : type === 'error' ? 'icon-alert-circle' : type === 'warning' ? 'icon-alert-circle' : 'icon-info';
-    return `<div class="alert ${type}"><span class="icon ${iconClass}"></span> ${escapeHtml(content.trim())}</div>`;
+    const body = escapeHtml(content.trim())
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/\n{2,}/g, '<br><br>')
+      .replace(/\n/g, '<br>');
+    return `<div class="alert ${type}"><span class="icon ${iconClass}"></span><span class="alert-content">${body}</span></div>`;
   });
 
   // Clean up and format remaining text
@@ -485,6 +498,14 @@ export function parseXMLContent(content: string): string {
     // Don't wrap if it starts with HTML tag
     if (part.startsWith('<div') || part.startsWith('<p')) {
       return part;
+    }
+    // Render numbered/bulleted blocks as real lists for a cleaner look
+    const lines = part.split('\n').map(l => l.trim()).filter(Boolean);
+    if (lines.length > 1 && lines.every(l => /^\d+[.)]\s+/.test(l))) {
+      return `<ol class="message-list">${lines.map(l => `<li>${l.replace(/^\d+[.)]\s+/, '')}</li>`).join('')}</ol>`;
+    }
+    if (lines.length > 1 && lines.every(l => /^[-•]\s+/.test(l))) {
+      return `<ul class="message-list">${lines.map(l => `<li>${l.replace(/^[-•]\s+/, '')}</li>`).join('')}</ul>`;
     }
     // Wrap plain text in paragraph
     return `<p>${part.replace(/\n/g, '<br>')}</p>`;

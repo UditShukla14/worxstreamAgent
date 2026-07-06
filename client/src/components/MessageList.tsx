@@ -11,9 +11,13 @@ interface MessageListProps {
   currentTools: ToolUsed[];
   /** Backend-driven status label; when set, ActivityStatus shows this instead of default */
   activityLabel?: string | null;
+  /** Sends the clarification pick (e.g. "#2") as a normal chat message */
+  onClarificationSelect?: (pick: string) => void;
+  /** Approves/rejects a pending write confirmation */
+  onConfirmAction?: (messageId: string, confirmationId: string, approved: boolean) => void;
 }
 
-export function MessageList({ messages, isLoading, currentTools, activityLabel }: MessageListProps) {
+export function MessageList({ messages, isLoading, currentTools, activityLabel, onClarificationSelect, onConfirmAction }: MessageListProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -31,7 +35,14 @@ export function MessageList({ messages, isLoading, currentTools, activityLabel }
         if (message.role === 'assistant' && message.content === '' && message.isStreaming) {
           return null;
         }
-        return <Message key={message.id} message={message} />;
+        return (
+          <Message
+            key={message.id}
+            message={message}
+            onClarificationSelect={onClarificationSelect}
+            onConfirmAction={onConfirmAction}
+          />
+        );
       })}
       
       {/* Single professional status line while waiting (no step list, no tool names) */}

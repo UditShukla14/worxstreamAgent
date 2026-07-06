@@ -7,20 +7,23 @@ import healthRoutes from './health.js';
 import sessionRoutes from './session.js';
 import toolsRoutes from './tools.js';
 import priceComparisonRoutes from './priceComparison.js';
-import authRoutes from './auth.js';
 import agentRoutes from './agents.js';
 import rexRoutes from './rex.js';
+import webhookRoutes from './webhooks.js';
+import mcpRoutes from './mcp.js';
 
 const router = Router();
 
 // Mount routes (session same pattern as health: single path, one router)
 router.use('/health', healthRoutes);
 router.use('/session', sessionRoutes); // GET/POST/DELETE /session
-router.use('/api/auth', authRoutes);
+router.use('/api/auth/session', sessionRoutes); // same router, legacy auth path
 router.use('/api/tools', toolsRoutes);
 router.use('/api/agents', agentRoutes);
 router.use('/api/rex', rexRoutes);
 router.use('/api/price-comparison', priceComparisonRoutes);
+router.use('/api/webhooks', webhookRoutes);
+router.use('/mcp', mcpRoutes); // MCP Streamable HTTP endpoint (external MCP clients)
 
 // Rex UI route - handled by frontend routing
 router.get('/rex', (req, res) => {
@@ -34,6 +37,7 @@ router.get('/', (req, res) => {
     version: '1.0.0',
     endpoints: {
       health: '/health',
+      mcp: 'POST /mcp',
       session: '/session',
       auth: { base: '/api/auth', session: '/api/auth/session' },
       tools: '/api/tools',

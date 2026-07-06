@@ -34,6 +34,12 @@ interface WorkflowNode {
     grandTotal?: string;
     startDate?: string;
     endDate?: string;
+    // Deposit nodes (appName === 'deposit')
+    depositType?: string;
+    depositTotal?: number;
+    paymentStatus?: number;
+    paymentMethod?: string;
+    paymentDate?: string;
   };
   childObject?: WorkflowNode[];
   children?: WorkflowNode[];
@@ -61,6 +67,7 @@ const getAppIcon = (appName: string) => {
     task: <Check size={20} />,
     bill: <CreditCard size={20} />,
     purchase_order: <Package size={20} />,
+    deposit: <CreditCard size={20} />,
   };
   return icons[appName?.toLowerCase()] || <FileText size={20} />;
 };
@@ -83,6 +90,8 @@ const getAppNameColor = (appName: string): string => {
       return 'bg-red-50 text-red-700 border-red-200';
     case 'purchase_order':
       return 'bg-cyan-50 text-cyan-700 border-cyan-200';
+    case 'deposit':
+      return 'bg-emerald-50 text-emerald-700 border-emerald-200';
     default:
       return 'bg-gray-50 text-gray-700 border-gray-200';
   }
@@ -106,6 +115,8 @@ const getIconColor = (appName: string): string => {
       return 'text-red-500';
     case 'purchase_order':
       return 'text-cyan-500';
+    case 'deposit':
+      return 'text-emerald-500';
     default:
       return 'text-gray-500';
   }
@@ -127,14 +138,15 @@ function getNodeDisplayName(node: WorkflowNode): string {
   if (!node) return 'Unknown';
   
   const details = node.details;
+  const appName = (node.appName || node.app_name || '').toLowerCase();
   
   if (details) {
+    if (appName === 'deposit') return details.paymentMethod || 'Deposit';
     if (details.customNumber) return details.customNumber;
     if (details.jobName) return details.jobName;
     if (details.name) return details.name;
   }
   
-  const appName = node.appName || node.app_name;
   const nodeId = node.id;
   
   if (appName && nodeId) {
@@ -375,96 +387,116 @@ const nodeTypes = {
   task: TaskNode,
 };
 
-// Convert workflow data to React Flow format
-function convertToFlowNodes(
+// ── Tree layout (horizontal): each leaf gets one vertical "slot"; parents
+// center on the vertical span of their subtree, so siblings never overlap. ──
+const X_SPACING = 380;
+const SLOT_HEIGHT = 230;
+
+function normalizeNodeId(value: unknown): number | null {
+  if (typeof value === 'number' && !isNaN(value)) return value;
+  if (typeof value === 'string') {
+    const n = parseInt(value, 10);
+    if (!isNaN(n)) return n;
+  }
+  return null;
+}
+
+/**
+ * Lay out a node and its subtree. Returns the number of slots consumed.
+ * Tasks render as their own leaf nodes (level + 1, dashed edge).
+ */
+function layoutNode(
   node: WorkflowNode | any,
-  parentId: string | null = null,
-  position: { x: number; y: number } = { x: 0, y: 0 },
-  visited: Set<number> = new Set(),
-  level: number = 0,
-  xSpacing: number = 350,
-  ySpacing: number = 180,
-  minNodeHeight: number = 120
-): { nodes: Node[]; edges: Edge[] } {
-  const nodes: Node[] = [];
-  const edges: Edge[] = [];
+  parentId: string | null,
+  level: number,
+  topSlot: number,
+  visited: Set<number>,
+  nodes: Node[],
+  edges: Edge[]
+): number {
+  if (!node || typeof node !== 'object') return 0;
 
-  // Validate node
-  if (!node || typeof node !== 'object') {
-    console.warn('convertToFlowNodes: Invalid node (not an object):', node);
-    return { nodes, edges };
+  const numericId = normalizeNodeId(node.id);
+  if (numericId == null) {
+    console.warn('WorkflowVisualization: invalid node id:', node);
+    return 0;
   }
-
-  // Get node ID - handle various formats
-  const nodeIdValue = node.id;
-  if (!nodeIdValue || (typeof nodeIdValue !== 'number' && typeof nodeIdValue !== 'string')) {
-    console.warn('convertToFlowNodes: Invalid node ID:', nodeIdValue, 'in node:', node);
-    return { nodes, edges };
-  }
-  
-  // Convert string IDs to numbers if needed
-  const numericId = typeof nodeIdValue === 'string' ? parseInt(nodeIdValue, 10) : nodeIdValue;
-  if (isNaN(numericId)) {
-    console.warn('convertToFlowNodes: Cannot convert ID to number:', nodeIdValue);
-    return { nodes, edges };
-  }
-
-  // Prevent infinite loops
-  if (visited.has(numericId)) {
-    return { nodes, edges };
-  }
+  if (visited.has(numericId)) return 0; // cycle guard
   visited.add(numericId);
 
   const nodeId = `node-${numericId}`;
-  const appNameRaw = node.appName || node.app_name;
-  
-  if (!appNameRaw) {
-    console.warn('convertToFlowNodes: Missing appName/app_name in node:', node);
-  }
-  
-  const appName = appNameRaw ? appNameRaw.toLowerCase() : 'unknown';
-  const displayName = getNodeDisplayName(node);
+  const appName = (node.appName || node.app_name || 'unknown').toLowerCase();
   const details = node.details || {};
-  
-  // Check if node has children (outgoing connections)
-  const children = node.childObject || node.children || [];
-  const hasChildren = Array.isArray(children) && children.length > 0;
-  
-  // Check if node has tasks (will create separate task nodes)
-  const tasks = node.tasks || [];
-  const hasTasks = Array.isArray(tasks) && tasks.length > 0;
-  const hasOutgoingWithTasks = hasChildren || hasTasks;
-  
-  // Check if node has parent (incoming connection)
-  const hasParent = parentId !== null;
-  
-  // Calculate position - horizontal flow
-  const xPos = position.x + (level * xSpacing);
-  let currentY = position.y;
+  const isDeposit = appName === 'deposit';
 
-  // Create document node
+  const tasks: any[] = Array.isArray(node.tasks) ? node.tasks : [];
+  const children: any[] = Array.isArray(node.childObject)
+    ? node.childObject
+    : Array.isArray(node.children) ? node.children : [];
+
+  // Lay out descendants first so we know the subtree's vertical span.
+  let cursor = topSlot;
+
+  for (const task of tasks) {
+    if (!task || typeof task !== 'object' || !task.id) continue;
+    const taskId = `task-${task.id}-${numericId}`;
+    nodes.push({
+      id: taskId,
+      type: 'task',
+      position: { x: (level + 1) * X_SPACING, y: cursor * SLOT_HEIGHT },
+      data: { task, hasIncoming: true },
+    });
+    edges.push({
+      id: `edge-${nodeId}-${taskId}`,
+      source: nodeId,
+      target: taskId,
+      type: 'smoothstep',
+      animated: false,
+      style: { stroke: '#8b5cf6', strokeWidth: 2, opacity: 0.6, strokeDasharray: '5,5' },
+      markerEnd: { type: MarkerType.ArrowClosed, color: '#8b5cf6', width: 18, height: 18 },
+    });
+    cursor += 1;
+  }
+
+  for (const child of children) {
+    cursor += layoutNode(child, nodeId, level + 1, cursor, visited, nodes, edges);
+  }
+
+  const consumed = Math.max(1, cursor - topSlot);
+  const y = (topSlot + consumed / 2 - 0.5) * SLOT_HEIGHT;
+
+  // Deposit nodes carry payment fields instead of document fields — map them
+  // onto the card's display slots.
+  const depositStatus = isDeposit
+    ? (details.paymentStatus === 1 ? 'Paid' : 'Pending')
+    : undefined;
+  const depositLabel = isDeposit
+    ? [details.depositType === 'partial' ? 'Partial deposit' : 'Deposit', details.paymentDate]
+        .filter(Boolean)
+        .join(' — ')
+    : undefined;
+
   nodes.push({
     id: nodeId,
     type: 'document',
-    position: { x: xPos, y: currentY },
+    position: { x: level * X_SPACING, y },
     data: {
-      label: displayName,
+      label: getNodeDisplayName(node),
       customNumber: details.customNumber,
-      appName: appName,
+      appName,
       id: numericId,
       customerName: details.customerName,
-      status: details.status,
-      grandTotal: details.grandTotal,
-      name: details.name,
+      status: details.status ?? depositStatus,
+      grandTotal: details.grandTotal ?? (isDeposit && details.depositTotal != null ? String(details.depositTotal) : undefined),
+      name: details.name ?? depositLabel,
       jobName: details.jobName,
       startDate: details.startDate,
       endDate: details.endDate,
-      hasIncoming: hasParent,
-      hasOutgoing: hasOutgoingWithTasks,
+      hasIncoming: parentId !== null,
+      hasOutgoing: tasks.length > 0 || children.length > 0,
     },
   });
 
-  // Create edge from parent
   if (parentId) {
     edges.push({
       id: `edge-${parentId}-${nodeId}`,
@@ -472,104 +504,12 @@ function convertToFlowNodes(
       target: nodeId,
       type: 'smoothstep',
       animated: false,
-      style: { 
-        stroke: '#6366f1', 
-        strokeWidth: 2.5,
-        opacity: 0.75
-      },
-      markerEnd: {
-        type: MarkerType.ArrowClosed,
-        color: '#6366f1',
-        width: 20,
-        height: 20,
-      },
+      style: { stroke: '#6366f1', strokeWidth: 2.5, opacity: 0.75 },
+      markerEnd: { type: MarkerType.ArrowClosed, color: '#6366f1', width: 20, height: 20 },
     });
   }
 
-  // Calculate the starting Y position for children/tasks
-  currentY = position.y + minNodeHeight;
-  
-  // Process tasks as separate nodes (positioned to the right of the document)
-  if (hasTasks) {
-    tasks.forEach((task: any) => {
-      if (!task || typeof task !== 'object' || !task.id) {
-        console.warn('Invalid task:', task);
-        return;
-      }
-
-      const taskId = `task-${task.id}-${numericId}`;
-      const taskLevel = level + 1;
-      const taskXPos = position.x + (taskLevel * xSpacing);
-      const taskYPos = currentY;
-      
-      nodes.push({
-        id: taskId,
-        type: 'task',
-        position: { x: taskXPos, y: taskYPos },
-        data: {
-          task: task,
-          hasIncoming: true,
-        },
-      });
-      
-      // Create edge from document to task (dashed line)
-      edges.push({
-        id: `edge-${nodeId}-${taskId}`,
-        source: nodeId,
-        target: taskId,
-        type: 'smoothstep',
-        animated: false,
-        style: { 
-          stroke: '#8b5cf6', 
-          strokeWidth: 2,
-          opacity: 0.6,
-          strokeDasharray: '5,5'
-        },
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          color: '#8b5cf6',
-          width: 18,
-          height: 18,
-        },
-      });
-      
-      // Task nodes need spacing
-      currentY += 140;
-    });
-  }
-
-  // Process children (child objects) - positioned after tasks
-  if (hasChildren) {
-    // If no tasks, ensure minimum spacing from parent node
-    if (!hasTasks) {
-      currentY = position.y + minNodeHeight;
-    }
-    
-    children.forEach((child: any) => {
-      if (!child || typeof child !== 'object') {
-        console.warn('Invalid child node:', child);
-        return;
-      }
-
-      const childResult = convertToFlowNodes(
-        child,
-        nodeId,
-        { x: position.x, y: currentY },
-        new Set(visited),
-        level + 1,
-        xSpacing,
-        ySpacing,
-        minNodeHeight
-      );
-      nodes.push(...childResult.nodes);
-      edges.push(...childResult.edges);
-      
-      // Add spacing between sibling nodes
-      currentY += ySpacing * 0.4;
-    });
-  }
-
-  return { nodes, edges };
+  return consumed;
 }
 
 export function WorkflowVisualization({
@@ -577,43 +517,20 @@ export function WorkflowVisualization({
   height = 500,
 }: WorkflowVisualizationProps) {
   const { nodes, edges } = useMemo(() => {
-    if (!data) {
-      console.log('WorkflowVisualization: No data provided');
-      return { nodes: [], edges: [] };
+    if (!data) return { nodes: [], edges: [] };
+
+    const roots = Array.isArray(data) ? data : [data];
+    const allNodes: Node[] = [];
+    const allEdges: Edge[] = [];
+    const visited = new Set<number>();
+    let slotCursor = 0;
+
+    for (const root of roots) {
+      if (!root || typeof root !== 'object') continue;
+      slotCursor += layoutNode(root, null, 0, slotCursor, visited, allNodes, allEdges);
     }
 
-    console.log('WorkflowVisualization: Received data:', data);
-
-    // Handle array of root nodes
-    if (Array.isArray(data)) {
-      const allNodes: Node[] = [];
-      const allEdges: Edge[] = [];
-      let currentRootY = 0;
-
-      data.forEach((rootNode) => {
-        if (!rootNode || typeof rootNode !== 'object') {
-          console.warn('Invalid root node:', rootNode);
-          return;
-        }
-        const result = convertToFlowNodes(rootNode, null, {
-          x: 0,
-          y: currentRootY,
-        });
-        allNodes.push(...result.nodes);
-        allEdges.push(...result.edges);
-        // Add spacing between root nodes
-        currentRootY += 200;
-      });
-
-      return { nodes: allNodes, edges: allEdges };
-    }
-
-    // Handle single root node
-    if (typeof data === 'object') {
-      return convertToFlowNodes(data);
-    }
-
-    return { nodes: [], edges: [] };
+    return { nodes: allNodes, edges: allEdges };
   }, [data]);
 
   if (nodes.length === 0) {

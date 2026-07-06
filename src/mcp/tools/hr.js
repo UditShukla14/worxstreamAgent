@@ -463,7 +463,7 @@ export function registerHRTools() {
       const result = await callWorxstreamAPI({
         method: 'GET',
         endpoint: '/hr/team-members/dropdown-list',
-        data: { company_id: companyId },
+        data: { company_id: companyId, user_id: userId },
       });
 
       return {

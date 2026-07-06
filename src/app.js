@@ -9,6 +9,7 @@ import { dirname, join } from 'path';
 import { config, validateConfig } from './config/index.js';
 import routes from './routes/index.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
+import { requestContextMiddleware } from './middleware/requestContext.js';
 import { getAvailableTools } from './mcp/server.js';
 import { connectDB } from './db/connection.js';
 import { initializeAgents, getAgentKeys } from './agents/index.js';
@@ -46,6 +47,8 @@ const corsOptions = {
 // Middleware
 app.use(cors(corsOptions));
 app.use(express.json());
+// Per-request tenant context (AsyncLocalStorage) — after express.json so body is parsed
+app.use(requestContextMiddleware);
 
 // Serve static files from public directory
 app.use(express.static(join(__dirname, '../public')));

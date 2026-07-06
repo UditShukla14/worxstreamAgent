@@ -25,14 +25,18 @@ This backend has removed the legacy chat flow and now relies on the **multi‑ag
 {
   "message": "user message",
   "conversation_id": "optional UUID to continue",
-  "companyId": "required",
-  "userId": "required"
+  "companyId": "optional — defaults to DEFAULT_COMPANY_ID in server .env",
+  "userId": "optional — defaults to DEFAULT_USER_ID in server .env"
 }
 ```
 
+- **Worxstream API auth (unchanged)**:
+  - Server uses `WORXSTREAM_API_TOKEN`, `DEFAULT_COMPANY_ID`, and `DEFAULT_USER_ID` from `.env` for MCP tool calls.
+  - Optional: `POST /session` or `POST /api/auth/session` to override credentials in memory until logout.
+
 - **Notes**:
   - If `conversation_id` is omitted, backend generates one and emits it via SSE.
-  - `companyId` + `userId` are required to scope conversation storage and Redis context.
+  - If `companyId` / `userId` are omitted, conversation storage and Redis context use the same defaults as the server `.env`.
 
 ### SSE event contract (what to handle)
 The backend streams Server-Sent Events where each event is JSON in `data: ...`.
@@ -44,8 +48,18 @@ Common event types:
 - **`tool_use`**: `{ type: "tool_use", tool: "list_invoices", input: { ... } }`
 - **`tool_result`**: `{ type: "tool_result", tool: "list_invoices", success: true }`
 - **`text`**: `{ type: "text", content: "..." }` (this is the formatted XML stream from OutputFormatter)
-- **`done`**: `{ type: "done", agent: "invoice, customer", toolsUsed: [...] }`
+- **`clarification`**: `{ type: "clarification", question: "...", options: [{ index, id, label }] }` — user should reply with `#1`, `#2`, etc.
+- **`confirmation_required`**: `{ type: "confirmation_required", confirmationId, tool, input }` — then `POST /api/agents/confirm` with `{ conversation_id, confirmationId, approved: true|false }`
+- **`done`**: `{ type: "done", agent: "invoice, customer", toolsUsed: [...] }` (may include `pending_confirmation: true`)
 - **`error`**: `{ type: "error", error: "..." }`
+
+### Write confirmation
+- When `COWORKER_CONFIRM_WRITES=true`, create/update/delete tools pause until the user confirms.
+- **Endpoint**: `POST /api/agents/confirm` with `companyId`, `userId`, `conversation_id`, `confirmationId`, `approved`.
+
+### Preferences (cross-session)
+- `GET /api/agents/preferences?companyId=&userId=`
+- `PATCH /api/agents/preferences` with `{ preferences: { ... } }`
 
 ### Conversations sidebar/history
 Use the existing multi-agent endpoints:
@@ -76,6 +90,7 @@ Use the existing multi-agent endpoints:
 
 The backend now:
 - routes + orchestrates specialists via `/api/agents/stream`
-- keeps short, tenant-scoped memory (Redis) for better follow-ups
+- loads prior turns from MongoDB when `conversation_id` is sent (router/Nova: full window; specialists: last ~6 messages)
+- keeps short, tenant-scoped memory (Redis) for better follow-ups and canonical IDs
 - dynamically selects tools (no static keyword filtering / no hardcoded per-agent tool lists)
 

@@ -25,6 +25,7 @@ import { registerSystemFinderTools } from './systemFinder.js';
 import { registerProjectTools } from './projects.js';
 import { registerPriceComparisonTools } from './priceComparison.js';
 import { registerReportTools } from './reports.js';
+import { registerLookupTools } from './lookup.js';
 
 /**
  * Register all tools
@@ -100,6 +101,9 @@ export function registerAllTools() {
 
   registerReportTools();
   console.log('  ✓ Report tools registered');
+
+  registerLookupTools();
+  console.log('  ✓ Lookup (resolve_entity) tool registered');
 
   console.log('✅ All MCP tools registered');
 }

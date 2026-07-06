@@ -4,13 +4,19 @@ import { Message as MessageType } from '../types';
 import { parseXMLContent, extractWorkflowFromXML } from '../utils/parseXML';
 import { WorkflowVisualization } from './WorkflowVisualization';
 import { ResponseSkeleton } from './ResponseSkeleton';
+import { ClarificationPrompt } from './ClarificationPrompt';
+import { ConfirmationCard } from './ConfirmationCard';
 import { extractKeywords, getKeywordDisplayName, getKeywordColor } from '../utils/extractKeywords';
 
 interface MessageProps {
   message: MessageType;
+  /** Sends the clarification pick (e.g. "#2") as a normal chat message */
+  onClarificationSelect?: (pick: string) => void;
+  /** Approves/rejects a pending write confirmation */
+  onConfirmAction?: (messageId: string, confirmationId: string, approved: boolean) => void;
 }
 
-export function Message({ message }: MessageProps) {
+export function Message({ message, onClarificationSelect, onConfirmAction }: MessageProps) {
   const isUser = message.role === 'user';
   
   // Extract keywords from user messages
@@ -61,15 +67,40 @@ export function Message({ message }: MessageProps) {
                 <WorkflowVisualization data={workflowData} height={500} />
               </div>
             )}
-            {message.isStreaming ? (
+            {message.isStreaming && !message.content ? (
               <ResponseSkeleton />
-            ) : (
+            ) : message.isStreaming ? (
               <div
                 className="message-text message-text--wrapped"
                 dangerouslySetInnerHTML={{
                   __html: parseXMLContent(message.content),
                 }}
               />
+            ) : (
+              <>
+                {message.content && (
+                  <div
+                    className="message-text message-text--wrapped"
+                    dangerouslySetInnerHTML={{
+                      __html: parseXMLContent(message.content),
+                    }}
+                  />
+                )}
+                {message.clarification && (
+                  <ClarificationPrompt
+                    clarification={message.clarification}
+                    onSelect={(pick) => onClarificationSelect?.(pick)}
+                  />
+                )}
+                {message.confirmation && (
+                  <ConfirmationCard
+                    confirmation={message.confirmation}
+                    onConfirm={(approved) =>
+                      onConfirmAction?.(message.id, message.confirmation!.confirmationId, approved)
+                    }
+                  />
+                )}
+              </>
             )}
             {message.toolsUsed && message.toolsUsed.length > 0 && !message.isStreaming && (
               <div className="tools-used">

@@ -1,16 +1,16 @@
 /**
  * Agent Router — decides which agent(s) handle a user query.
  *
- * Three modes:
- *  1. routeToAgents(message)            — LLM picks the right agent(s)
- *  2. callAgent(key, message)           — Caller specifies one agent directly
- *  3. callAgentsParallel(keys, message) — Caller specifies multiple agents
+ * Two modes:
+ *  1. resolveAgentKeys(message) — LLM resolves the right agent key(s) without running them
+ *  2. callAgent(key, message)   — Caller specifies one agent directly
  */
 
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config/index.js';
 import { BaseAgent } from './BaseAgent.js';
 import { AGENT_DEFINITIONS, getAgentKeys, getAgentDescriptionsForRouter } from './agentDefinitions.js';
+import { buildOrchestratorMessages, logContextUsage } from '../utils/conversationHistory.js';
 
 // ── Singleton agent instances ────────────────────────────────────────
 const agentInstances = new Map();
@@ -67,86 +67,19 @@ Examples:
 Respond with ONLY a JSON array of agent keys. Nothing else.`;
 }
 
-// ── LLM-based routing ────────────────────────────────────────────────
+// ── Route-only (resolve agent keys without running them) ─────────────
 
 const routerClient = new Anthropic({ apiKey: config.anthropic.apiKey });
 
-/**
- * Use the LLM to determine which agent(s) should handle a message,
- * then run them.
- *
- * @param {string} message - The user's message
- * @returns {Promise<RouterResult>}
- */
-export async function routeToAgents(message) {
-  console.log(`\n🔀 Router analyzing: "${message.substring(0, 100)}${message.length > 100 ? '...' : ''}"`);
+/** Recent turns to include when classifying — enough for follow-up references. */
+const ROUTER_HISTORY_MESSAGES = 6;
 
-  const routeResponse = await routerClient.messages.create({
-    model: config.anthropic.model,
-    max_tokens: config.anthropic.maxTokens?.router ?? 100,
-    system: buildRouterPrompt(),
-    messages: [{ role: 'user', content: message }],
-  });
-
-  const routeText = routeResponse.content[0]?.text?.trim();
-  let agentKeys;
-  try {
-    agentKeys = JSON.parse(routeText);
-    if (!Array.isArray(agentKeys)) agentKeys = ['none'];
-  } catch {
-    console.warn(`⚠️  Router returned invalid JSON: "${routeText}", defaulting to none`);
-    agentKeys = ['none'];
-  }
-
-  console.log(`🔀 Router selected: [${agentKeys.join(', ')}]`);
-
-  // Conversational — no agent needed
-  if (agentKeys.length === 1 && agentKeys[0] === 'none') {
-    return {
-      type: 'conversation',
-      agentKeys: [],
-      results: [],
-      routerUsage: routeResponse.usage,
-    };
-  }
-
-  // Validate agent keys
-  const validKeys = agentKeys.filter(k => agentInstances.has(k));
-  if (validKeys.length === 0) {
-    console.warn(`⚠️  No valid agents found for keys: [${agentKeys.join(', ')}]`);
-    return { type: 'conversation', agentKeys: [], results: [], routerUsage: routeResponse.usage };
-  }
-
-  // Single agent — direct call
-  if (validKeys.length === 1) {
-    const result = await callAgent(validKeys[0], message);
-    return {
-      type: 'single',
-      agentKeys: validKeys,
-      results: [result],
-      routerUsage: routeResponse.usage,
-    };
-  }
-
-  // Multiple agents — run sequentially (so later agents have context from earlier ones)
-  const results = [];
-  let enrichedMessage = message;
-
-  for (const key of validKeys) {
-    const result = await callAgent(key, enrichedMessage);
-    results.push(result);
-    enrichedMessage = `${message}\n\n[Context from ${result.agent}]: ${result.response}`;
-  }
-
-  return {
-    type: 'multi',
-    agentKeys: validKeys,
-    results,
-    routerUsage: routeResponse.usage,
-  };
+/** Haiku often wraps JSON in markdown fences — strip them before parsing. */
+function stripJsonCodeFence(text) {
+  const t = String(text || '').trim();
+  const m = t.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return m ? m[1].trim() : t;
 }
-
-// ── Route-only (resolve agent keys without running them) ─────────────
 
 /**
  * Use the LLM router to determine which agent(s) should handle a message,
@@ -155,23 +88,34 @@ export async function routeToAgents(message) {
  *
  * @param {string} message
  * @param {string} [conversationContext] - Optional context string from ConversationContext
+ * @param {Array<{ role: string, content: string }>} [priorMessages] - Prior turns from MongoDB
  * @returns {Promise<{ type: string, agentKeys: string[], routerUsage: object }>}
  */
-export async function resolveAgentKeys(message, conversationContext = '') {
+export async function resolveAgentKeys(message, conversationContext = '', priorMessages = []) {
   console.log(`\n🔀 Router analyzing: "${message.substring(0, 100)}${message.length > 100 ? '...' : ''}"`);
 
   const userContent = conversationContext
     ? `${conversationContext}\n\nUser message: ${message}`
     : message;
 
+  const system = buildRouterPrompt();
+  // Routing is a classification task: recent turns + the context prompt (summary,
+  // canonical IDs) are enough — the full history window only adds latency/cost.
+  const messages = buildOrchestratorMessages({
+    priorMessages: priorMessages.slice(-ROUTER_HISTORY_MESSAGES),
+    currentUserContent: userContent,
+    systemPrompt: system,
+  });
+  logContextUsage('Router context', messages, system);
+
   const routeResponse = await routerClient.messages.create({
     model: config.anthropic.model,
     max_tokens: config.anthropic.maxTokens?.router ?? 100,
-    system: buildRouterPrompt(),
-    messages: [{ role: 'user', content: userContent }],
+    system,
+    messages,
   });
 
-  const routeText = routeResponse.content[0]?.text?.trim();
+  const routeText = stripJsonCodeFence(routeResponse.content[0]?.text?.trim());
   let agentKeys;
   try {
     agentKeys = JSON.parse(routeText);
@@ -215,48 +159,4 @@ export async function callAgent(agentKey, message, context = {}) {
     throw new Error(`Unknown agent: "${agentKey}". Available: ${getAgentKeys().join(', ')}`);
   }
   return agent.run(message, context);
-}
-
-/**
- * Call multiple agents in parallel (for independent tasks).
- *
- * @param {string[]} agentKeys
- * @param {string} message
- * @returns {Promise<AgentResult[]>}
- */
-export async function callAgentsParallel(agentKeys, message) {
-  const promises = agentKeys.map(key => {
-    const agent = agentInstances.get(key);
-    if (!agent) {
-      return Promise.resolve({
-        agent: key,
-        response: `Error: unknown agent "${key}"`,
-        toolsUsed: [],
-        usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
-      });
-    }
-    return agent.run(message);
-  });
-  return Promise.all(promises);
-}
-
-/**
- * Call multiple agents sequentially, chaining context from each result
- * into the next agent's message.
- *
- * @param {string[]} agentKeys
- * @param {string} message
- * @returns {Promise<AgentResult[]>}
- */
-export async function callAgentsSequential(agentKeys, message) {
-  const results = [];
-  let enrichedMessage = message;
-
-  for (const key of agentKeys) {
-    const result = await callAgent(key, enrichedMessage);
-    results.push(result);
-    enrichedMessage = `${message}\n\n[Context from ${result.agent}]: ${result.response}`;
-  }
-
-  return results;
 }

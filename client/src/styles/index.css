@@ -724,6 +724,134 @@ body {
   to { transform: rotate(360deg); }
 }
 
+/* Clarification prompt (backend asks user to disambiguate) */
+.clarification-card {
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  max-width: 480px;
+}
+
+.clarification-question {
+  font-size: 14px;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+}
+
+.clarification-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Write-confirmation card (approve/cancel pending write) */
+.confirmation-card {
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  max-width: 480px;
+}
+
+.confirmation-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+}
+
+.confirmation-fields {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 0 0 12px;
+  font-size: 13px;
+}
+
+.confirmation-field {
+  display: contents;
+}
+
+.confirmation-field dt {
+  color: var(--text-secondary);
+  text-transform: capitalize;
+}
+
+.confirmation-field dd {
+  margin: 0;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.confirmation-error {
+  font-size: 13px;
+  color: var(--accent-red);
+  margin-bottom: 10px;
+}
+
+.confirmation-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.confirmation-btn {
+  padding: 7px 16px;
+  border-radius: var(--radius-full);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border: 1px solid transparent;
+}
+
+.confirmation-btn.approve {
+  background: var(--accent-green);
+  border-color: var(--accent-green);
+  color: #ffffff;
+}
+
+.confirmation-btn.approve:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.confirmation-btn.cancel {
+  background: var(--bg-main);
+  border-color: var(--border-color);
+  color: var(--text-secondary);
+}
+
+.confirmation-btn.cancel:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.confirmation-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.confirmation-result {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.confirmation-result.success {
+  color: var(--accent-green);
+}
+
+.confirmation-result.cancelled {
+  color: var(--text-secondary);
+}
+
+.confirmation-result-detail {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
 /* Stats Grid - Claude style */
 .stats-grid {
   display: flex;
@@ -1256,9 +1384,26 @@ body {
   border-radius: var(--radius-md);
   margin: 12px 0;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   font-size: 14px;
+}
+
+.alert .alert-content {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.6;
+}
+
+/* Numbered/bulleted lists in plain assistant text */
+.message-list {
+  margin: 8px 0;
+  padding-left: 22px;
+  line-height: 1.7;
+}
+
+.message-list li {
+  margin: 4px 0;
 }
 
 .alert.success {

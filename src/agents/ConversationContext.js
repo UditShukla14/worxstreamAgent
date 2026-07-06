@@ -11,13 +11,116 @@
 
 import { config, getWorxstreamContext } from '../config/index.js';
 import { redisDel, redisGet, redisSet } from '../services/redisClient.js';
+import {
+  deriveWorkingSetDelta,
+  formatWorkingSetForPrompt,
+  mergeWorkingSet,
+  resolveClarificationPick,
+} from './workingMemory.js';
+
+export { resolveClarificationPick };
+
+function emptyContextShape() {
+  return {
+    entities: {},
+    entityRefs: {},
+    recentResults: [],
+    workingSet: {},
+    lastAgent: null,
+    lastAction: null,
+    lastSearch: null,
+  };
+}
+
+function normalizeContextParsed(parsed) {
+  if (!parsed || typeof parsed !== 'object') return emptyContextShape();
+  return {
+    entities: parsed.entities && typeof parsed.entities === 'object' ? parsed.entities : {},
+    entityRefs: parsed.entityRefs && typeof parsed.entityRefs === 'object' ? parsed.entityRefs : {},
+    recentResults: Array.isArray(parsed.recentResults) ? parsed.recentResults : [],
+    workingSet: parsed.workingSet && typeof parsed.workingSet === 'object' ? parsed.workingSet : {},
+    lastAgent: parsed.lastAgent ?? null,
+    lastAction: parsed.lastAction ?? null,
+    lastSearch: parsed.lastSearch ?? null,
+  };
+}
 
 const IGNORE_FIELDS = new Set([
   'take', 'page', 'sort', 'limit', 'offset', 'skip',
   'per_page', 'page_size', 'max_results',
 ]);
 
-const LABEL_FIELDS = ['name', 'title', 'custom_number', 'number', 'email', 'phone'];
+const LABEL_FIELDS = ['name', 'title', 'custom_number', 'number', 'email', 'phone', 'companyName', 'displayName'];
+
+/**
+ * Worxstream customer master IDs are typically 300… (e.g. 30000000037).
+ * List rows often expose a separate 200… `id` (record/contact) — not valid for get_customer_details.
+ */
+function toNumericId(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && /^\d+$/.test(value.trim())) return parseInt(value.trim(), 10);
+  return null;
+}
+
+function isWorxstreamCustomerMasterId(value) {
+  const n = toNumericId(value);
+  if (n == null) return false;
+  return String(n).startsWith('30');
+}
+
+/**
+ * Canonical customer id from a list/detail row (prefer 300-series master id).
+ */
+export function resolveCustomerRecordId(row) {
+  if (!row || typeof row !== 'object') return null;
+
+  const explicit = [row.customer_id, row.customerId].map(toNumericId).filter((n) => n != null);
+  for (const n of explicit) {
+    if (isWorxstreamCustomerMasterId(n)) return n;
+  }
+  for (const n of explicit) {
+    return n;
+  }
+
+  const raw = toNumericId(row.id);
+  if (isWorxstreamCustomerMasterId(raw)) return raw;
+
+  return null;
+}
+
+function parseFilterSearch(input) {
+  if (!input || typeof input !== 'object') return null;
+  let filter = input.filter;
+  if (typeof filter === 'string') {
+    try {
+      filter = JSON.parse(filter);
+    } catch {
+      return null;
+    }
+  }
+  if (filter && typeof filter === 'object' && typeof filter.search === 'string') {
+    const s = filter.search.trim();
+    return s || null;
+  }
+  if (typeof input.search === 'string' && input.search.trim()) {
+    return input.search.trim();
+  }
+  return null;
+}
+
+function rowMatchesSearch(row, search) {
+  if (!search || !row || typeof row !== 'object') return false;
+  const q = search.toLowerCase();
+  const email = String(row.email || '').toLowerCase();
+  if (email && (email === q || email.includes(q))) return true;
+  const display = String(row.displayName || row.companyName || row.name || '').toLowerCase();
+  if (display && display.includes(q)) return true;
+  const first = String(row.firstName || row.first_name || '').toLowerCase();
+  const last = String(row.lastName || row.last_name || '').toLowerCase();
+  const full = `${first} ${last}`.trim();
+  if (full && full.includes(q)) return true;
+  return false;
+}
 
 function normalizeCtxRef(ref) {
   // Backwards compatible: allow passing just conversationId.
@@ -119,24 +222,13 @@ function extractFromResult(result) {
  */
 export async function getContext(ref) {
   const key = ctxKey(ref);
-  if (!key) return { entities: {}, entityRefs: {}, recentResults: [], lastAgent: null, lastAction: null, lastSearch: null };
+  if (!key) return emptyContextShape();
   const raw = await redisGet(key);
-  if (!raw) return { entities: {}, entityRefs: {}, recentResults: [], lastAgent: null, lastAction: null, lastSearch: null };
+  if (!raw) return emptyContextShape();
   try {
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') {
-      return { entities: {}, entityRefs: {}, recentResults: [], lastAgent: null, lastAction: null, lastSearch: null };
-    }
-    return {
-      entities: parsed.entities && typeof parsed.entities === 'object' ? parsed.entities : {},
-      entityRefs: parsed.entityRefs && typeof parsed.entityRefs === 'object' ? parsed.entityRefs : {},
-      recentResults: Array.isArray(parsed.recentResults) ? parsed.recentResults : [],
-      lastAgent: parsed.lastAgent ?? null,
-      lastAction: parsed.lastAction ?? null,
-      lastSearch: parsed.lastSearch ?? null,
-    };
+    return normalizeContextParsed(JSON.parse(raw));
   } catch {
-    return { entities: {}, entityRefs: {}, recentResults: [], lastAgent: null, lastAction: null, lastSearch: null };
+    return emptyContextShape();
   }
 }
 
@@ -187,31 +279,37 @@ function extractItemsArray(payload) {
  * @param {object[]} toolsUsed    - Array of { name, input, success }
  * @param {object[]} toolResults  - Array of raw tool result objects (parsed JSON)
  */
-export async function updateContext(ref, agentKey, toolsUsed, toolResults = []) {
+/**
+ * @param {object} [opts]
+ * @param {string} [opts.message] - User message for working-set heuristics
+ * @param {string} [opts.assistantSummary] - Last formatted assistant excerpt
+ */
+export async function updateContext(ref, agentKey, toolsUsed, toolResults = [], opts = {}) {
   const key = ctxKey(ref);
   if (!key) return;
 
   const existing = await getContext(ref);
-  const ctx = existing && typeof existing === 'object' ? existing : {
-    entities: {},
-    entityRefs: {},
-    recentResults: [],
-    lastAgent: null,
-    lastAction: null,
-    lastSearch: null,
-  };
+  const ctx = { ...emptyContextShape(), ...existing };
 
   // Merge numeric fields AND search terms from tool inputs
   for (const tool of toolsUsed) {
     if (tool.input && tool.success !== false) {
       const nums = extractNumericFields(tool.input);
       Object.assign(ctx.entities, nums);
-      // Also keep string search terms — crucial for follow-ups like "get its details"
-      if (typeof tool.input.search === 'string' && tool.input.search.trim()) {
+      const filterSearch = parseFilterSearch(tool.input);
+      if (filterSearch) {
+        ctx.lastSearch = filterSearch;
+      } else if (typeof tool.input.search === 'string' && tool.input.search.trim()) {
         ctx.lastSearch = tool.input.search.trim();
-      }
-      if (typeof tool.input.name === 'string' && tool.input.name.trim()) {
+      } else if (typeof tool.input.name === 'string' && tool.input.name.trim()) {
         ctx.lastSearch = tool.input.name.trim();
+      }
+      // get_customer_details id input — only treat 300-series as customer_id
+      if (tool.name === 'get_customer_details') {
+        const reqId = toNumericId(tool.input.id);
+        if (isWorxstreamCustomerMasterId(reqId)) {
+          ctx.entities.customer_id = reqId;
+        }
       }
     }
   }
@@ -236,10 +334,48 @@ export async function updateContext(ref, agentKey, toolsUsed, toolResults = []) 
     }
 
     const toolName = toolsUsed?.[i]?.name || null;
+    const toolInput = toolsUsed?.[i]?.input || null;
     const entityType = inferEntityTypeFromTool(toolName);
     const items = extractItemsArray(payload);
 
-    if (entityType) {
+    if (entityType === 'customers' || toolName === 'list_customers') {
+      if (toolName === 'list_customers' && Array.isArray(items) && items.length > 0) {
+        const searchTerm = parseFilterSearch(toolInput) || ctx.lastSearch;
+        const top = items.slice(0, 10).map((row) => ({
+          id: resolveCustomerRecordId(row),
+          label: pickLabel(row),
+          email: typeof row?.email === 'string' ? row.email.trim() : null,
+        })).filter((x) => x.id != null || x.label);
+
+        if (top.length > 0) {
+          ctx.recentResults = [
+            { tool: toolName, entityType: 'customer', items: top, at: Date.now() },
+            ...(Array.isArray(ctx.recentResults) ? ctx.recentResults : []),
+          ].slice(0, 5);
+        }
+
+        if (searchTerm) {
+          const matched = items.find((row) => rowMatchesSearch(row, searchTerm));
+          const matchedId = matched ? resolveCustomerRecordId(matched) : null;
+          if (matchedId != null) {
+            ctx.entities.customer_id = matchedId;
+            console.log(`📎 Context matched customer by search "${searchTerm}": customer_id=${matchedId}`);
+          }
+        }
+      }
+
+      if (toolName === 'get_customer_details' && payload && typeof payload === 'object') {
+        const dataObj = payload?.data && typeof payload.data === 'object' && !Array.isArray(payload.data)
+          ? payload.data
+          : payload;
+        const cid = resolveCustomerRecordId(dataObj);
+        if (cid != null) {
+          ctx.entities.customer_id = cid;
+          const label = pickLabel(dataObj);
+          ctx.entityRefs.customer = { id: cid, label, tool: toolName, at: Date.now() };
+        }
+      }
+    } else if (entityType) {
       // For list tools, keep a small “recent results” window for reference resolution (\"the second one\").
       if (toolName && toolName.startsWith('list_') && Array.isArray(items) && items.length > 0) {
         const top = items.slice(0, 10).map((row) => ({
@@ -272,10 +408,21 @@ export async function updateContext(ref, agentKey, toolsUsed, toolResults = []) 
     ? toolsUsed[toolsUsed.length - 1].name
     : null;
 
-  // When Customer agent ran, expose id as customer_id so follow-up turns (e.g. "his estimates")
-  // can use it for list_estimates/list_invoices/etc. without re-resolving the customer.
-  if (agentKey === 'customer' && ctx.entities.id != null && ctx.entities.customer_id == null) {
-    ctx.entities.customer_id = ctx.entities.id;
+  const wmDelta = deriveWorkingSetDelta(ctx, {
+    message: opts.message || '',
+    agentKey,
+    toolsUsed,
+    toolResults,
+  });
+  ctx.workingSet = mergeWorkingSet(ctx.workingSet, wmDelta);
+
+  // Customer agent: never promote 200-series list `id` into customer_id
+  if (agentKey === 'customer') {
+    if (ctx.entities.customer_id != null) {
+      ctx.entities.id = ctx.entities.customer_id;
+    } else if (ctx.entities.id != null && !isWorxstreamCustomerMasterId(ctx.entities.id)) {
+      delete ctx.entities.id;
+    }
   }
 
   const ttlSeconds = Number.isFinite(config.redis?.contextTtlSeconds)
@@ -292,14 +439,28 @@ export async function updateContext(ref, agentKey, toolsUsed, toolResults = []) 
  * Build a short context string to inject into prompts.
  * Returns empty string if no context exists.
  */
-export async function buildContextPrompt(ref) {
+/**
+ * @param {string|object} ref
+ * @param {object} [opts]
+ * @param {string} [opts.lastAssistantSnippet]
+ */
+export async function buildContextPrompt(ref, opts = {}) {
   const ctx = await getContext(ref);
   const entries = Object.entries(ctx.entities);
   const hasRecent = Array.isArray(ctx.recentResults) && ctx.recentResults.length > 0;
   const hasRefs = ctx.entityRefs && typeof ctx.entityRefs === 'object' && Object.keys(ctx.entityRefs).length > 0;
-  if (entries.length === 0 && !hasRecent && !hasRefs && !ctx.lastAgent && !ctx.lastSearch) return '';
+  const hasWorkingSet = ctx.workingSet && Object.keys(ctx.workingSet).length > 0;
+  const focusBlock = formatWorkingSetForPrompt(
+    hasWorkingSet ? ctx.workingSet : null,
+    opts.lastAssistantSnippet || '',
+  );
+
+  if (entries.length === 0 && !hasRecent && !hasRefs && !ctx.lastAgent && !ctx.lastSearch && !focusBlock) {
+    return '';
+  }
 
   const parts = [];
+  if (focusBlock) parts.push(focusBlock);
   if (entries.length > 0) {
     const entityStr = entries.map(([k, v]) => `${k}=${v}`).join(', ');
     parts.push(`Known IDs: ${entityStr}`);
@@ -330,7 +491,33 @@ export async function buildContextPrompt(ref) {
   if (ctx.lastAction) {
     parts.push(`Last action: ${ctx.lastAction}`);
   }
-  return `[Context from previous turn] ${parts.join('. ')}. Use these to resolve references like "its", "that", "their", etc.`;
+  const body = parts.join('. ');
+  return body
+    ? `${body}\n\nUse this context to resolve references like "its", "that", "their", and to continue the active task.`
+    : '';
+}
+
+/**
+ * Apply clarification pick from user message; persists to Redis when matched.
+ */
+export async function applyClarificationPick(ref, message) {
+  const key = ctxKey(ref);
+  if (!key) return false;
+  const ctx = await getContext(ref);
+  const patch = resolveClarificationPick(ctx, message);
+  if (!patch) return false;
+  const merged = {
+    ...ctx,
+    entities: { ...ctx.entities, ...patch.entities },
+    workingSet: patch.workingSet ?? ctx.workingSet,
+  };
+  const ttlSeconds = Number.isFinite(config.redis?.contextTtlSeconds)
+    ? config.redis.contextTtlSeconds
+    : 1800;
+  await redisSet(key, JSON.stringify({ ...merged, updatedAt: Date.now() }), {
+    ex: ttlSeconds > 0 ? ttlSeconds : 1800,
+  });
+  return true;
 }
 
 /**
@@ -340,4 +527,20 @@ export async function clearContext(ref) {
   const key = ctxKey(ref);
   if (!key) return;
   await redisDel(key);
+}
+
+/**
+ * Persist full context object to Redis.
+ */
+export async function saveContext(ref, ctx) {
+  const key = ctxKey(ref);
+  if (!key) return;
+  const ttlSeconds = Number.isFinite(config.redis?.contextTtlSeconds)
+    ? config.redis.contextTtlSeconds
+    : 1800;
+  await redisSet(
+    key,
+    JSON.stringify({ ...ctx, updatedAt: Date.now() }),
+    { ex: ttlSeconds > 0 ? ttlSeconds : 1800 },
+  );
 }

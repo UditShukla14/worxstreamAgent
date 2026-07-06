@@ -82,6 +82,7 @@ function ChatPage() {
     currentTools, 
     activityLabel, 
     sendMessage, 
+    confirmAction, 
     loadConversation, 
     resetChat, 
     currentConversationId 
@@ -128,6 +129,7 @@ function ChatPage() {
           currentTools={currentTools}
           activityLabel={activityLabel}
           sendMessage={sendMessage}
+          confirmAction={confirmAction}
         />
       </div>
     </div>

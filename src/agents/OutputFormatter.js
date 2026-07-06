@@ -11,6 +11,13 @@ import { config } from '../config/index.js';
 
 const anthropic = new Anthropic({ apiKey: config.anthropic.apiKey });
 
+/** Remove a markdown code fence wrapper if the model disobeys the no-fence rule. */
+function stripCodeFence(text) {
+  const t = String(text || '').trim();
+  const m = t.match(/^```(?:xml|html|markdown)?\s*([\s\S]*?)\s*```$/i);
+  return m ? m[1].trim() : t;
+}
+
 const FORMATTER_PROMPT = `You are a strict output formatter for Worxstream UI.
 You receive raw data/text from a specialist agent and the user's original question.
 Your ONLY job is to re-format that data into structured XML that the frontend renders.
@@ -21,6 +28,7 @@ RULES:
 - Do NOT call any tools — you only format text.
 - Keep any conversational sentence the agent wrote (e.g. "Found 6 invoices") but convert data into the correct XML structure below.
 - Be concise. No filler.
+- Output the formatted content DIRECTLY. NEVER wrap your output in markdown code fences (\`\`\` or \`\`\`xml) — the frontend renders your output as-is, and fences appear as literal text.
 
 ## WHEN TO USE EACH FORMAT
 
@@ -28,7 +36,8 @@ RULES:
 - **Summary / Overview queries** (user said "overview", "summary", "dashboard", "stats"): <stats> cards + <table>.
 - **Report / Analytics queries** (user said "report", "chart", "analytics", "trends"): **MANDATORY**: <chart> + <stats> cards + <table>. Charts are required for all numerical data.
 - **Detail queries** (user said "details", "full info", "tell me more"): <details> card.
-- **Action queries** (create, update, delete): <alert> with brief confirmation.
+- **Completed actions** (something was created/updated/deleted, or failed): <alert> with ONE brief sentence.
+- **Questions / requests for more information** (the agent needs details from the user before acting): plain conversational text — a short intro sentence, then a numbered list of required fields (use **bold** for field names), then optional fields on separate lines. NEVER use <alert>, <table>, or <details> for questions.
 
 ## XML TAG REFERENCE
 
@@ -66,12 +75,15 @@ Badge colors: badge="success", badge="warning", badge="error"
 4. Line items (<table> per section)
 5. Other info card (<details>) with job, currency, etc.
 
-### <alert> — success / error messages
+### <alert> — success / error messages (ONE short sentence only; never lists or questions)
 <alert type="success">Invoice created successfully!</alert>
 <alert type="error">Failed to create invoice.</alert>
 
-### <workflow> — document flow (wrap JSON)
-<workflow>{ ... }</workflow>
+### <workflow> — NEVER emit this tag yourself
+Workflow tree visualizations are attached automatically by the system after your output.
+For workflow tree/hierarchy/flow queries, write ONE short intro sentence
+(e.g. "Here's the document flow for estimate 26-3000:") — do NOT reproduce the
+tree JSON and do NOT enumerate the nodes in text.
 
 ### <chart> — data visualizations for reports
 <chart type="bar" title="Monthly Sales" color="blue">
@@ -144,7 +156,7 @@ export async function formatOutput(userMessage, rawOutput) {
   });
 
   const textBlocks = response.content.filter(b => b.type === 'text');
-  return textBlocks.map(b => b.text).join('\n');
+  return stripCodeFence(textBlocks.map(b => b.text).join('\n'));
 }
 
 /**
@@ -179,5 +191,7 @@ export async function formatOutputStreaming(userMessage, rawOutput, res) {
     }
   }
 
-  return formatted;
+  // Persist the de-fenced version; the client strips fences from the live
+  // stream on its side (it re-parses the full accumulated text per delta).
+  return stripCodeFence(formatted);
 }

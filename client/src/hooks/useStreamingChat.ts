@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from 'react';
-import { Message, StreamEvent, ToolUsed } from '../types';
+import { ConfirmationData, Message, StreamEvent, ToolUsed } from '../types';
 
 const API_URL = '/api';
 
@@ -81,13 +81,20 @@ export function useStreamingChat() {
   ) => {
     if ((!userMessage.trim() && !files) || isLoading) return;
 
-    // Add user message
+    // Add user message; any open clarification is resolved by sending a message
     const userMsg: Message = {
       id: `user-${Date.now()}`,
       role: 'user',
       content: userMessage || (files?.oldFile && files?.newFile ? 'Compare these stock files' : ''),
     };
-    setMessages(prev => [...prev, userMsg]);
+    setMessages(prev => [
+      ...prev.map(msg =>
+        msg.clarification && !msg.clarification.resolved
+          ? { ...msg, clarification: { ...msg.clarification, resolved: true } }
+          : msg
+      ),
+      userMsg,
+    ]);
     setIsLoading(true);
     setCurrentTools([]);
     setActivityLabel(null);
@@ -199,6 +206,37 @@ export function useStreamingChat() {
                   }
                   break;
 
+                case 'clarification':
+                  if (event.question && event.options?.length) {
+                    const clarification = { question: event.question, options: event.options };
+                    setMessages(prev =>
+                      prev.map(msg =>
+                        msg.id === assistantMsgId
+                          ? { ...msg, isStreaming: false, clarification }
+                          : msg
+                      )
+                    );
+                  }
+                  break;
+
+                case 'confirmation_required':
+                  if (event.confirmationId && event.tool) {
+                    const confirmation: ConfirmationData = {
+                      confirmationId: event.confirmationId,
+                      tool: event.tool,
+                      input: event.input,
+                      status: 'pending',
+                    };
+                    setMessages(prev =>
+                      prev.map(msg =>
+                        msg.id === assistantMsgId
+                          ? { ...msg, isStreaming: false, confirmation }
+                          : msg
+                      )
+                    );
+                  }
+                  break;
+
                 case 'done':
                   setMessages(prev => 
                     prev.map(msg => 
@@ -243,11 +281,68 @@ export function useStreamingChat() {
         )
       );
     } finally {
+      // Safety net: if the stream closed without a `done` event, never leave
+      // the assistant message stuck in the streaming/skeleton state.
+      setMessages(prev =>
+        prev.map(msg =>
+          msg.id === assistantMsgId && msg.isStreaming
+            ? { ...msg, isStreaming: false }
+            : msg
+        )
+      );
       setIsLoading(false);
       setCurrentTools([]);
       setActivityLabel(null);
     }
   }, [isLoading]);
+
+  /** Approve or reject a pending write confirmation via POST /api/agents/confirm. */
+  const confirmAction = useCallback(async (
+    messageId: string,
+    confirmationId: string,
+    approved: boolean,
+  ) => {
+    const patchConfirmation = (patch: Partial<ConfirmationData>) => {
+      setMessages(prev =>
+        prev.map(msg =>
+          msg.id === messageId && msg.confirmation
+            ? { ...msg, confirmation: { ...msg.confirmation, ...patch } }
+            : msg
+        )
+      );
+    };
+
+    patchConfirmation({ status: 'processing', error: undefined });
+
+    try {
+      const { companyId, userId } = getIdentity();
+      const response = await fetch(`${API_URL}/agents/confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversation_id: conversationIdRef.current,
+          confirmationId,
+          approved,
+          companyId,
+          userId,
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        patchConfirmation({
+          status: 'error',
+          error: data?.error || `HTTP error! status: ${response.status}`,
+        });
+        return;
+      }
+
+      patchConfirmation({ status: data.approved ? 'approved' : 'cancelled' });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      patchConfirmation({ status: 'error', error: errorMessage });
+    }
+  }, []);
 
   const resetChat = useCallback(() => {
     setMessages([]);
@@ -261,6 +356,7 @@ export function useStreamingChat() {
     /** Backend-driven status label; null = use default in ActivityStatus */
     activityLabel,
     sendMessage,
+    confirmAction,
     resetChat,
     loadConversation,
     currentConversationId: conversationIdRef.current,
