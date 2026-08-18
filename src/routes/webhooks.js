@@ -9,6 +9,7 @@
 import { Router } from 'express';
 import { acceptGovernanceEvent } from '../control/ingestEvent.js';
 import { eventFromWorxstreamWebhook } from '../control/fromDelivery.js';
+import { recordInboundDelivery } from '../control/recordInboundDelivery.js';
 
 const router = Router();
 
@@ -41,8 +42,50 @@ router.post('/worxstream', async (req, res) => {
       return res.status(400).json({ success: false, error: 'company_id is required' });
     }
 
-    const result = await acceptGovernanceEvent(event);
-    return res.json({ success: true, ...result });
+    const endpointUrl = `${req.protocol}://${req.get('host')}${req.originalUrl.split('?')[0]}`;
+    const requestHeaders = {
+      ...(req.headers['x-worxstream-event'] ? { 'x-worxstream-event': String(req.headers['x-worxstream-event']) } : {}),
+      ...(req.headers['x-worxstream-delivery-id']
+        ? { 'x-worxstream-delivery-id': String(req.headers['x-worxstream-delivery-id']) }
+        : {}),
+      ...(req.headers['content-type'] ? { 'content-type': String(req.headers['content-type']) } : {}),
+    };
+
+    try {
+      const result = await acceptGovernanceEvent(event);
+      await recordInboundDelivery({
+        companyId: event.company_id,
+        deliveryId: result.event_id,
+        eventId: result.event_id,
+        eventCode: result.event_type,
+        objectType: String(result.event_type || '').split('.')[0],
+        endpointUrl,
+        status: 'sent',
+        requestHeaders: Object.keys(requestHeaders).length ? requestHeaders : null,
+        requestPayload: event.payload,
+        responseStatus: 200,
+        responseBodyExcerpt: JSON.stringify({ success: true, ...result }).slice(0, 500),
+        sentAt: event.timestamp ? new Date(event.timestamp) : new Date(),
+      });
+      return res.json({ success: true, ...result });
+    } catch (error) {
+      const status = error.status || 500;
+      await recordInboundDelivery({
+        companyId: event.company_id,
+        deliveryId: event.event_id || req.headers['x-worxstream-delivery-id'],
+        eventId: event.event_id || req.headers['x-worxstream-delivery-id'],
+        eventCode: event.event_type,
+        objectType: String(event.event_type || '').split('.')[0],
+        endpointUrl,
+        status: 'failed',
+        requestHeaders: Object.keys(requestHeaders).length ? requestHeaders : null,
+        requestPayload: event.payload,
+        responseStatus: status,
+        errorMessage: error.message,
+        sentAt: new Date(),
+      }).catch(() => {});
+      throw error;
+    }
   } catch (error) {
     const status = error.status || 500;
     if (status >= 500) {

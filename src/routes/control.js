@@ -9,6 +9,7 @@ import GovernanceRule from '../models/GovernanceRule.js';
 import PipelineRun from '../models/PipelineRun.js';
 import GovernanceAlert from '../models/GovernanceAlert.js';
 import HiddenWebhookDelivery from '../models/HiddenWebhookDelivery.js';
+import WebhookDelivery from '../models/WebhookDelivery.js';
 import {
   GOVERNANCE_AGENT_DEFINITIONS,
   getGovernanceAgentName,
@@ -144,6 +145,75 @@ function parseIdList(value) {
   return [];
 }
 
+function parseListPage(req, defaultPerPage = 20) {
+  const perPage = Math.min(
+    100,
+    Math.max(1, parseInt(String(req.query.per_page || req.query.limit || String(defaultPerPage)), 10) || defaultPerPage),
+  );
+  const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+  return { page, perPage };
+}
+
+function clampListPage(page, perPage, total) {
+  const lastPage = Math.max(1, Math.ceil(total / perPage) || 1);
+  const currentPage = page > lastPage ? lastPage : page;
+  return {
+    skip: (currentPage - 1) * perPage,
+    pagination: { currentPage, lastPage, perPage, total },
+  };
+}
+
+function isoDate(value) {
+  if (!value) return '';
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toISOString();
+}
+
+function deliveryToApi(doc) {
+  const objectIdRaw = doc.object_id;
+  const objectIdNum = objectIdRaw != null && objectIdRaw !== '' ? Number(objectIdRaw) : null;
+  return {
+    deliveryId: doc.delivery_id,
+    eventRunId: doc.event_id || null,
+    companyId: Number.parseInt(doc.company_id, 10) || doc.company_id,
+    webhookSubscriptionId: 0,
+    eventCode: doc.event_code || '',
+    payloadVersion: '',
+    objectType: doc.object_type || '',
+    objectId: Number.isFinite(objectIdNum) ? objectIdNum : null,
+    endpointUrl: doc.endpoint_url || '',
+    status: doc.status || 'sent',
+    attempts: doc.attempts || 1,
+    maxAttempts: doc.max_attempts || 1,
+    requestHeaders: doc.request_headers || null,
+    requestPayload: doc.request_payload ?? null,
+    createdAt: isoDate(doc.created_at || doc.sent_at),
+    updatedAt: isoDate(doc.updated_at || doc.sent_at),
+    lastAttemptedAt: isoDate(doc.sent_at) || null,
+    nextRetryAt: null,
+    errorMessage: doc.error_message || null,
+    responseBodyExcerpt: doc.response_body_excerpt || null,
+    responseStatus: doc.response_status ?? null,
+    sentAt: isoDate(doc.sent_at) || null,
+  };
+}
+
+async function migrateHiddenDeliveryFlags(companyId) {
+  const hidden = await HiddenWebhookDelivery.find({ company_id: companyId }).select('delivery_id deleted_at').lean();
+  if (hidden.length === 0) return;
+  await WebhookDelivery.bulkWrite(
+    hidden.map((row) => ({
+      updateOne: {
+        filter: { company_id: companyId, delivery_id: String(row.delivery_id) },
+        update: { $set: { deleted_at: row.deleted_at || new Date() } },
+        upsert: true,
+      },
+    })),
+    { ordered: false },
+  );
+  await HiddenWebhookDelivery.deleteMany({ company_id: companyId });
+}
+
 function startOfToday() {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
@@ -176,8 +246,15 @@ router.get('/pipelines', (_req, res) => {
 
 router.get('/policies', async (req, res, next) => {
   try {
-    const rows = await GovernancePolicy.find({ company_id: req.companyId }).sort({ updated_at: -1 });
-    res.json({ success: true, data: rows.map(policyToApi) });
+    const filter = { company_id: req.companyId };
+    const { page, perPage } = parseListPage(req);
+    const total = await GovernancePolicy.countDocuments(filter);
+    const sliced = clampListPage(page, perPage, total);
+    const rows = await GovernancePolicy.find(filter)
+      .sort({ updated_at: -1 })
+      .skip(sliced.skip)
+      .limit(perPage);
+    res.json({ success: true, data: rows.map(policyToApi), pagination: sliced.pagination });
   } catch (error) {
     next(error);
   }
@@ -253,8 +330,15 @@ router.delete('/policies/:id', async (req, res, next) => {
 
 router.get('/rules', async (req, res, next) => {
   try {
-    const rows = await GovernanceRule.find({ company_id: req.companyId }).sort({ priority: 1, updated_at: -1 });
-    res.json({ success: true, data: rows.map(ruleToApi) });
+    const filter = { company_id: req.companyId };
+    const { page, perPage } = parseListPage(req);
+    const total = await GovernanceRule.countDocuments(filter);
+    const sliced = clampListPage(page, perPage, total);
+    const rows = await GovernanceRule.find(filter)
+      .sort({ priority: 1, updated_at: -1 })
+      .skip(sliced.skip)
+      .limit(perPage);
+    res.json({ success: true, data: rows.map(ruleToApi), pagination: sliced.pagination });
   } catch (error) {
     next(error);
   }
@@ -352,9 +436,18 @@ router.get('/runs', async (req, res, next) => {
     if (req.query.status && req.query.status !== 'all') {
       filter.$and[0].status = String(req.query.status);
     }
-    const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit || '50'), 10) || 50));
-    const rows = await PipelineRun.find(filter).sort({ timestamp: -1 }).limit(limit);
-    res.json({ success: true, data: rows.map(runToApi) });
+    const { page, perPage } = parseListPage(req);
+    const total = await PipelineRun.countDocuments(filter);
+    const sliced = clampListPage(page, perPage, total);
+    const rows = await PipelineRun.find(filter)
+      .sort({ timestamp: -1 })
+      .skip(sliced.skip)
+      .limit(perPage);
+    res.json({
+      success: true,
+      data: rows.map(runToApi),
+      pagination: sliced.pagination,
+    });
   } catch (error) {
     next(error);
   }
@@ -407,12 +500,27 @@ router.post('/runs/delete', async (req, res, next) => {
   }
 });
 
-router.get('/deliveries/hidden', async (req, res, next) => {
+router.get('/deliveries', async (req, res, next) => {
   try {
-    const rows = await HiddenWebhookDelivery.find({ company_id: req.companyId }).select('delivery_id').lean();
+    await migrateHiddenDeliveryFlags(req.companyId);
+    const filter = activeRunQuery({ company_id: req.companyId });
+    if (req.query.event_code && String(req.query.event_code).trim()) {
+      filter.$and[0].event_code = String(req.query.event_code).trim();
+    }
+    if (req.query.status && req.query.status !== 'all' && String(req.query.status).trim()) {
+      filter.$and[0].status = String(req.query.status).trim();
+    }
+    const { page, perPage } = parseListPage(req);
+    const total = await WebhookDelivery.countDocuments(filter);
+    const sliced = clampListPage(page, perPage, total);
+    const rows = await WebhookDelivery.find(filter)
+      .sort({ sent_at: -1 })
+      .skip(sliced.skip)
+      .limit(perPage);
     res.json({
       success: true,
-      data: rows.map((row) => String(row.delivery_id)),
+      data: rows.map(deliveryToApi),
+      pagination: sliced.pagination,
     });
   } catch (error) {
     next(error);
@@ -421,21 +529,16 @@ router.get('/deliveries/hidden', async (req, res, next) => {
 
 router.post('/deliveries/delete', async (req, res, next) => {
   try {
+    await migrateHiddenDeliveryFlags(req.companyId);
     const deliveryIds = parseIdList(req.body?.delivery_ids ?? req.body?.deliveryIds);
     if (deliveryIds.length === 0) {
       return res.status(400).json({ success: false, error: 'delivery_ids is required' });
     }
-    const now = new Date();
-    await HiddenWebhookDelivery.bulkWrite(
-      deliveryIds.map((deliveryId) => ({
-        updateOne: {
-          filter: { company_id: req.companyId, delivery_id: deliveryId },
-          update: { $set: { deleted_at: now } },
-          upsert: true,
-        },
-      })),
+    const result = await WebhookDelivery.updateMany(
+      activeRunQuery({ company_id: req.companyId, delivery_id: { $in: deliveryIds } }),
+      { $set: { deleted_at: new Date() } },
     );
-    res.json({ success: true, data: { deleted: deliveryIds.length } });
+    res.json({ success: true, data: { deleted: result.modifiedCount || 0 } });
   } catch (error) {
     next(error);
   }
@@ -452,9 +555,14 @@ router.get('/alerts', async (req, res, next) => {
     if (req.query.status && req.query.status !== 'all') {
       filter.status = String(req.query.status);
     }
-    const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit || '50'), 10) || 50));
-    const rows = await GovernanceAlert.find(filter).sort({ timestamp: -1 }).limit(limit);
-    res.json({ success: true, data: rows.map(alertToApi) });
+    const { page, perPage } = parseListPage(req);
+    const total = await GovernanceAlert.countDocuments(filter);
+    const sliced = clampListPage(page, perPage, total);
+    const rows = await GovernanceAlert.find(filter)
+      .sort({ timestamp: -1 })
+      .skip(sliced.skip)
+      .limit(perPage);
+    res.json({ success: true, data: rows.map(alertToApi), pagination: sliced.pagination });
   } catch (error) {
     next(error);
   }

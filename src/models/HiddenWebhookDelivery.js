@@ -1,8 +1,9 @@
 import mongoose from 'mongoose';
 
 /**
- * Control Tower hide-list for WorxStream webhook deliveries.
- * Source rows stay in WorxStream; this is a company-scoped soft delete.
+ * Legacy hide-list for WorxStream webhook deliveries.
+ * Migrated onto WebhookDelivery.deleted_at by GET/POST /api/control/deliveries.
+ * Do not add new writes here.
  */
 const hiddenWebhookDeliverySchema = new mongoose.Schema({
   company_id: { type: String, required: true, index: true },

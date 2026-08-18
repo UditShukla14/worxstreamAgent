@@ -47,7 +47,7 @@ const corsOptions = {
       }
     : true,
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Worxstream-Webhook-Secret'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Worxstream-Webhook-Secret'],
   credentials: true,
   exposedHeaders: ['Content-Length', 'X-Request-ID'],
 };
