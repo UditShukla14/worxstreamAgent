@@ -43,7 +43,7 @@ const PRODUCT_KEYS = [
 const LINE_KEYS = [
   'product_id', 'productId', 'name', 'title', 'sku', 'product_number',
   'model_number', 'quantity', 'qty', 'unit_price', 'sales_price',
-  'cost', 'cost_price', 'contract_cost',
+  'cost', 'cost_price', 'contract_cost', 'product_service_id', 'productServiceId',
 ];
 
 function asNumber(value) {
@@ -134,6 +134,8 @@ function compactLineItem(record) {
   const line = pick(record, LINE_KEYS);
   const productId = asNumber(record.product_id ?? record.productId);
   if (productId != null) line.product_id = productId;
+  const productServiceId = asNumber(record.product_service_id ?? record.productServiceId);
+  if (productServiceId != null) line.product_service_id = productServiceId;
   const qty = asNumber(record.quantity ?? record.qty);
   if (qty != null) line.quantity = qty;
   return line;
@@ -193,7 +195,13 @@ async function resolveLatestId(appName, idKey, snapshot) {
 }
 
 async function hydrateProducts(snapshot, lines) {
-  const ids = [...new Set(lines.map((line) => asNumber(line.product_id)).filter((id) => id != null))].slice(0, 15);
+  const ids = [
+    ...new Set(
+      lines
+        .map((line) => asNumber(line.product_id ?? line.product_service_id))
+        .filter((id) => id != null),
+    ),
+  ].slice(0, 15);
   const { companyId, userId } = getWorxstreamContext();
   const products = await Promise.all(ids.map(async (id) => {
     const result = await callWorxstreamAPI({

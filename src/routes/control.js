@@ -93,6 +93,7 @@ function runToApi(doc) {
       agentKey: step.agentKey,
       agentName: step.agentName,
       verdict: step.verdict,
+      message: step.message || '',
       responseExcerpt: step.responseExcerpt,
       toolsUsed: (step.toolsUsed || []).map((tool) => ({
         name: tool.name,
@@ -169,7 +170,9 @@ router.post('/ingest-delivery', async (req, res, next) => {
     const deliveryCompany = delivery.companyId ?? delivery.company_id;
     const deliveryCompanyId = deliveryCompany != null ? String(deliveryCompany).trim() : '';
     if (deliveryCompanyId && deliveryCompanyId !== '0' && deliveryCompanyId !== String(req.companyId)) {
-      return res.status(403).json({ success: false, error: 'delivery company_id does not match' });
+      console.warn(
+        `⚠️  ingest-delivery company mismatch: session=${String(req.companyId)} delivery=${deliveryCompanyId}. Continuing with session company.`,
+      );
     }
 
     const userId = req.body?.user_id ?? req.query.user_id ?? req.query.userId;
