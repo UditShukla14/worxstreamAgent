@@ -2,12 +2,13 @@
  * Worxstream webhooks — event-driven governance pipeline.
  *
  * POST /api/webhooks/worxstream
- * Verifies secret, dedupes by event_id, responds 200, then runs the
- * master-agent pipeline asynchronously (Control Tower, not chat coworker).
+ * Verifies optional shared secret, normalizes the catalog payload, dedupes
+ * by event_id, responds 200, then runs the pipeline asynchronously.
  */
 
 import { Router } from 'express';
 import { acceptGovernanceEvent } from '../control/ingestEvent.js';
+import { eventFromWorxstreamWebhook } from '../control/fromDelivery.js';
 
 const router = Router();
 
@@ -20,7 +21,8 @@ function verifyWebhook(req) {
 
 /**
  * POST /api/webhooks/worxstream
- * Body: { event_type, event_id, timestamp, company_id, user_id, payload }
+ * Accepts the governance envelope or a Worxstream catalog POST
+ * ({ event_code, object_id, company_id, payload }).
  */
 router.post('/worxstream', async (req, res) => {
   try {
@@ -28,7 +30,15 @@ router.post('/worxstream', async (req, res) => {
       return res.status(401).json({ success: false, error: 'Invalid webhook secret' });
     }
 
-    const result = await acceptGovernanceEvent(req.body || {});
+    const event = eventFromWorxstreamWebhook(req.body || {});
+    if (!event.event_type) {
+      return res.status(400).json({ success: false, error: 'event_type or event_code is required' });
+    }
+    if (!event.company_id) {
+      return res.status(400).json({ success: false, error: 'company_id is required' });
+    }
+
+    const result = await acceptGovernanceEvent(event);
     return res.json({ success: true, ...result });
   } catch (error) {
     const status = error.status || 500;

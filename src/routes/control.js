@@ -15,8 +15,6 @@ import {
   countActivePipelines,
   reindexDocument,
   removeDocumentChunks,
-  acceptGovernanceEvent,
-  eventFromWorxstreamDelivery,
   stopPipelineRun,
   restartPipelineRun,
 } from '../control/index.js';
@@ -154,53 +152,6 @@ router.get('/agents', (_req, res) => {
 
 router.get('/pipelines', (_req, res) => {
   res.json({ success: true, data: listPipelines() });
-});
-
-/**
- * Control Tower forwards Worxstream deliveries here because the cloud
- * backend cannot POST to a local agent. No webhook secret — company_id
- * from the session/body is the tenant gate.
- */
-router.post('/ingest-delivery', async (req, res, next) => {
-  try {
-    const delivery = req.body?.delivery && typeof req.body.delivery === 'object'
-      ? req.body.delivery
-      : (req.body || {});
-
-    const deliveryCompany = delivery.companyId ?? delivery.company_id;
-    const deliveryCompanyId = deliveryCompany != null ? String(deliveryCompany).trim() : '';
-    if (deliveryCompanyId && deliveryCompanyId !== '0' && deliveryCompanyId !== String(req.companyId)) {
-      console.warn(
-        `⚠️  ingest-delivery company mismatch: session=${String(req.companyId)} delivery=${deliveryCompanyId}. Continuing with session company.`,
-      );
-    }
-
-    const userId = req.body?.user_id ?? req.query.user_id ?? req.query.userId;
-    const event = eventFromWorxstreamDelivery(delivery, {
-      companyId: req.companyId,
-      userId,
-    });
-
-    if (!event.event_type) {
-      return res.status(400).json({ success: false, error: 'Could not determine event_type from delivery' });
-    }
-    if (!event.event_id) {
-      return res.status(400).json({ success: false, error: 'deliveryId is required' });
-    }
-
-    console.log(
-      `🛡️  Ingest delivery ${delivery.deliveryId || delivery.delivery_id || event.event_id} → ${event.event_type}`,
-    );
-
-    const result = await acceptGovernanceEvent(event);
-    res.json({
-      success: true,
-      delivery_id: String(delivery.deliveryId || delivery.delivery_id || ''),
-      ...result,
-    });
-  } catch (error) {
-    next(error);
-  }
 });
 
 // ── Policies ─────────────────────────────────────────────────────────

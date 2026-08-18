@@ -1,6 +1,6 @@
 /**
- * Map a Worxstream webhook delivery (Control Tower list API) into a
- * governance pipeline event.
+ * Normalize a Worxstream webhook POST (or a delivery-list row) into a
+ * governance pipeline event. Production traffic is the direct POST body.
  */
 
 import { normalizeEventType } from './pipelineConfig.js';
@@ -19,6 +19,14 @@ const ENVELOPE_KEYS = new Set([
   'userId',
   'payload',
   'data',
+  'object_type',
+  'objectType',
+  'object_id',
+  'objectId',
+  'deliveryId',
+  'delivery_id',
+  'requestPayload',
+  'request_payload',
 ]);
 
 function asObject(value) {
@@ -47,59 +55,84 @@ function objectIdKey(objectType) {
   return `${type}_id`;
 }
 
+function copyNonEnvelopeFields(source, target) {
+  if (!source) return;
+  for (const [key, value] of Object.entries(source)) {
+    if (ENVELOPE_KEYS.has(key)) continue;
+    if (target[key] == null) target[key] = value;
+  }
+}
+
 /**
- * @param {object} delivery
- * @param {{ companyId: string, userId?: string }} ids
+ * @param {object} body  Direct webhook POST, or a Control Tower delivery row.
+ * @param {{ companyId?: string, userId?: string }} [ids]
  */
-export function eventFromWorxstreamDelivery(delivery, ids) {
-  const row = delivery && typeof delivery === 'object' ? delivery : {};
-  const raw = asObject(row.requestPayload)
-    || asObject(row.request_payload)
-    || {};
-  const nestedCandidate = asObject(raw.payload) || asObject(raw.data);
+export function eventFromWorxstreamWebhook(body, ids = {}) {
+  const row = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
+  const wrapped = asObject(row.requestPayload) || asObject(row.request_payload);
+  const envelope = wrapped || row;
+  const nestedCandidate = asObject(envelope.payload) || asObject(envelope.data);
   const nested = isNonEmptyObject(nestedCandidate) ? nestedCandidate : null;
 
   const payload = nested ? { ...nested } : {};
-  if (!nested) {
-    for (const [key, value] of Object.entries(raw)) {
-      if (!ENVELOPE_KEYS.has(key)) payload[key] = value;
-    }
-  }
+  if (!nested) copyNonEnvelopeFields(envelope, payload);
 
   const eventType = normalizeEventType(
-    raw.event_type
-      || raw.eventType
+    envelope.event_type
+      || envelope.eventType
+      || envelope.event_code
+      || envelope.eventCode
       || row.eventCode
       || row.event_code
       || '',
   );
 
-  const objectType = row.objectType || row.object_type || eventType.split('.')[0];
-  const objectId = row.objectId ?? row.object_id;
+  const objectType = envelope.object_type
+    || envelope.objectType
+    || row.objectType
+    || row.object_type
+    || eventType.split('.')[0];
+  const objectId = envelope.object_id ?? envelope.objectId ?? row.objectId ?? row.object_id;
   const idKey = objectIdKey(objectType);
   if (idKey && objectId != null && payload[idKey] == null) {
     payload[idKey] = objectId;
   }
 
   const eventId = String(
-    raw.event_id
-      || raw.eventId
+    envelope.event_id
+      || envelope.eventId
       || row.deliveryId
       || row.delivery_id
       || '',
   ).trim();
 
+  const companyId = envelope.company_id
+    ?? envelope.companyId
+    ?? row.companyId
+    ?? row.company_id
+    ?? ids.companyId;
+  const userId = envelope.user_id
+    ?? envelope.userId
+    ?? row.userId
+    ?? row.user_id
+    ?? ids.userId;
+
   return {
     event_type: eventType,
     event_id: eventId,
-    timestamp: raw.timestamp
+    timestamp: envelope.timestamp
       || row.sentAt
       || row.sent_at
       || row.createdAt
       || row.created_at
       || new Date().toISOString(),
-    company_id: String(ids.companyId),
-    user_id: ids.userId != null ? String(ids.userId) : undefined,
+    company_id: companyId != null && String(companyId).trim() ? String(companyId).trim() : undefined,
+    user_id: userId != null && String(userId).trim() ? String(userId).trim() : undefined,
     payload,
   };
+}
+
+/** @deprecated Use eventFromWorxstreamWebhook — kept for existing tests. */
+export function eventFromWorxstreamDelivery(delivery, ids) {
+  return eventFromWorxstreamWebhook(delivery, ids);
 }

@@ -46,8 +46,8 @@ const corsOptions = {
         return callback(null, false);
       }
     : true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Worxstream-Webhook-Secret'],
   credentials: true,
   exposedHeaders: ['Content-Length', 'X-Request-ID'],
 };
@@ -110,7 +110,6 @@ async function startServer() {
       console.log(`  GET    ${url}/api/control/rules      - Rules CRUD`);
       console.log(`  GET    ${url}/api/control/runs       - Pipeline run audit`);
       console.log(`  GET    ${url}/api/control/alerts     - Governance alerts`);
-      console.log(`  POST   ${url}/api/control/ingest-delivery - Control Tower → pipeline`);
       console.log(`  POST   ${url}/api/webhooks/worxstream - Worxstream events → pipeline`);
       console.log(`  GET    ${url}/health                 - Health check`);
       console.log('='.repeat(60));

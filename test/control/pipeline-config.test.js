@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { getPipelineForEvent, listPipelines } from '../../src/control/pipelineConfig.js';
-import { eventFromWorxstreamDelivery } from '../../src/control/fromDelivery.js';
+import { eventFromWorxstreamDelivery, eventFromWorxstreamWebhook } from '../../src/control/fromDelivery.js';
 import { isChildAgentKey } from '../../src/agents/agentDefinitions.js';
 import { isGovernanceAgentKey } from '../../src/control/governanceAgents.js';
 import { parseAgentVerdict, parseGovernanceFindings, runStatusFromSteps, stripJsonCodeFence } from '../../src/control/parseVerdict.js';
@@ -103,6 +103,27 @@ describe('eventFromWorxstreamDelivery', () => {
     );
 
     assert.equal(event.payload.estimate_id, 99);
+  });
+});
+
+describe('eventFromWorxstreamWebhook', () => {
+  it('maps a native Worxstream catalog POST into a pipeline event', () => {
+    const event = eventFromWorxstreamWebhook({
+      event_code: 'estimate_created',
+      event_id: 'whd_20260818_gkpvxgjw78xn',
+      company_id: 30000000021,
+      user_id: 10000000010,
+      object_type: 'estimate',
+      object_id: 80000019668,
+      payload: { estimate_number: '80000019668', productServiceId: 220000002237 },
+    });
+
+    assert.equal(event.event_type, 'estimate.created');
+    assert.equal(event.event_id, 'whd_20260818_gkpvxgjw78xn');
+    assert.equal(event.company_id, '30000000021');
+    assert.equal(event.user_id, '10000000010');
+    assert.equal(event.payload.estimate_id, 80000019668);
+    assert.equal(event.payload.productServiceId, 220000002237);
   });
 });
 
