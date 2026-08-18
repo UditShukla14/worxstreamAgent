@@ -20,6 +20,7 @@ import {
   stopPipelineRun,
   restartPipelineRun,
 } from '../control/index.js';
+import { callWorxstreamAPI } from '../services/httpClient.js';
 
 const router = Router();
 
@@ -41,6 +42,14 @@ function companyIdFromReq(req) {
     ?? req.query.companyId
     ?? req.body?.company_id
     ?? req.body?.companyId;
+  return raw != null && String(raw).trim() ? String(raw).trim() : '';
+}
+
+function userIdFromReq(req) {
+  const raw = req.query.user_id
+    ?? req.query.userId
+    ?? req.body?.user_id
+    ?? req.body?.userId;
   return raw != null && String(raw).trim() ? String(raw).trim() : '';
 }
 
@@ -163,39 +172,57 @@ function clampListPage(page, perPage, total) {
   };
 }
 
-function isoDate(value) {
-  if (!value) return '';
-  const date = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toISOString();
+function deliveryIdFromRow(row) {
+  if (!row || typeof row !== 'object') return '';
+  return String(row.deliveryId ?? row.delivery_id ?? row.id ?? '').trim();
 }
 
-function deliveryToApi(doc) {
-  const objectIdRaw = doc.object_id;
-  const objectIdNum = objectIdRaw != null && objectIdRaw !== '' ? Number(objectIdRaw) : null;
-  return {
-    deliveryId: doc.delivery_id,
-    eventRunId: doc.event_id || null,
-    companyId: Number.parseInt(doc.company_id, 10) || doc.company_id,
-    webhookSubscriptionId: 0,
-    eventCode: doc.event_code || '',
-    payloadVersion: '',
-    objectType: doc.object_type || '',
-    objectId: Number.isFinite(objectIdNum) ? objectIdNum : null,
-    endpointUrl: doc.endpoint_url || '',
-    status: doc.status || 'sent',
-    attempts: doc.attempts || 1,
-    maxAttempts: doc.max_attempts || 1,
-    requestHeaders: doc.request_headers || null,
-    requestPayload: doc.request_payload ?? null,
-    createdAt: isoDate(doc.created_at || doc.sent_at),
-    updatedAt: isoDate(doc.updated_at || doc.sent_at),
-    lastAttemptedAt: isoDate(doc.sent_at) || null,
-    nextRetryAt: null,
-    errorMessage: doc.error_message || null,
-    responseBodyExcerpt: doc.response_body_excerpt || null,
-    responseStatus: doc.response_status ?? null,
-    sentAt: isoDate(doc.sent_at) || null,
-  };
+function laravelDeliveriesList(result) {
+  if (!result || result.success === false) {
+    return {
+      ok: false,
+      error: result?.error || 'WorxStream deliveries could not be retrieved.',
+      items: [],
+      pagination: null,
+    };
+  }
+
+  let envelope = result.data;
+  if (envelope && typeof envelope === 'object' && !Array.isArray(envelope) && envelope.data && typeof envelope.data === 'object' && !Array.isArray(envelope.data) && Array.isArray(envelope.data.data)) {
+    envelope = envelope.data;
+  }
+
+  const items = Array.isArray(envelope)
+    ? envelope
+    : Array.isArray(envelope?.data)
+      ? envelope.data
+      : Array.isArray(envelope?.items)
+        ? envelope.items
+        : [];
+  const pagination = (!Array.isArray(envelope) && envelope?.pagination) || null;
+  return { ok: true, items, pagination };
+}
+
+function listPaginationFromLaravel(pagination, page, perPage, visibleCount) {
+  if (pagination && typeof pagination === 'object') {
+    return {
+      currentPage: Number(pagination.currentPage ?? page) || page,
+      lastPage: Number(pagination.lastPage ?? 1) || 1,
+      perPage: Number(pagination.perPage ?? pagination.limit ?? perPage) || perPage,
+      total: Number(pagination.total ?? 0) || 0,
+    };
+  }
+  return clampListPage(page, perPage, visibleCount).pagination;
+}
+
+async function deletedDeliveryIdsFor(companyId, ids) {
+  if (ids.length === 0) return new Set();
+  const rows = await WebhookDelivery.find({
+    company_id: companyId,
+    delivery_id: { $in: ids },
+    deleted_at: { $ne: null },
+  }).select('delivery_id').lean();
+  return new Set(rows.map((row) => String(row.delivery_id)));
 }
 
 async function migrateHiddenDeliveryFlags(companyId) {
@@ -503,25 +530,56 @@ router.post('/runs/delete', async (req, res, next) => {
 router.get('/deliveries', async (req, res, next) => {
   try {
     await migrateHiddenDeliveryFlags(req.companyId);
-    const filter = activeRunQuery({ company_id: req.companyId });
-    if (req.query.event_code && String(req.query.event_code).trim()) {
-      filter.$and[0].event_code = String(req.query.event_code).trim();
+    const userId = userIdFromReq(req);
+    if (!userId) {
+      return res.status(400).json({ success: false, error: 'user_id is required' });
     }
-    if (req.query.status && req.query.status !== 'all' && String(req.query.status).trim()) {
-      filter.$and[0].status = String(req.query.status).trim();
-    }
+
     const { page, perPage } = parseListPage(req);
-    const total = await WebhookDelivery.countDocuments(filter);
-    const sliced = clampListPage(page, perPage, total);
-    const rows = await WebhookDelivery.find(filter)
-      .sort({ sent_at: -1 })
-      .skip(sliced.skip)
-      .limit(perPage);
+    const eventCode = req.query.event_code ? String(req.query.event_code).trim() : '';
+    const status = req.query.status && req.query.status !== 'all'
+      ? String(req.query.status).trim()
+      : '';
+
+    const result = await callWorxstreamAPI({
+      method: 'GET',
+      endpoint: '/company/webhooks/deliveries/list',
+      data: {
+        company_id: req.companyId,
+        user_id: userId,
+        page,
+        per_page: perPage,
+        ...(eventCode ? { event_code: eventCode } : {}),
+        ...(status ? { status } : {}),
+      },
+    });
+
+    const parsed = laravelDeliveriesList(result);
+    if (!parsed.ok) {
+      return res.status(502).json({ success: false, error: parsed.error });
+    }
+
+    const ids = parsed.items.map(deliveryIdFromRow).filter(Boolean);
+    const deleted = await deletedDeliveryIdsFor(req.companyId, ids);
+    const visible = parsed.items.filter((row) => !deleted.has(deliveryIdFromRow(row)));
+
     res.json({
       success: true,
-      data: rows.map(deliveryToApi),
-      pagination: sliced.pagination,
+      data: visible,
+      pagination: listPaginationFromLaravel(parsed.pagination, page, perPage, visible.length),
+      source: 'worxstream',
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/deliveries/deleted-among', async (req, res, next) => {
+  try {
+    await migrateHiddenDeliveryFlags(req.companyId);
+    const deliveryIds = parseIdList(req.body?.delivery_ids ?? req.body?.deliveryIds);
+    const deleted = await deletedDeliveryIdsFor(req.companyId, deliveryIds);
+    res.json({ success: true, data: [...deleted] });
   } catch (error) {
     next(error);
   }
@@ -534,11 +592,19 @@ router.post('/deliveries/delete', async (req, res, next) => {
     if (deliveryIds.length === 0) {
       return res.status(400).json({ success: false, error: 'delivery_ids is required' });
     }
-    const result = await WebhookDelivery.updateMany(
-      activeRunQuery({ company_id: req.companyId, delivery_id: { $in: deliveryIds } }),
-      { $set: { deleted_at: new Date() } },
+    const deletedAt = new Date();
+    const result = await WebhookDelivery.bulkWrite(
+      deliveryIds.map((deliveryId) => ({
+        updateOne: {
+          filter: { company_id: req.companyId, delivery_id: deliveryId },
+          update: { $set: { deleted_at: deletedAt } },
+          upsert: true,
+        },
+      })),
+      { ordered: false },
     );
-    res.json({ success: true, data: { deleted: result.modifiedCount || 0 } });
+    const deleted = (result.modifiedCount || 0) + (result.upsertedCount || 0);
+    res.json({ success: true, data: { deleted } });
   } catch (error) {
     next(error);
   }

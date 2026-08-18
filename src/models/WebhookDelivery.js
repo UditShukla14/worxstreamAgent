@@ -1,8 +1,9 @@
 import mongoose from 'mongoose';
 
 /**
- * Inbound WorxStream webhook deliveries received by the agent.
- * Soft-delete with deleted_at — list queries omit those rows (same as PipelineRun).
+ * Inbound WorxStream webhook deliveries received by the agent, plus
+ * deleted_at flags for Laravel delivery rows that were never ingested.
+ * The deliveries table itself is still Laravel GET /company/webhooks/deliveries/list.
  */
 const webhookDeliverySchema = new mongoose.Schema({
   company_id: { type: String, required: true, index: true },
