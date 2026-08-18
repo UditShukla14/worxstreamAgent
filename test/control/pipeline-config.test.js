@@ -226,9 +226,10 @@ describe('parseGovernanceFindings', () => {
 });
 
 describe('context builder + rag scoring', () => {
-  it('labels entities from payload', () => {
+  it('labels entities from payload including customNumber', () => {
     assert.equal(entityLabelFromPayload({ estimate_id: 1001 }), 'Estimate #1001');
     assert.equal(entityLabelFromPayload({ estimate_number: '26-3797-3', estimate_id: 8001 }), 'Estimate #26-3797-3');
+    assert.equal(entityLabelFromPayload({ customNumber: '26-5107', estimate_id: 8001 }), 'Estimate #26-5107');
     assert.equal(entityLabelFromPayload({ customer_id: 9, name: 'Acme' }), 'Acme (Customer #9)');
   });
 
@@ -247,18 +248,22 @@ describe('context builder + rag scoring', () => {
     assert.equal(scoreChunk(tokens, 'zzz'), 0);
   });
 
-  it('injects the shared snapshot into the master message', () => {
+  it('puts the WorxStream payload first as source of truth', () => {
     const message = buildMasterMessage({
       eventType: 'estimate.created',
-      payload: { estimate_id: 1 },
+      payload: { estimate_id: 1, grossProfitPercentage: '12.00', customNumber: '26-5107' },
       companyId: '1',
       ragChunks: [],
-      agentKey: 'customerCheck',
-      snapshot: { ids: { estimate_id: 1, customer_id: 9 }, entity: { id: 1 }, errors: [] },
+      agentKey: 'aegis',
+      snapshot: { ids: { estimate_id: 1, customer_id: 9 }, enrichment: {}, errors: [] },
     });
-    assert.match(message, /SHARED ENTITY SNAPSHOT/);
-    assert.match(message, /customer_id": 9/);
-    assert.match(message, /Do not call list_estimates/);
+    assert.match(message, /WORXSTREAM EVENT PAYLOAD \(source of truth/);
+    assert.match(message, /grossProfitPercentage/);
+    assert.match(message, /SUPPLEMENTARY ENRICHMENT/);
+    assert.match(message, /do not recalculate margins/);
+    const payloadIdx = message.indexOf('WORXSTREAM EVENT PAYLOAD');
+    const enrichmentIdx = message.indexOf('SUPPLEMENTARY ENRICHMENT');
+    assert.ok(payloadIdx >= 0 && enrichmentIdx > payloadIdx);
   });
 });
 
@@ -273,19 +278,44 @@ describe('shared governance context', () => {
     assert.equal(product.stock_field, 'qty');
   });
 
-  it('reads line items from estimate sections when top-level items are absent', async () => {
+  it('returns full line items from payload sections without field stripping', async () => {
     const { lineItemsFromRecord } = await import('../../src/control/hydrateSharedContext.js');
     const items = lineItemsFromRecord({
       sections: [
         {
           items: [
-            { id: 82000055244, productId: null, productServiceId: 220000002237, qty: '1.000' },
+            {
+              id: 82000055244,
+              productServiceId: 220000002237,
+              qty: '1.000',
+              availableQty: '1.000',
+              grossProfitPercentage: '12.00',
+              salesPrice: '867.00',
+            },
           ],
         },
       ],
     });
     assert.equal(items.length, 1);
-    assert.equal(items[0].product_service_id, 220000002237);
-    assert.equal(items[0].quantity, 1);
+    assert.equal(items[0].productServiceId, 220000002237);
+    assert.equal(items[0].grossProfitPercentage, '12.00');
+    assert.equal(items[0].availableQty, '1.000');
+  });
+
+  it('detects substantive payloads and product ids without remapping fields', async () => {
+    const {
+      payloadIsSubstantive,
+      productIdsFromPayload,
+      payloadLinesNeedStockLookup,
+    } = await import('../../src/control/hydrateSharedContext.js');
+    const payload = {
+      id: 80000019668,
+      customNumber: '26-5107',
+      grossProfitPercentage: '12.00',
+      sections: [{ items: [{ productServiceId: 220000002237, qty: '1', availableQty: '1' }] }],
+    };
+    assert.equal(payloadIsSubstantive(payload), true);
+    assert.deepEqual(productIdsFromPayload(payload), [220000002237]);
+    assert.equal(payloadLinesNeedStockLookup(payload), false);
   });
 });

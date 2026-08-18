@@ -1,6 +1,12 @@
 /**
- * Fetch the event entity once and share it with every governance master.
- * Webhook payloads are often empty; masters must not each list/get the same record.
+ * Attach supplementary context for Aegis governance checks.
+ *
+ * The WorxStream webhook payload is the source of truth for all entity fields
+ * (amounts, margins, line items, customer, status). This module only:
+ * 1. Resolves entity IDs when the payload is sparse
+ * 2. Fetches enrichment the payload cannot carry (overdue invoices, product stock)
+ *
+ * When the payload is substantive, no entity/line-item fields are copied or remapped.
  */
 
 import { callWorxstreamAPI } from '../services/httpClient.js';
@@ -17,49 +23,10 @@ const STOCK_FIELDS = [
   'quantity',
 ];
 
-const ESTIMATE_KEYS = [
-  'id', 'estimate_id', 'estimate_number', 'custom_number', 'number', 'status',
-  'customer_id', 'customer_name', 'contact_id', 'name',
-  'grand_total', 'sub_total', 'subtotal', 'total', 'tax',
-  'cost_of_goods', 'contract_cost', 'margin', 'margin_pct', 'gross_profit',
-];
-
-const INVOICE_KEYS = [
-  'id', 'invoice_id', 'invoice_number', 'custom_number', 'number', 'status',
-  'customer_id', 'customer_name', 'grand_total', 'sub_total', 'balance',
-  'due_date', 'issue_date', 'paid', 'overdue',
-];
-
-const CUSTOMER_KEYS = [
-  'id', 'customer_id', 'first_name', 'last_name', 'name', 'email',
-  'phone_number', 'credit_hold', 'credit_limit', 'balance', 'tags',
-];
-
-const PRODUCT_KEYS = [
-  'id', 'title', 'name', 'product_number', 'model_number', 'sku',
-  'type', 'cost_price', 'sales_price', 'margin', 'is_active',
-];
-
-const LINE_KEYS = [
-  'product_id', 'productId', 'name', 'title', 'sku', 'product_number',
-  'model_number', 'quantity', 'qty', 'unit_price', 'sales_price',
-  'cost', 'cost_price', 'contract_cost', 'product_service_id', 'productServiceId',
-];
-
 function asNumber(value) {
   if (value == null || value === '') return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
-}
-
-function pick(record, keys) {
-  const out = {};
-  if (!record || typeof record !== 'object' || Array.isArray(record)) return out;
-  for (const key of keys) {
-    const value = record[key];
-    if (value != null && value !== '') out[key] = value;
-  }
-  return out;
 }
 
 function peel(value) {
@@ -98,12 +65,17 @@ export function extractEntityIds(payload = {}, eventType = '') {
   const ids = {
     estimate_id: asNumber(p.estimate_id ?? p.estimateId),
     invoice_id: asNumber(p.invoice_id ?? p.invoiceId),
-    customer_id: asNumber(p.customer_id ?? p.customerId),
+    customer_id: asNumber(
+      p.customer_id
+      ?? p.customerId
+      ?? p.customer?.customerId
+      ?? p.customer?.customer_id,
+    ),
     product_id: asNumber(p.product_id ?? p.productId),
     job_id: asNumber(p.job_id ?? p.jobId),
     credit_memo_id: asNumber(p.credit_memo_id ?? p.creditMemoId),
   };
-  const prefix = String(eventType).split('.')[0];
+  const prefix = String(eventType || '').split('.')[0];
   if (ids[`${prefix}_id`] == null && asNumber(p.id) != null) {
     if (prefix === 'estimate') ids.estimate_id = asNumber(p.id);
     if (prefix === 'invoice') ids.invoice_id = asNumber(p.id);
@@ -113,6 +85,20 @@ export function extractEntityIds(payload = {}, eventType = '') {
     if (prefix === 'credit_memo') ids.credit_memo_id = asNumber(p.id);
   }
   return ids;
+}
+
+/** True when the webhook already carries enough entity data for policy checks. */
+export function payloadIsSubstantive(payload) {
+  if (!payload || typeof payload !== 'object') return false;
+  if (Object.keys(payload).length === 0) return false;
+  return payload.id != null
+    || payload.subTotal != null
+    || payload.sub_total != null
+    || payload.grossProfitPercentage != null
+    || payload.gross_profit_percentage != null
+    || (Array.isArray(payload.sections) && payload.sections.length > 0)
+    || (Array.isArray(payload.line_items) && payload.line_items.length > 0)
+    || (Array.isArray(payload.items) && payload.items.length > 0);
 }
 
 export function pickStockQty(product = {}) {
@@ -125,27 +111,24 @@ export function pickStockQty(product = {}) {
 }
 
 export function compactProduct(record) {
-  const base = pick(record, PRODUCT_KEYS);
+  if (!record || typeof record !== 'object') return { id: record?.id };
   const stock = pickStockQty(record);
-  return { ...base, ...stock };
+  return {
+    id: asNumber(record.id),
+    title: record.title ?? record.name,
+    sku: record.sku ?? record.product_number ?? record.model_number,
+    cost_price: record.cost_price ?? record.costPrice,
+    sales_price: record.sales_price ?? record.salesPrice,
+    ...stock,
+  };
 }
 
-function compactLineItem(record) {
-  const line = pick(record, LINE_KEYS);
-  const productId = asNumber(record.product_id ?? record.productId);
-  if (productId != null) line.product_id = productId;
-  const productServiceId = asNumber(record.product_service_id ?? record.productServiceId);
-  if (productServiceId != null) line.product_service_id = productServiceId;
-  const qty = asNumber(record.quantity ?? record.qty);
-  if (qty != null) line.quantity = qty;
-  return line;
-}
-
+/** Walk payload line items (any shape) — used only for enrichment lookups, not to replace payload. */
 export function lineItemsFromRecord(record) {
   if (!record || typeof record !== 'object') return [];
   const buckets = [record.line_items, record.items, record.products, record.estimate_items, record.invoice_items];
   for (const bucket of buckets) {
-    if (Array.isArray(bucket) && bucket.length > 0) return bucket.map(compactLineItem);
+    if (Array.isArray(bucket) && bucket.length > 0) return bucket;
   }
   if (Array.isArray(record.sections)) {
     const fromSections = [];
@@ -153,18 +136,45 @@ export function lineItemsFromRecord(record) {
       if (!section || typeof section !== 'object') continue;
       const items = section.items || section.line_items;
       if (!Array.isArray(items)) continue;
-      for (const item of items) fromSections.push(compactLineItem(item));
+      for (const item of items) fromSections.push(item);
     }
     if (fromSections.length > 0) return fromSections;
   }
   return [];
 }
 
-function customerName(record) {
-  if (!record || typeof record !== 'object') return '';
-  if (record.name) return String(record.name);
-  const parts = [record.first_name, record.last_name].filter(Boolean);
-  return parts.join(' ').trim();
+function productIdsFromLines(lines) {
+  return [
+    ...new Set(
+      lines
+        .map((line) => asNumber(
+          line.product_id
+          ?? line.productId
+          ?? line.product_service_id
+          ?? line.productServiceId,
+        ))
+        .filter((id) => id != null),
+    ),
+  ];
+}
+
+export function productIdsFromPayload(payload) {
+  return productIdsFromLines(lineItemsFromRecord(payload));
+}
+
+export function payloadLinesNeedStockLookup(payload) {
+  const lines = lineItemsFromRecord(payload);
+  if (lines.length === 0) return false;
+  return lines.some((line) => line.availableQty == null && line.available_qty == null);
+}
+
+function emptySnapshot(ids) {
+  return {
+    ids,
+    enrichment: {},
+    notes: [],
+    errors: [],
+  };
 }
 
 async function showMasterObject(id) {
@@ -204,16 +214,10 @@ async function resolveLatestId(appName, idKey, snapshot) {
   return id;
 }
 
-async function hydrateProducts(snapshot, lines) {
-  const ids = [
-    ...new Set(
-      lines
-        .map((line) => asNumber(line.product_id ?? line.product_service_id))
-        .filter((id) => id != null),
-    ),
-  ].slice(0, 15);
+async function enrichProducts(snapshot, productIds) {
+  if (productIds.length === 0) return;
   const { companyId, userId } = getWorxstreamContext();
-  const products = await Promise.all(ids.map(async (id) => {
+  const products = await Promise.all(productIds.slice(0, 15).map(async (id) => {
     const result = await callWorxstreamAPI({
       method: 'GET',
       endpoint: '/master/product/product-service-details',
@@ -226,104 +230,63 @@ async function hydrateProducts(snapshot, lines) {
     }
     return compactProduct({ id, ...record });
   }));
-  snapshot.products = products;
+  snapshot.enrichment.products = products;
   if (products.some((product) => product.stock_qty == null)) {
-    snapshot.notes.push('Some products have no stock field (qty / quantity_on_hand). Use stock_qty from the snapshot; do not re-fetch.');
+    snapshot.notes.push('Some products have no stock field in enrichment. Prefer availableQty on payload line items.');
   }
 }
 
-async function hydrateCustomerBundle(snapshot, customerId) {
+/** Overdue / recent invoices for credit-hold policy — not present on estimate webhooks. */
+async function enrichCustomerCredit(snapshot, customerId) {
   if (customerId == null) return;
   snapshot.ids.customer_id = customerId;
   const { companyId, userId } = getWorxstreamContext();
-  const [details, invoices] = await Promise.all([
-    callWorxstreamAPI({
-      method: 'GET',
-      endpoint: '/master/customer/customer-details',
-      data: { company_id: companyId, user_id: userId, id: customerId },
-    }),
-    listMasterObjects('invoice', { customer_id: customerId, limit: 10 }),
-  ]);
-  const customer = apiRecord(details);
-  if (customer) {
-    const compact = pick(customer, CUSTOMER_KEYS);
-    compact.id = asNumber(customer.customer_id ?? customer.customerId ?? customer.id) ?? customerId;
-    compact.name = customerName(customer) || compact.name;
-    snapshot.customer = compact;
-  } else {
-    snapshot.errors.push(`get_customer_details failed for customer ${customerId}.`);
-  }
-  snapshot.invoices = apiRows(invoices).slice(0, 10).map((row) => pick(row, INVOICE_KEYS));
+  const invoices = await listMasterObjects('invoice', { customer_id: customerId, limit: 10 });
+  snapshot.enrichment.invoices = apiRows(invoices).slice(0, 10);
 }
 
-async function hydrateEstimate(snapshot) {
-  if (snapshot.ids.estimate_id == null) {
-    snapshot.ids.estimate_id = await resolveLatestId('estimate', 'estimate_id', snapshot);
-  }
-  const estimateId = snapshot.ids.estimate_id;
-  if (estimateId == null) return;
-
-  const [details, lineReport] = await Promise.all([
-    showMasterObject(estimateId),
-    callWorxstreamAPI({
-      method: 'POST',
-      endpoint: '/report/estimate/line-items',
-      data: {
-        company_id: getWorxstreamContext().companyId,
-        user_id: getWorxstreamContext().userId,
-        object_name: 'estimate',
-        object_id: estimateId,
-      },
-    }),
-  ]);
-
+async function enrichFromApiWhenPayloadSparse(snapshot, entityId, prefix) {
+  const details = await showMasterObject(entityId);
   const record = apiRecord(details);
   if (!record) {
-    snapshot.errors.push(`get_estimate_details failed for estimate ${estimateId}.`);
+    snapshot.errors.push(`API fallback failed for ${prefix} ${entityId}.`);
     return;
   }
-  snapshot.entity = { type: 'estimate', ...pick(record, ESTIMATE_KEYS) };
-  snapshot.entity.id = estimateId;
+  snapshot.enrichment.from_api = record;
   snapshot.ids.customer_id = snapshot.ids.customer_id ?? asNumber(record.customer_id ?? record.customerId);
-  if (record.estimate_number || record.custom_number || record.customNumber || record.number) {
-    snapshot.ids.estimate_number = record.estimate_number
-      || record.custom_number
-      || record.customNumber
-      || record.number;
-  }
-
-  const fromRecord = lineItemsFromRecord(record);
-  const fromReport = apiRows(lineReport).map(compactLineItem);
-  snapshot.line_items = fromRecord.length > 0 ? fromRecord : fromReport;
-  await Promise.all([
-    hydrateProducts(snapshot, snapshot.line_items),
-    hydrateCustomerBundle(snapshot, snapshot.ids.customer_id),
-  ]);
+  snapshot.notes.push(`Webhook payload was sparse; enrichment.from_api holds the API record. Prefer payload when present.`);
 }
 
-async function hydrateInvoice(snapshot) {
-  if (snapshot.ids.invoice_id == null) {
-    snapshot.ids.invoice_id = await resolveLatestId('invoice', 'invoice_id', snapshot);
+async function hydrateDocumentEvent(snapshot, payload, prefix) {
+  const idKey = prefix === 'invoice' ? 'invoice_id' : `${prefix}_id`;
+  if (snapshot.ids[idKey] == null) {
+    snapshot.ids[idKey] = await resolveLatestId(prefix, idKey, snapshot);
   }
-  const invoiceId = snapshot.ids.invoice_id;
-  if (invoiceId == null) return;
-  const details = await showMasterObject(invoiceId);
-  const record = apiRecord(details);
-  if (!record) {
-    snapshot.errors.push(`get_invoice_details failed for invoice ${invoiceId}.`);
-    return;
+  const entityId = snapshot.ids[idKey];
+  if (entityId == null) return;
+
+  if (!payloadIsSubstantive(payload)) {
+    await enrichFromApiWhenPayloadSparse(snapshot, entityId, prefix);
   }
-  snapshot.entity = { type: 'invoice', ...pick(record, INVOICE_KEYS) };
-  snapshot.entity.id = invoiceId;
-  snapshot.ids.customer_id = snapshot.ids.customer_id ?? asNumber(record.customer_id ?? record.customerId);
-  snapshot.line_items = lineItemsFromRecord(record);
-  await Promise.all([
-    hydrateProducts(snapshot, snapshot.line_items),
-    hydrateCustomerBundle(snapshot, snapshot.ids.customer_id),
-  ]);
+
+  const customerId = snapshot.ids.customer_id
+    ?? asNumber(payload.customer_id ?? payload.customerId ?? payload.customer?.customerId);
+  const productIds = productIdsFromPayload(payload);
+  const needsStock = payloadLinesNeedStockLookup(payload)
+    || (!payloadIsSubstantive(payload) && productIds.length > 0);
+
+  const tasks = [];
+  if (needsStock && productIds.length > 0) {
+    tasks.push(enrichProducts(snapshot, productIds));
+  }
+  if (customerId != null) {
+    tasks.push(enrichCustomerCredit(snapshot, customerId));
+  }
+  if (tasks.length > 0) await Promise.all(tasks);
 }
 
-async function hydrateProductEvent(snapshot) {
+async function hydrateProductEvent(snapshot, payload) {
+  if (payloadIsSubstantive(payload)) return;
   if (snapshot.ids.product_id == null) return;
   const { companyId, userId } = getWorxstreamContext();
   const result = await callWorxstreamAPI({
@@ -336,12 +299,17 @@ async function hydrateProductEvent(snapshot) {
     snapshot.errors.push(`get_product_details failed for product ${snapshot.ids.product_id}.`);
     return;
   }
-  const product = compactProduct({ id: snapshot.ids.product_id, ...record });
-  snapshot.entity = { type: 'product', ...product };
-  snapshot.products = [product];
+  snapshot.enrichment.from_api = record;
+  snapshot.enrichment.products = [compactProduct({ id: snapshot.ids.product_id, ...record })];
 }
 
-async function hydrateJob(snapshot) {
+async function hydrateJobEvent(snapshot, payload) {
+  if (payloadIsSubstantive(payload)) {
+    const customerId = snapshot.ids.customer_id
+      ?? asNumber(payload.customer_id ?? payload.customerId);
+    if (customerId != null) await enrichCustomerCredit(snapshot, customerId);
+    return;
+  }
   if (snapshot.ids.job_id == null) return;
   const { companyId, userId } = getWorxstreamContext();
   const result = await callWorxstreamAPI({
@@ -354,71 +322,40 @@ async function hydrateJob(snapshot) {
     snapshot.errors.push(`get_job_details failed for job ${snapshot.ids.job_id}.`);
     return;
   }
-  snapshot.entity = {
-    type: 'job',
-    id: snapshot.ids.job_id,
-    ...pick(record, ['id', 'job_name', 'status', 'customer_id', 'contact_id', 'description']),
-  };
+  snapshot.enrichment.from_api = record;
   snapshot.ids.customer_id = snapshot.ids.customer_id ?? asNumber(record.customer_id ?? record.customerId);
-  await hydrateCustomerBundle(snapshot, snapshot.ids.customer_id);
-}
-
-async function hydrateCreditMemo(snapshot) {
-  if (snapshot.ids.credit_memo_id == null) {
-    snapshot.ids.credit_memo_id = await resolveLatestId('credit_memo', 'credit_memo_id', snapshot);
-  }
-  const id = snapshot.ids.credit_memo_id;
-  if (id == null) return;
-  const details = await showMasterObject(id);
-  const record = apiRecord(details);
-  if (!record) {
-    snapshot.errors.push(`get_credit_memo_details failed for credit memo ${id}.`);
-    return;
-  }
-  snapshot.entity = { type: 'credit_memo', id, ...pick(record, INVOICE_KEYS) };
-  snapshot.ids.customer_id = snapshot.ids.customer_id ?? asNumber(record.customer_id ?? record.customerId);
-  await hydrateCustomerBundle(snapshot, snapshot.ids.customer_id);
-}
-
-function emptySnapshot(ids) {
-  return {
-    ids,
-    entity: null,
-    line_items: [],
-    products: [],
-    customer: null,
-    invoices: [],
-    notes: [],
-    errors: [],
-  };
+  await enrichCustomerCredit(snapshot, snapshot.ids.customer_id);
 }
 
 /**
  * @returns {Promise<{ payload: object, snapshot: object }>}
  */
 export async function hydrateSharedContext({ eventType, payload }) {
-  const ids = extractEntityIds(payload, eventType);
+  const eventPayload = payload && typeof payload === 'object' ? payload : {};
+  const ids = extractEntityIds(eventPayload, eventType);
   const snapshot = emptySnapshot(ids);
   const prefix = String(eventType || '').split('.')[0];
 
   try {
-    if (prefix === 'estimate') await hydrateEstimate(snapshot);
-    else if (prefix === 'invoice') await hydrateInvoice(snapshot);
-    else if (prefix === 'customer') await hydrateCustomerBundle(snapshot, ids.customer_id);
-    else if (prefix === 'product') await hydrateProductEvent(snapshot);
-    else if (prefix === 'job') await hydrateJob(snapshot);
-    else if (prefix === 'credit_memo') await hydrateCreditMemo(snapshot);
+    if (prefix === 'estimate' || prefix === 'invoice' || prefix === 'credit_memo') {
+      await hydrateDocumentEvent(snapshot, eventPayload, prefix);
+    } else if (prefix === 'customer') {
+      await enrichCustomerCredit(snapshot, ids.customer_id);
+    } else if (prefix === 'product') {
+      await hydrateProductEvent(snapshot, eventPayload);
+    } else if (prefix === 'job') {
+      await hydrateJobEvent(snapshot, eventPayload);
+    }
   } catch (error) {
     snapshot.errors.push(error.message || String(error));
   }
 
-  const merged = { ...(payload && typeof payload === 'object' ? payload : {}) };
+  const merged = { ...eventPayload };
   for (const [key, value] of Object.entries(snapshot.ids)) {
     if (value != null && merged[key] == null) merged[key] = value;
   }
-  if (snapshot.customer?.name && !merged.customer_name) merged.customer_name = snapshot.customer.name;
-  if (snapshot.entity?.estimate_number && !merged.estimate_number) {
-    merged.estimate_number = snapshot.entity.estimate_number;
+  if (eventPayload.customNumber != null && merged.custom_number == null) {
+    merged.custom_number = eventPayload.customNumber;
   }
 
   return { payload: merged, snapshot };

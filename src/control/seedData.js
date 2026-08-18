@@ -18,7 +18,9 @@ Ensure all estimates and invoices maintain a minimum gross margin to protect com
 All estimates and invoices must have a minimum gross margin of **20%**.
 
 ## Calculation
-Gross Margin = (Grand Total - Cost of Goods) / Grand Total × 100
+Use the **grossProfitPercentage** field from the WorxStream event payload (pre-tax margin on subtotal — the same value shown in the estimate/invoice UI). Do not recalculate margin from grandTotal, tax, or costs.
+
+Fallback only when grossProfitPercentage is absent: grossProfitTotal ÷ subTotal × 100.
 
 ## Enforcement
 - Estimates below 20% margin must be flagged for manager review before sending to customer.
@@ -114,7 +116,7 @@ export const SEED_RULES = [
     seed_key: 'flag_low_margin',
     name: 'Flag Low Margin Estimates',
     event_type: 'estimate.created',
-    condition: 'Gross margin < 20%',
+    condition: 'Payload grossProfitPercentage < 20%',
     action: 'Flag estimate for manager review. Create a critical alert.',
     priority: 1,
     active: true,
@@ -123,7 +125,7 @@ export const SEED_RULES = [
     seed_key: 'flag_critical_margin',
     name: 'Flag Critically Low Margin Estimates',
     event_type: 'estimate.created',
-    condition: 'Gross margin < 10%',
+    condition: 'Payload grossProfitPercentage < 10%',
     action: 'Flag estimate as critical. Alert VP of Sales immediately.',
     priority: 1,
     active: true,

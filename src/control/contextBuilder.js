@@ -8,7 +8,7 @@ import GovernanceRule from '../models/GovernanceRule.js';
 
 export function entityLabelFromPayload(payload = {}, eventType = '') {
   const p = payload && typeof payload === 'object' ? payload : {};
-  const estimateNumber = p.estimate_number || p.custom_number;
+  const estimateNumber = p.estimate_number || p.custom_number || p.customNumber;
   if (estimateNumber) return `Estimate #${estimateNumber}`;
   if (p.estimate_id != null) return `Estimate #${p.estimate_id}`;
   const invoiceNumber = p.invoice_number;
@@ -78,12 +78,16 @@ export function buildMasterMessage({
   const label = entityLabelFromPayload(payload, eventType);
   const policyBlock = formatRagChunks(ragChunks);
   const catalogBlock = formatCatalog(catalog, eventType);
+  const payloadBlock = [
+    'WORXSTREAM EVENT PAYLOAD (source of truth — use these values exactly as the user sees them in the app):',
+    JSON.stringify(payload || {}, null, 2),
+  ].join('\n');
   const snapshotBlock = snapshot
     ? [
-      'SHARED ENTITY SNAPSHOT (fetched once for this pipeline — source of truth):',
+      'SUPPLEMENTARY ENRICHMENT (credit invoices, product stock — only when missing from payload; never override payload fields):',
       JSON.stringify(snapshot, null, 2),
     ].join('\n')
-    : 'SHARED ENTITY SNAPSHOT: (not available)';
+    : 'SUPPLEMENTARY ENRICHMENT: (not available)';
 
   return [
     `Governance check for ${getGovernanceAgentName(agentKey)}.`,
@@ -91,18 +95,19 @@ export function buildMasterMessage({
     `Company ID: ${companyId}`,
     `Entity: ${label}`,
     '',
-    snapshotBlock,
+    payloadBlock,
     '',
-    'Event payload (JSON):',
-    JSON.stringify(payload || {}, null, 2),
+    snapshotBlock,
     '',
     catalogBlock,
     '',
     policyBlock,
     '',
-    'Use the shared snapshot. Do not call list_estimates, list_invoices, get_estimate_details, get_invoice_details, get_product_details, get_customer_details, get_estimate_line_items, or invoke_agent to rediscover this entity.',
-    'Product stock is snapshot.products[].stock_qty (stock_field is often qty, not quantity_on_hand). If stock_qty is null, report that the product record has no stock field — do not keep searching for another inventory tool.',
-    'Only call tools for a fact the snapshot marks missing in errors, or for a field that is truly absent.',
+    'Use grossProfitPercentage, subTotal, grandTotal, totalAppliedCost, sections, and customer from the event payload — do not recalculate margins or totals.',
+    'Use the supplementary enrichment only for data missing from the payload (e.g. overdue invoice counts in enrichment.invoices, product stock_qty).',
+    'Do not call list_estimates, list_invoices, get_estimate_details, get_invoice_details, get_product_details, get_customer_details, get_estimate_line_items, or invoke_agent to rediscover payload fields.',
+    'Product stock may appear on payload line items (availableQty) or in enrichment.products[].stock_qty.',
+    'Only call tools for a fact neither the payload nor snapshot provides.',
     'Evaluate every catalog policy/rule that applies to this event. Return the JSON output contract only.',
   ].join('\n');
 }
