@@ -1,12 +1,19 @@
 {
-  "name": "worxstream-ai-agent",
+  "name": "@worxstream/agent",
   "version": "1.0.0",
+  "private": true,
   "description": "AI Agent with Claude that uses Worxstream APIs as tools",
   "main": "src/index.js",
   "type": "module",
+  "engines": {
+    "node": "^18.0.0 || ^20.0.0 || >=22.0.0",
+    "npm": ">=10.0.0"
+  },
   "scripts": {
-    "start": "node src/index.js",
     "dev": "node --watch src/index.js",
+    "build": "node -e \"console.log('@worxstream/agent: no compile step')\"",
+    "start": "node src/index.js",
+    "seed:governance": "node src/scripts/seedGovernance.js",
     "test": "node --test test/**/*.test.js"
   },
   "dependencies": {

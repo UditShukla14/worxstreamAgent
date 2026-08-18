@@ -77,8 +77,9 @@ export function extractApiTokenFromRequest(req) {
  */
 export function requestContextFromReq(req) {
   const body = req.body || {};
-  const companyId = body.companyId ?? body.company_id;
-  const userId = body.userId ?? body.user_id;
+  const query = req.query || {};
+  const companyId = body.companyId ?? body.company_id ?? query.companyId ?? query.company_id;
+  const userId = body.userId ?? body.user_id ?? query.userId ?? query.user_id;
   const apiToken = body.apiToken ?? body.api_token ?? extractApiTokenFromRequest(req);
 
   return {

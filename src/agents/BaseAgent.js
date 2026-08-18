@@ -170,6 +170,7 @@ export class BaseAgent {
             name: block.name,
             input: block.input,
             success: result.success,
+            durationMs: toolDuration,
             ...(result.success === false && result.error ? { error: String(result.error).slice(0, 300) } : {}),
           });
           if (context._rexRequestId) {

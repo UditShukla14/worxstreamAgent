@@ -3,9 +3,13 @@
  */
 
 import dotenv from 'dotenv';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import * as worxstreamSession from '../session/worxstreamSession.js';
 import { getRequestContext } from '../request/requestContext.js';
 
+const agentRoot = join(dirname(fileURLToPath(import.meta.url)), '../..');
+dotenv.config({ path: join(agentRoot, '.env') });
 dotenv.config();
 
 /**

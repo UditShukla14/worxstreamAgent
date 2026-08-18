@@ -570,6 +570,11 @@ export function getAgentKeys() {
   return Object.keys(AGENT_DEFINITIONS);
 }
 
+/** True when `key` is a chat/child specialist — never a governance master. */
+export function isChildAgentKey(key) {
+  return Object.prototype.hasOwnProperty.call(AGENT_DEFINITIONS, key) && key !== 'nova';
+}
+
 /**
  * Build a human-readable list of agents for the router prompt.
  */

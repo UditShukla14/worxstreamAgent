@@ -45,6 +45,9 @@ const ACTIONS = /** @type {const} */ ({
  * @type {Array<[string, string]>}
  */
 const DOMAIN_RULES = [
+  // Governance-only tools (must precede any generic match; not in chat router)
+  ['invoke_agent', 'governance'],
+  ['relevant_policies', 'governance'],
   ['organization_contact', 'company'],
   ['credit_memo', 'credit_memo'],
   ['purchase_order', 'purchase_order'],

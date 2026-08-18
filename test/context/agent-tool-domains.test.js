@@ -9,6 +9,7 @@ process.env.WORXSTREAM_BASE_URL ||= 'http://localhost';
 await import('../../src/mcp/tools/index.js'); // side effect: registers all tools
 const { getToolIndex } = await import('../../src/mcp/toolIndex.js');
 const { AGENT_DEFINITIONS } = await import('../../src/agents/agentDefinitions.js');
+const { GOVERNANCE_AGENT_DEFINITIONS } = await import('../../src/control/governanceAgents.js');
 const { ENTITY_LOOKUPS } = await import('../../src/mcp/tools/lookup.js');
 
 const index = getToolIndex();
@@ -20,7 +21,7 @@ const AGENT_DOMAINS = new Set(
 );
 // 'reports' has its own agent handling; 'lookup' is the universal resolve_entity
 // bucket auto-included for every agent by BaseAgent.getTools().
-const KNOWN_DOMAINS = new Set([...AGENT_DOMAINS, 'reports', 'lookup']);
+const KNOWN_DOMAINS = new Set([...AGENT_DOMAINS, 'reports', 'lookup', 'governance']);
 
 function bucketNames(domain) {
   return (index.byDomain[domain] || []).map((t) => t.name);
@@ -28,7 +29,8 @@ function bucketNames(domain) {
 
 describe('agent tool domains', () => {
   it('every agent domain has at least one tool in its union bucket', () => {
-    for (const [key, def] of Object.entries(AGENT_DEFINITIONS)) {
+    const allDefs = { ...AGENT_DEFINITIONS, ...GOVERNANCE_AGENT_DEFINITIONS };
+    for (const [key, def] of Object.entries(allDefs)) {
       if (!def.domain || def.domain === 'none') continue;
       const domains = def.domains || [def.domain];
       const union = domains.flatMap((d) => bucketNames(d));
@@ -62,13 +64,25 @@ describe('agent tool domains', () => {
 
   it('every extraTools entry refers to a registered tool', () => {
     const registered = new Set(index.tools.map((t) => t.name));
-    for (const [key, def] of Object.entries(AGENT_DEFINITIONS)) {
+    const allDefs = { ...AGENT_DEFINITIONS, ...GOVERNANCE_AGENT_DEFINITIONS };
+    for (const [key, def] of Object.entries(allDefs)) {
       for (const name of def.extraTools || []) {
         assert.ok(
           registered.has(name),
           `agent "${key}" extraTools entry "${name}" is not a registered tool`,
         );
       }
+    }
+  });
+
+  it('governance tools are isolated from chat agent domains', () => {
+    assert.ok(bucketNames('governance').includes('invoke_agent'));
+    assert.ok(bucketNames('governance').includes('get_relevant_policies'));
+    for (const domain of AGENT_DOMAINS) {
+      assert.ok(
+        !bucketNames(domain).includes('invoke_agent'),
+        `chat domain "${domain}" must not include invoke_agent`,
+      );
     }
   });
 

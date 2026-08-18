@@ -1,16 +1,18 @@
 /**
- * Worxstream webhooks — event-driven coworker (Phase 6 foundation).
+ * Worxstream webhooks — event-driven governance pipeline.
+ *
+ * POST /api/webhooks/worxstream
+ * Verifies secret, dedupes by event_id, responds 200, then runs the
+ * master-agent pipeline asynchronously (Control Tower, not chat coworker).
  */
 
 import { Router } from 'express';
-import { randomUUID } from 'crypto';
-import { runCoworkerTurn } from '../agents/coworkerPipeline.js';
-import { getDefaultTenantIds } from '../config/index.js';
+import { acceptGovernanceEvent } from '../control/ingestEvent.js';
 
 const router = Router();
 
-function verifyWebhookSecret(req) {
-  const secret = process.env.WORXSTREAM_WEBHOOK_SECRET || '';
+function verifyWebhook(req) {
+  const secret = (process.env.WORXSTREAM_WEBHOOK_SECRET || '').trim();
   if (!secret) return true;
   const header = req.headers['x-worxstream-webhook-secret'];
   return header === secret;
@@ -18,48 +20,22 @@ function verifyWebhookSecret(req) {
 
 /**
  * POST /api/webhooks/worxstream
- * Body: { event_type, company_id, user_id, payload }
+ * Body: { event_type, event_id, timestamp, company_id, user_id, payload }
  */
 router.post('/worxstream', async (req, res) => {
   try {
-    if (!verifyWebhookSecret(req)) {
+    if (!verifyWebhook(req)) {
       return res.status(401).json({ success: false, error: 'Invalid webhook secret' });
     }
 
-    const { event_type, company_id, user_id, payload } = req.body || {};
-    if (!event_type) {
-      return res.status(400).json({
-        success: false,
-        error: 'event_type is required',
-      });
-    }
-
-    const defaults = getDefaultTenantIds();
-    const companyId = company_id != null ? String(company_id) : defaults.companyId;
-    const userId = user_id != null ? String(user_id) : defaults.userId;
-
-    const syntheticMessage = `[Webhook event: ${event_type}]\n${JSON.stringify(payload || {}, null, 2)}\n\nReview this event and take any appropriate Worxstream actions.`;
-
-    const result = await runCoworkerTurn({
-      message: syntheticMessage,
-      company_id: companyId,
-      user_id: userId,
-      conversation_id: `webhook-${randomUUID()}`,
-      options: {
-        streamFormatter: false,
-        skipClarification: true,
-      },
-    });
-
-    res.json({
-      success: true,
-      event_type,
-      conversation_id: result.conversation_id,
-      response: result.response,
-    });
+    const result = await acceptGovernanceEvent(req.body || {});
+    return res.json({ success: true, ...result });
   } catch (error) {
-    console.error('❌ Webhook error:', error);
-    res.status(500).json({ success: false, error: error.message });
+    const status = error.status || 500;
+    if (status >= 500) {
+      console.error('❌ Webhook error:', error);
+    }
+    res.status(status).json({ success: false, error: error.message });
   }
 });
 

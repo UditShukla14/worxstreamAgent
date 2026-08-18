@@ -26,6 +26,7 @@ import { registerProjectTools } from './projects.js';
 import { registerPriceComparisonTools } from './priceComparison.js';
 import { registerReportTools } from './reports.js';
 import { registerLookupTools } from './lookup.js';
+import { registerGovernanceTools } from './invokeAgent.js';
 
 /**
  * Register all tools
@@ -104,6 +105,9 @@ export function registerAllTools() {
 
   registerLookupTools();
   console.log('  ✓ Lookup (resolve_entity) tool registered');
+
+  registerGovernanceTools();
+  console.log('  ✓ Governance tools registered (invoke_agent, get_relevant_policies)');
 
   console.log('✅ All MCP tools registered');
 }

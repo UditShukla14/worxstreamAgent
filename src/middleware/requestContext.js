@@ -12,6 +12,7 @@ const CONTEXT_PATH_PREFIXES = [
   '/api/tools',
   '/api/price-comparison',
   '/api/webhooks',
+  '/api/control',
 ];
 
 function shouldApplyContext(req) {
