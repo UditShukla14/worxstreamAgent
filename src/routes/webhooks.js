@@ -22,7 +22,7 @@ function verifyWebhook(req) {
 /**
  * POST /api/webhooks/worxstream
  * Accepts the governance envelope or a Worxstream catalog POST
- * ({ event_code, object_id, company_id, payload }).
+ * ({ event, deliveryId, companyId, object, data } or event_code / payload).
  */
 router.post('/worxstream', async (req, res) => {
   try {
@@ -30,9 +30,12 @@ router.post('/worxstream', async (req, res) => {
       return res.status(401).json({ success: false, error: 'Invalid webhook secret' });
     }
 
-    const event = eventFromWorxstreamWebhook(req.body || {});
+    const event = eventFromWorxstreamWebhook(req.body || {}, {
+      eventType: req.headers['x-worxstream-event'],
+      eventId: req.headers['x-worxstream-delivery-id'],
+    });
     if (!event.event_type) {
-      return res.status(400).json({ success: false, error: 'event_type or event_code is required' });
+      return res.status(400).json({ success: false, error: 'event, event_type, or event_code is required' });
     }
     if (!event.company_id) {
       return res.status(400).json({ success: false, error: 'company_id is required' });

@@ -125,6 +125,34 @@ describe('eventFromWorxstreamWebhook', () => {
     assert.equal(event.payload.estimate_id, 80000019668);
     assert.equal(event.payload.productServiceId, 220000002237);
   });
+
+  it('maps the live Worxstream POST (event + object + data)', () => {
+    const event = eventFromWorxstreamWebhook({
+      event: 'estimate_updated',
+      deliveryId: 'whd_20260818_ux8lbkkfopeq',
+      companyId: 30000000021,
+      payloadVersion: '2026-08-01',
+      occurredAt: '2026-08-18T10:08:20+00:00',
+      object: { type: 'estimate', id: 80000019668 },
+      data: {
+        companyId: 30000000021,
+        customNumber: '26-5107',
+        estimateId: null,
+        createdByUserId: 10000000016,
+        productServiceId: 220000002237,
+        id: 80000019668,
+      },
+    });
+
+    assert.equal(event.event_type, 'estimate.updated');
+    assert.equal(event.event_id, 'whd_20260818_ux8lbkkfopeq');
+    assert.equal(event.company_id, '30000000021');
+    assert.equal(event.user_id, '10000000016');
+    assert.equal(event.timestamp, '2026-08-18T10:08:20+00:00');
+    assert.equal(event.payload.estimate_id, 80000019668);
+    assert.equal(event.payload.custom_number, '26-5107');
+    assert.equal(event.payload.productServiceId, 220000002237);
+  });
 });
 
 describe('agent isolation', () => {
@@ -243,5 +271,21 @@ describe('shared governance context', () => {
     const product = compactProduct({ id: 9, title: 'AC', qty: 4, cost_price: 10 });
     assert.equal(product.stock_qty, 4);
     assert.equal(product.stock_field, 'qty');
+  });
+
+  it('reads line items from estimate sections when top-level items are absent', async () => {
+    const { lineItemsFromRecord } = await import('../../src/control/hydrateSharedContext.js');
+    const items = lineItemsFromRecord({
+      sections: [
+        {
+          items: [
+            { id: 82000055244, productId: null, productServiceId: 220000002237, qty: '1.000' },
+          ],
+        },
+      ],
+    });
+    assert.equal(items.length, 1);
+    assert.equal(items[0].product_service_id, 220000002237);
+    assert.equal(items[0].quantity, 1);
   });
 });

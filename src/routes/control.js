@@ -8,6 +8,7 @@ import GovernancePolicy from '../models/GovernancePolicy.js';
 import GovernanceRule from '../models/GovernanceRule.js';
 import PipelineRun from '../models/PipelineRun.js';
 import GovernanceAlert from '../models/GovernanceAlert.js';
+import HiddenWebhookDelivery from '../models/HiddenWebhookDelivery.js';
 import {
   GOVERNANCE_AGENT_DEFINITIONS,
   getGovernanceAgentName,
@@ -124,6 +125,23 @@ function alertToApi(doc) {
     status: doc.status,
     timestamp: (doc.timestamp || doc.created_at || new Date()).toISOString(),
   };
+}
+
+function activeRunQuery(filter) {
+  return {
+    $and: [
+      filter,
+      { $or: [{ deleted_at: { $exists: false } }, { deleted_at: null }] },
+    ],
+  };
+}
+
+function parseIdList(value) {
+  if (Array.isArray(value)) {
+    return [...new Set(value.map((item) => String(item || '').trim()).filter(Boolean))];
+  }
+  if (typeof value === 'string' && value.trim()) return [value.trim()];
+  return [];
 }
 
 function startOfToday() {
@@ -327,12 +345,12 @@ router.delete('/rules/:id', async (req, res, next) => {
 
 router.get('/runs', async (req, res, next) => {
   try {
-    const filter = { company_id: req.companyId };
+    const filter = activeRunQuery({ company_id: req.companyId });
     if (req.query.event_type && req.query.event_type !== 'all') {
-      filter.event_type = String(req.query.event_type);
+      filter.$and[0].event_type = String(req.query.event_type);
     }
     if (req.query.status && req.query.status !== 'all') {
-      filter.status = String(req.query.status);
+      filter.$and[0].status = String(req.query.status);
     }
     const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit || '50'), 10) || 50));
     const rows = await PipelineRun.find(filter).sort({ timestamp: -1 }).limit(limit);
@@ -344,7 +362,7 @@ router.get('/runs', async (req, res, next) => {
 
 router.get('/runs/:runId', async (req, res, next) => {
   try {
-    const doc = await PipelineRun.findOne({ company_id: req.companyId, run_id: req.params.runId });
+    const doc = await PipelineRun.findOne(activeRunQuery({ company_id: req.companyId, run_id: req.params.runId }));
     if (!doc) return res.status(404).json({ success: false, error: 'Run not found' });
     res.json({ success: true, data: runToApi(doc) });
   } catch (error) {
@@ -363,9 +381,61 @@ router.post('/runs/:runId/stop', async (req, res, next) => {
 
 router.post('/runs/:runId/restart', async (req, res, next) => {
   try {
+    const existing = await PipelineRun.findOne(activeRunQuery({ company_id: req.companyId, run_id: req.params.runId }));
+    if (!existing) return res.status(404).json({ success: false, error: 'Run not found' });
     const userId = req.body?.user_id ?? req.query.user_id ?? req.query.userId;
     const result = await restartPipelineRun(req.companyId, req.params.runId, { userId });
     res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/runs/delete', async (req, res, next) => {
+  try {
+    const runIds = parseIdList(req.body?.run_ids ?? req.body?.runIds);
+    if (runIds.length === 0) {
+      return res.status(400).json({ success: false, error: 'run_ids is required' });
+    }
+    const result = await PipelineRun.updateMany(
+      activeRunQuery({ company_id: req.companyId, run_id: { $in: runIds } }),
+      { $set: { deleted_at: new Date() } },
+    );
+    res.json({ success: true, data: { deleted: result.modifiedCount || 0 } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/deliveries/hidden', async (req, res, next) => {
+  try {
+    const rows = await HiddenWebhookDelivery.find({ company_id: req.companyId }).select('delivery_id').lean();
+    res.json({
+      success: true,
+      data: rows.map((row) => String(row.delivery_id)),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/deliveries/delete', async (req, res, next) => {
+  try {
+    const deliveryIds = parseIdList(req.body?.delivery_ids ?? req.body?.deliveryIds);
+    if (deliveryIds.length === 0) {
+      return res.status(400).json({ success: false, error: 'delivery_ids is required' });
+    }
+    const now = new Date();
+    await HiddenWebhookDelivery.bulkWrite(
+      deliveryIds.map((deliveryId) => ({
+        updateOne: {
+          filter: { company_id: req.companyId, delivery_id: deliveryId },
+          update: { $set: { deleted_at: now } },
+          upsert: true,
+        },
+      })),
+    );
+    res.json({ success: true, data: { deleted: deliveryIds.length } });
   } catch (error) {
     next(error);
   }
@@ -417,8 +487,16 @@ router.get('/dashboard', async (req, res, next) => {
     const weekAgo = daysAgoDate(7);
 
     const [todayRuns, weekRuns, openAlerts, agentKeys] = await Promise.all([
-      PipelineRun.find({ company_id: companyId, timestamp: { $gte: today }, status: { $ne: 'running' } }).lean(),
-      PipelineRun.find({ company_id: companyId, timestamp: { $gte: weekAgo }, status: { $ne: 'running' } })
+      PipelineRun.find(activeRunQuery({
+        company_id: companyId,
+        timestamp: { $gte: today },
+        status: { $ne: 'running' },
+      })).lean(),
+      PipelineRun.find(activeRunQuery({
+        company_id: companyId,
+        timestamp: { $gte: weekAgo },
+        status: { $ne: 'running' },
+      }))
         .sort({ timestamp: -1 })
         .lean(),
       GovernanceAlert.countDocuments({ company_id: companyId, status: 'open' }),

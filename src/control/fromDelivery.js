@@ -6,6 +6,7 @@
 import { normalizeEventType } from './pipelineConfig.js';
 
 const ENVELOPE_KEYS = new Set([
+  'event',
   'event_type',
   'eventType',
   'event_id',
@@ -13,18 +14,23 @@ const ENVELOPE_KEYS = new Set([
   'event_code',
   'eventCode',
   'timestamp',
+  'occurredAt',
+  'occurred_at',
   'company_id',
   'companyId',
   'user_id',
   'userId',
   'payload',
   'data',
+  'object',
   'object_type',
   'objectType',
   'object_id',
   'objectId',
   'deliveryId',
   'delivery_id',
+  'payloadVersion',
+  'payload_version',
   'requestPayload',
   'request_payload',
 ]);
@@ -63,9 +69,18 @@ function copyNonEnvelopeFields(source, target) {
   }
 }
 
+function firstPresent(...values) {
+  for (const value of values) {
+    if (value == null) continue;
+    if (typeof value === 'string' && !value.trim()) continue;
+    return value;
+  }
+  return undefined;
+}
+
 /**
  * @param {object} body  Direct webhook POST, or a Control Tower delivery row.
- * @param {{ companyId?: string, userId?: string }} [ids]
+ * @param {{ companyId?: string, userId?: string, eventType?: string, eventId?: string }} [ids]
  */
 export function eventFromWorxstreamWebhook(body, ids = {}) {
   const row = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
@@ -73,59 +88,96 @@ export function eventFromWorxstreamWebhook(body, ids = {}) {
   const envelope = wrapped || row;
   const nestedCandidate = asObject(envelope.payload) || asObject(envelope.data);
   const nested = isNonEmptyObject(nestedCandidate) ? nestedCandidate : null;
+  const catalogObject = asObject(envelope.object) || asObject(row.object) || {};
 
   const payload = nested ? { ...nested } : {};
   if (!nested) copyNonEnvelopeFields(envelope, payload);
 
   const eventType = normalizeEventType(
-    envelope.event_type
-      || envelope.eventType
-      || envelope.event_code
-      || envelope.eventCode
-      || row.eventCode
-      || row.event_code
-      || '',
+    firstPresent(
+      envelope.event_type,
+      envelope.eventType,
+      envelope.event,
+      envelope.event_code,
+      envelope.eventCode,
+      row.eventCode,
+      row.event_code,
+      row.event,
+      ids.eventType,
+      ids.event_type,
+    ) || '',
   );
 
-  const objectType = envelope.object_type
-    || envelope.objectType
-    || row.objectType
-    || row.object_type
-    || eventType.split('.')[0];
-  const objectId = envelope.object_id ?? envelope.objectId ?? row.objectId ?? row.object_id;
+  const objectType = firstPresent(
+    envelope.object_type,
+    envelope.objectType,
+    catalogObject.type,
+    row.objectType,
+    row.object_type,
+    eventType.split('.')[0],
+  );
+  const objectId = firstPresent(
+    envelope.object_id,
+    envelope.objectId,
+    catalogObject.id,
+    row.objectId,
+    row.object_id,
+  );
   const idKey = objectIdKey(objectType);
   if (idKey && objectId != null && payload[idKey] == null) {
     payload[idKey] = objectId;
   }
+  if (payload.customNumber != null && payload.custom_number == null) {
+    payload.custom_number = payload.customNumber;
+  }
 
   const eventId = String(
-    envelope.event_id
-      || envelope.eventId
-      || row.deliveryId
-      || row.delivery_id
-      || '',
+    firstPresent(
+      envelope.event_id,
+      envelope.eventId,
+      envelope.deliveryId,
+      envelope.delivery_id,
+      row.deliveryId,
+      row.delivery_id,
+      ids.eventId,
+      ids.deliveryId,
+    ) || '',
   ).trim();
 
-  const companyId = envelope.company_id
-    ?? envelope.companyId
-    ?? row.companyId
-    ?? row.company_id
-    ?? ids.companyId;
-  const userId = envelope.user_id
-    ?? envelope.userId
-    ?? row.userId
-    ?? row.user_id
-    ?? ids.userId;
+  const companyId = firstPresent(
+    envelope.company_id,
+    envelope.companyId,
+    row.companyId,
+    row.company_id,
+    nested?.company_id,
+    nested?.companyId,
+    ids.companyId,
+  );
+  const userId = firstPresent(
+    envelope.user_id,
+    envelope.userId,
+    row.userId,
+    row.user_id,
+    nested?.createdByUserId,
+    nested?.updatedByUserId,
+    nested?.created_by_user_id,
+    nested?.updated_by_user_id,
+    ids.userId,
+  );
 
   return {
     event_type: eventType,
     event_id: eventId,
-    timestamp: envelope.timestamp
-      || row.sentAt
-      || row.sent_at
-      || row.createdAt
-      || row.created_at
-      || new Date().toISOString(),
+    timestamp: firstPresent(
+      envelope.timestamp,
+      envelope.occurredAt,
+      envelope.occurred_at,
+      row.sentAt,
+      row.sent_at,
+      row.createdAt,
+      row.created_at,
+      nested?.updatedAt,
+    ) || new Date().toISOString(),
     company_id: companyId != null && String(companyId).trim() ? String(companyId).trim() : undefined,
     user_id: userId != null && String(userId).trim() ? String(userId).trim() : undefined,
     payload,

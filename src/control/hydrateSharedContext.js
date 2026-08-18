@@ -141,11 +141,21 @@ function compactLineItem(record) {
   return line;
 }
 
-function lineItemsFromRecord(record) {
+export function lineItemsFromRecord(record) {
   if (!record || typeof record !== 'object') return [];
   const buckets = [record.line_items, record.items, record.products, record.estimate_items, record.invoice_items];
   for (const bucket of buckets) {
     if (Array.isArray(bucket) && bucket.length > 0) return bucket.map(compactLineItem);
+  }
+  if (Array.isArray(record.sections)) {
+    const fromSections = [];
+    for (const section of record.sections) {
+      if (!section || typeof section !== 'object') continue;
+      const items = section.items || section.line_items;
+      if (!Array.isArray(items)) continue;
+      for (const item of items) fromSections.push(compactLineItem(item));
+    }
+    if (fromSections.length > 0) return fromSections;
   }
   return [];
 }
@@ -275,8 +285,11 @@ async function hydrateEstimate(snapshot) {
   snapshot.entity = { type: 'estimate', ...pick(record, ESTIMATE_KEYS) };
   snapshot.entity.id = estimateId;
   snapshot.ids.customer_id = snapshot.ids.customer_id ?? asNumber(record.customer_id ?? record.customerId);
-  if (record.estimate_number || record.custom_number || record.number) {
-    snapshot.ids.estimate_number = record.estimate_number || record.custom_number || record.number;
+  if (record.estimate_number || record.custom_number || record.customNumber || record.number) {
+    snapshot.ids.estimate_number = record.estimate_number
+      || record.custom_number
+      || record.customNumber
+      || record.number;
   }
 
   const fromRecord = lineItemsFromRecord(record);

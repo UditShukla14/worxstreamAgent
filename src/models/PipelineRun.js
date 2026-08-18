@@ -39,6 +39,7 @@ const pipelineRunSchema = new mongoose.Schema({
   total_duration_ms: { type: Number, default: 0 },
   total_tokens: { type: Number, default: 0 },
   timestamp: { type: Date, default: Date.now },
+  deleted_at: { type: Date, default: null, index: true },
 }, {
   timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },
 });
