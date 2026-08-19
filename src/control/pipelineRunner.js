@@ -21,6 +21,7 @@ import {
 } from './contextBuilder.js';
 import { parseGovernanceFindings, runStatusFromSteps } from './parseVerdict.js';
 import { hydrateSharedContext } from './hydrateSharedContext.js';
+import { catalogFingerprint, payloadFingerprint } from './governanceFingerprint.js';
 import { getDefaultTenantIds } from '../config/index.js';
 import { runWithRequestContext } from '../request/requestContext.js';
 
@@ -145,7 +146,7 @@ async function markRemainingSkipped(runId, reason) {
   });
 }
 
-async function createStepAlert({ companyId, runId, eventId, eventType, entityLabel, customerType, step }) {
+export async function createStepAlert({ companyId, runId, eventId, eventType, entityLabel, customerType, step }) {
   if (step.verdict === 'pass' || step.verdict === 'running' || step.verdict === 'skipped') return null;
   const alertId = `alr_${randomUUID()}`;
   await GovernanceAlert.create({
@@ -248,12 +249,13 @@ async function runAegisChecks({
   entityLabel,
   runId,
   snapshot,
+  allowStop = true,
 }) {
   const agentName = getGovernanceAgentName(AEGIS_AGENT_KEY);
   const stepStart = Date.now();
   const agent = getGovernanceAgent(AEGIS_AGENT_KEY);
 
-  if (stopRequested(runId)) {
+  if (allowStop && stopRequested(runId)) {
     return [asStep({
       agentKey: AEGIS_AGENT_KEY,
       agentName,
@@ -282,8 +284,8 @@ async function runAegisChecks({
 
   try {
     const [ragChunks, catalog] = await Promise.all([
-      retrieveAllGovernanceChunks(companyId, { maxChunks: 40 }),
-      loadPolicyCatalog(companyId),
+      retrieveAllGovernanceChunks(companyId, { maxChunks: 40, eventType }),
+      loadPolicyCatalog(companyId, eventType),
     ]);
     const message = buildMasterMessage({
       eventType,
@@ -305,7 +307,7 @@ async function runAegisChecks({
     const tokens = result.usage?.total_tokens || 0;
     const toolsUsed = mapToolsUsed(result.toolsUsed);
 
-    if (stopRequested(runId)) {
+    if (allowStop && stopRequested(runId)) {
       return [asStep({
         agentKey: AEGIS_AGENT_KEY,
         agentName,
@@ -355,6 +357,10 @@ async function runAegisChecks({
       severity: 'info',
     })];
   }
+}
+
+export async function evaluateAegisChecks(args) {
+  return runAegisChecks({ ...args, allowStop: false });
 }
 
 /**
@@ -468,6 +474,13 @@ export async function runPipeline(event) {
     target.status = 'stopped';
   } else {
     target.status = runStatusFromSteps(steps);
+  }
+  try {
+    target.payload_fingerprint = payloadFingerprint(workingPayload, snapshot);
+    target.catalog_fingerprint = await catalogFingerprint(companyId);
+    target.last_reconciled_at = new Date();
+  } catch (error) {
+    console.warn('🛡️  Could not store run fingerprints:', error.message || error);
   }
   await target.save();
   const status = target.status;

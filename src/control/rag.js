@@ -7,6 +7,9 @@
  */
 
 import GovernanceChunk from '../models/GovernanceChunk.js';
+import GovernancePolicy from '../models/GovernancePolicy.js';
+import GovernanceRule from '../models/GovernanceRule.js';
+import { ruleAppliesToEvent } from './ruleEvents.js';
 
 const DEFAULT_TOP_K = 5;
 const MAX_CHUNK_CHARS = 900;
@@ -94,15 +97,57 @@ export async function removeDocumentChunks(companyId, documentId) {
 }
 
 /**
+ * Index an active policy/rule, or drop chunks when it is inactive/draft.
+ * Inactive rules must not stay in RAG or Aegis will still evaluate them.
+ */
+export async function syncGovernanceDocumentChunks({
+  companyId,
+  documentId,
+  documentType,
+  name,
+  content,
+  enabled,
+}) {
+  if (!enabled) {
+    await removeDocumentChunks(companyId, documentId);
+    return 0;
+  }
+  return reindexDocument({ companyId, documentId, documentType, name, content });
+}
+
+async function activeGovernanceDocumentIds(companyId, { eventType } = {}) {
+  const company_id = String(companyId);
+  const [policies, rules] = await Promise.all([
+    GovernancePolicy.find({ company_id, status: 'active' }).select('_id').lean(),
+    GovernanceRule.find({ company_id, active: true }).select('_id event_type event_types').lean(),
+  ]);
+  const matchingRules = eventType
+    ? (rules || []).filter((rule) => ruleAppliesToEvent(rule, eventType))
+    : (rules || []);
+  return [
+    ...(policies || []).map((row) => String(row._id)),
+    ...matchingRules.map((row) => String(row._id)),
+  ];
+}
+
+function chunksForActiveDocuments(companyId, documentIds) {
+  return GovernanceChunk.find({
+    company_id: String(companyId),
+    document_id: { $in: documentIds },
+  });
+}
+
+/**
  * @param {string} companyId
  * @param {string} query
  * @param {{ topK?: number, eventType?: string }} [opts]
  */
 export async function retrieveRelevantChunks(companyId, query, opts = {}) {
   const topK = Number.isFinite(opts.topK) ? opts.topK : DEFAULT_TOP_K;
-  const company_id = String(companyId);
   const queryTokens = tokenize(query);
-  const chunks = await GovernanceChunk.find({ company_id }).lean();
+  const documentIds = await activeGovernanceDocumentIds(companyId, { eventType: opts.eventType });
+  if (documentIds.length === 0) return [];
+  const chunks = await chunksForActiveDocuments(companyId, documentIds).lean();
 
   const scored = chunks.map((chunk) => {
     let s = scoreChunk(queryTokens, `${chunk.name} ${chunk.text}`);
@@ -117,13 +162,14 @@ export async function retrieveRelevantChunks(companyId, query, opts = {}) {
 }
 
 /**
- * Load every indexed policy/rule chunk for the company so Aegis sees new
- * documents without depending on query overlap.
+ * Load indexed chunks for active policies and active rules only.
+ * Pass eventType so rules that do not match this event are omitted.
  */
-export async function retrieveAllGovernanceChunks(companyId, { maxChunks = 40 } = {}) {
-  const chunks = await GovernanceChunk.find({ company_id: String(companyId) })
+export async function retrieveAllGovernanceChunks(companyId, { maxChunks = 40, eventType } = {}) {
+  const documentIds = await activeGovernanceDocumentIds(companyId, { eventType });
+  if (documentIds.length === 0) return [];
+  return chunksForActiveDocuments(companyId, documentIds)
     .sort({ document_type: 1, name: 1 })
     .limit(maxChunks)
     .lean();
-  return chunks;
 }

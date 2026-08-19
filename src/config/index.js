@@ -189,6 +189,13 @@ export const config = {
     specialistMessagesActive: parseInt(process.env.SPECIALIST_CONTEXT_MESSAGES_ACTIVE || '12', 10),
     pendingConfirmTtlSeconds: parseInt(process.env.COWORKER_PENDING_CONFIRM_TTL || '300', 10),
   },
+  sentinel: {
+    enabled: process.env.AEGIS_SENTINEL_ENABLED !== 'false',
+    intervalMs: Math.max(60_000, parseInt(process.env.AEGIS_SENTINEL_INTERVAL_MS || '3600000', 10) || 3600000),
+    lookbackDays: Math.max(1, parseInt(process.env.AEGIS_SENTINEL_LOOKBACK_DAYS || '14', 10) || 14),
+    maxPerTick: Math.max(1, parseInt(process.env.AEGIS_SENTINEL_MAX_PER_TICK || '8', 10) || 8),
+    debounceMs: Math.max(5_000, parseInt(process.env.AEGIS_SENTINEL_DEBOUNCE_MS || '30000', 10) || 30000),
+  },
 };
 
 /**

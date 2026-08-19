@@ -16,6 +16,7 @@ const alertSchema = new mongoose.Schema({
   suggested_action: { type: String, default: '' },
   agent_response_excerpt: { type: String, default: '' },
   status: { type: String, enum: ['open', 'resolved'], default: 'open' },
+  resolved_by: { type: String, default: '' },
   timestamp: { type: Date, default: Date.now },
 }, {
   timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },

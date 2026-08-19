@@ -5,7 +5,7 @@
 
 import GovernancePolicy from '../models/GovernancePolicy.js';
 import GovernanceRule from '../models/GovernanceRule.js';
-import { reindexDocument } from './rag.js';
+import { syncGovernanceDocumentChunks } from './rag.js';
 import { SEED_POLICIES, SEED_RULES } from './seedData.js';
 import { ruleChunkContent } from './ruleEvents.js';
 
@@ -41,12 +41,13 @@ export async function seedGovernanceForCompany(companyId) {
       });
       result.policies.inserted += 1;
     }
-    await reindexDocument({
+    await syncGovernanceDocumentChunks({
       companyId: company_id,
       documentId: String(doc._id),
       documentType: 'policy',
       name: doc.name,
       content: doc.content,
+      enabled: doc.status === 'active',
     });
   }
 
@@ -77,12 +78,13 @@ export async function seedGovernanceForCompany(companyId) {
       });
       result.rules.inserted += 1;
     }
-    await reindexDocument({
+    await syncGovernanceDocumentChunks({
       companyId: company_id,
       documentId: String(doc._id),
       documentType: 'rule',
       name: doc.name,
       content: ruleChunkContent(doc),
+      enabled: Boolean(doc.active),
     });
   }
 

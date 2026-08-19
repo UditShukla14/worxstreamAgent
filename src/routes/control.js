@@ -12,13 +12,15 @@ import HiddenWebhookDelivery from '../models/HiddenWebhookDelivery.js';
 import WebhookDelivery from '../models/WebhookDelivery.js';
 import {
   GOVERNANCE_AGENT_DEFINITIONS,
+  GOVERNANCE_PIPELINE_KEYS,
   getGovernanceAgentName,
   listPipelines,
   countActivePipelines,
-  reindexDocument,
   removeDocumentChunks,
+  syncGovernanceDocumentChunks,
   stopPipelineRun,
   restartPipelineRun,
+  scheduleSentinelSweep,
 } from '../control/index.js';
 import { callWorxstreamAPI } from '../services/httpClient.js';
 import { customerTypeFromPayload } from '../control/contextBuilder.js';
@@ -108,6 +110,8 @@ function runToApi(doc) {
     totalDurationMs: doc.total_duration_ms || 0,
     totalTokens: doc.total_tokens || 0,
     timestamp: (doc.timestamp || doc.created_at || new Date()).toISOString(),
+    lastReconciledAt: doc.last_reconciled_at ? new Date(doc.last_reconciled_at).toISOString() : null,
+    reconcileReason: doc.reconcile_reason || '',
   };
 }
 
@@ -314,13 +318,15 @@ router.post('/policies', async (req, res, next) => {
       status,
       content,
     });
-    await reindexDocument({
+    await syncGovernanceDocumentChunks({
       companyId: req.companyId,
       documentId: String(doc._id),
       documentType: 'policy',
       name,
       content,
+      enabled: status === 'active',
     });
+    scheduleSentinelSweep(req.companyId);
     res.status(201).json({ success: true, data: policyToApi(doc) });
   } catch (error) {
     next(error);
@@ -340,13 +346,15 @@ router.put('/policies/:id', async (req, res, next) => {
       return res.status(400).json({ success: false, error: 'name and content are required' });
     }
     await doc.save();
-    await reindexDocument({
+    await syncGovernanceDocumentChunks({
       companyId: req.companyId,
       documentId: String(doc._id),
       documentType: 'policy',
       name: doc.name,
       content: doc.content,
+      enabled: doc.status === 'active',
     });
+    scheduleSentinelSweep(req.companyId);
     res.json({ success: true, data: policyToApi(doc) });
   } catch (error) {
     next(error);
@@ -358,6 +366,7 @@ router.delete('/policies/:id', async (req, res, next) => {
     const doc = await GovernancePolicy.findOneAndDelete({ _id: req.params.id, company_id: req.companyId });
     if (!doc) return res.status(404).json({ success: false, error: 'Policy not found' });
     await removeDocumentChunks(req.companyId, String(doc._id));
+    scheduleSentinelSweep(req.companyId);
     res.json({ success: true, data: { id: String(doc._id) } });
   } catch (error) {
     next(error);
@@ -417,13 +426,15 @@ router.post('/rules', async (req, res, next) => {
       ...fields,
     });
     const content = ruleChunkContent(doc);
-    await reindexDocument({
+    await syncGovernanceDocumentChunks({
       companyId: req.companyId,
       documentId: String(doc._id),
       documentType: 'rule',
       name: doc.name,
       content,
+      enabled: Boolean(doc.active),
     });
+    scheduleSentinelSweep(req.companyId);
     res.status(201).json({ success: true, data: ruleToApi(doc) });
   } catch (error) {
     next(error);
@@ -441,13 +452,15 @@ router.put('/rules/:id', async (req, res, next) => {
     }
     await doc.save();
     const content = ruleChunkContent(doc);
-    await reindexDocument({
+    await syncGovernanceDocumentChunks({
       companyId: req.companyId,
       documentId: String(doc._id),
       documentType: 'rule',
       name: doc.name,
       content,
+      enabled: Boolean(doc.active),
     });
+    scheduleSentinelSweep(req.companyId);
     res.json({ success: true, data: ruleToApi(doc) });
   } catch (error) {
     next(error);
@@ -459,6 +472,7 @@ router.delete('/rules/:id', async (req, res, next) => {
     const doc = await GovernanceRule.findOneAndDelete({ _id: req.params.id, company_id: req.companyId });
     if (!doc) return res.status(404).json({ success: false, error: 'Rule not found' });
     await removeDocumentChunks(req.companyId, String(doc._id));
+    scheduleSentinelSweep(req.companyId);
     res.json({ success: true, data: { id: String(doc._id) } });
   } catch (error) {
     next(error);
@@ -654,6 +668,26 @@ router.get('/alerts', async (req, res, next) => {
   }
 });
 
+router.post('/alerts/resolve', async (req, res, next) => {
+  try {
+    const alertIds = parseIdList(req.body?.alert_ids ?? req.body?.alertIds);
+    if (alertIds.length === 0) {
+      return res.status(400).json({ success: false, error: 'alert_ids is required' });
+    }
+    const result = await GovernanceAlert.updateMany(
+      {
+        company_id: req.companyId,
+        alert_id: { $in: alertIds },
+        status: 'open',
+      },
+      { $set: { status: 'resolved', resolved_by: 'user' } },
+    );
+    res.json({ success: true, data: { resolved: result.modifiedCount || 0 } });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.patch('/alerts/:alertId', async (req, res, next) => {
   try {
     const status = req.body?.status;
@@ -662,7 +696,7 @@ router.patch('/alerts/:alertId', async (req, res, next) => {
     }
     const doc = await GovernanceAlert.findOneAndUpdate(
       { company_id: req.companyId, alert_id: req.params.alertId },
-      { $set: { status } },
+      { $set: { status, resolved_by: status === 'resolved' ? 'user' : '' } },
       { new: true },
     );
     if (!doc) return res.status(404).json({ success: false, error: 'Alert not found' });
@@ -699,7 +733,7 @@ router.get('/dashboard', async (req, res, next) => {
         .sort({ timestamp: -1 })
         .lean(),
       GovernanceAlert.countDocuments({ company_id: companyId, status: 'open' }),
-      Promise.resolve(Object.keys(GOVERNANCE_AGENT_DEFINITIONS)),
+      Promise.resolve(GOVERNANCE_PIPELINE_KEYS),
     ]);
 
     const weekPassed = weekRuns.filter((r) => r.status === 'pass').length;

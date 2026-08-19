@@ -90,21 +90,24 @@ export function buildRagQuery(eventType, agentKey, payload = {}) {
   return bits.join(' ');
 }
 
-export async function loadPolicyCatalog(companyId) {
+export async function loadPolicyCatalog(companyId, eventType) {
   const [policies, rules] = await Promise.all([
     GovernancePolicy.find({ company_id: String(companyId), status: 'active' }).select('name type').lean(),
     GovernanceRule.find({ company_id: String(companyId), active: true }).select('name event_type event_types').lean(),
   ]);
+  const mappedRules = (rules || []).map((row) => {
+    const eventTypes = eventTypesFromRule(row);
+    return {
+      name: row.name,
+      eventType: eventTypes[0] || row.event_type,
+      eventTypes,
+    };
+  });
   return {
     policies: (policies || []).map((row) => ({ name: row.name, type: row.type || 'policy' })),
-    rules: (rules || []).map((row) => {
-      const eventTypes = eventTypesFromRule(row);
-      return {
-        name: row.name,
-        eventType: eventTypes[0] || row.event_type,
-        eventTypes,
-      };
-    }),
+    rules: eventType
+      ? mappedRules.filter((row) => ruleAppliesToEvent(row, eventType))
+      : mappedRules,
   };
 }
 
