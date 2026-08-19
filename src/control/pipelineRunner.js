@@ -464,6 +464,49 @@ async function runAegisChecks({
 }
 
 /**
+ * Re-evaluate a stored event against the current catalog without writing a run
+ * or creating alerts. Used by Vigil. Live entity fields overlay the stored
+ * payload when preferLiveEntity is true.
+ */
+export async function evaluateGovernanceEvent({
+  companyId,
+  eventType,
+  payload,
+  preferLiveEntity = true,
+}) {
+  const catalog = await loadPolicyCatalog(companyId, eventType);
+  const hydrated = await hydrateSharedContext({ eventType, payload, preferLiveEntity });
+  const entityLabel = entityLabelFromPayload(hydrated.payload, eventType);
+  const agent = getGovernanceAgent(AEGIS_AGENT_KEY);
+  if (!agent) {
+    return { ok: false, findings: [], entityLabel };
+  }
+
+  try {
+    const ragChunks = await retrieveAllGovernanceChunks(companyId, { maxChunks: 40, eventType });
+    const message = buildMasterMessage({
+      eventType,
+      payload: hydrated.payload,
+      companyId,
+      ragChunks,
+      agentKey: AEGIS_AGENT_KEY,
+      snapshot: hydrated.snapshot,
+      catalog,
+    });
+    const result = await agent.run(message, {
+      fromAgent: 'vigil',
+      reason: 'alert sweep re-check',
+      skipClarification: true,
+    });
+    const parsed = parseGovernanceFindings(result.response, { relatedEntity: entityLabel });
+    return { ok: parsed.ok, findings: parsed.findings, entityLabel };
+  } catch (error) {
+    console.error('❌ [Vigil] catalog re-check failed:', error);
+    return { ok: false, findings: [], entityLabel };
+  }
+}
+
+/**
  * @param {{
  *   event_type: string,
  *   event_id?: string,

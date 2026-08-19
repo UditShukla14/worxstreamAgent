@@ -330,7 +330,7 @@ async function hydrateJobEvent(snapshot, payload) {
 /**
  * @returns {Promise<{ payload: object, snapshot: object }>}
  */
-export async function hydrateSharedContext({ eventType, payload }) {
+export async function hydrateSharedContext({ eventType, payload, preferLiveEntity = false }) {
   const eventPayload = payload && typeof payload === 'object' ? payload : {};
   const ids = extractEntityIds(eventPayload, eventType);
   const snapshot = emptySnapshot(ids);
@@ -339,6 +339,13 @@ export async function hydrateSharedContext({ eventType, payload }) {
   try {
     if (prefix === 'estimate' || prefix === 'invoice' || prefix === 'credit_memo') {
       await hydrateDocumentEvent(snapshot, eventPayload, prefix);
+      if (preferLiveEntity) {
+        const idKey = prefix === 'invoice' ? 'invoice_id' : `${prefix}_id`;
+        const entityId = snapshot.ids[idKey];
+        if (entityId != null && !snapshot.enrichment.from_api) {
+          await enrichFromApiWhenPayloadSparse(snapshot, entityId, prefix);
+        }
+      }
     } else if (prefix === 'customer') {
       await enrichCustomerCredit(snapshot, ids.customer_id);
     } else if (prefix === 'product') {
@@ -350,7 +357,12 @@ export async function hydrateSharedContext({ eventType, payload }) {
     snapshot.errors.push(error.message || String(error));
   }
 
-  const merged = { ...eventPayload };
+  const live = preferLiveEntity
+    && snapshot.enrichment.from_api
+    && typeof snapshot.enrichment.from_api === 'object'
+    ? snapshot.enrichment.from_api
+    : null;
+  const merged = { ...eventPayload, ...(live || {}) };
   for (const [key, value] of Object.entries(snapshot.ids)) {
     if (value != null && merged[key] == null) merged[key] = value;
   }

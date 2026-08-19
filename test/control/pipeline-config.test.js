@@ -162,6 +162,8 @@ describe('agent isolation', () => {
     assert.equal(isChildAgentKey('aegis'), false);
     assert.equal(isChildAgentKey('nova'), false);
     assert.equal(isGovernanceAgentKey('aegis'), true);
+    assert.equal(isGovernanceAgentKey('vigil'), true);
+    assert.equal(isChildAgentKey('vigil'), false);
     assert.equal(isGovernanceAgentKey('profitPolicy'), false);
     assert.equal(isGovernanceAgentKey('estimate'), false);
   });

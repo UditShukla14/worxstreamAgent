@@ -1,12 +1,13 @@
 /**
- * Aegis — the single Governance Control Tower agent (Nova's counterpart).
+ * Governance Control Tower agents.
  *
- * Instantiated by the pipeline runner only. The chat router never sees this
- * key. Policies and rules live in Mongo/RAG; adding a policy does not require
- * a new agent.
+ * Aegis evaluates live events against the policy/rule catalog (Nova's counterpart).
+ * Vigil is housekeeping: it reviews stored alerts and is not instantiated as a
+ * pipeline BaseAgent. The chat router never sees these keys.
  */
 
 export const AEGIS_AGENT_KEY = 'aegis';
+export const VIGIL_AGENT_KEY = 'vigil';
 
 const GOVERNANCE_OUTPUT_CONTRACT = `
 OUTPUT CONTRACT (mandatory):
@@ -77,16 +78,39 @@ HOW TO CHECK:
 
 ${GOVERNANCE_OUTPUT_CONTRACT}`,
   },
+  [VIGIL_AGENT_KEY]: {
+    name: 'vigil_agent',
+    description: 'Reviews stored alerts against the current policy/rule catalog and permanently deletes stale ones',
+    domain: 'governance',
+    housekeeping: true,
+    extraTools: [],
+    systemPrompt: `You are Vigil, the Control Tower alert hygiene agent — Aegis's counterpart for stored alerts.
+You do not chat with a user and you do not evaluate live business events.
+
+Your job: read each stored alert against the company's CURRENT catalog (active policies and active rules). Delete alerts that are no longer required. Keep alerts that still match an active catalog item.
+
+KEEP when the alert's policy_violated or triggered_by matches an active policy, or an active rule whose event types include the alert's event_type — then re-check the live entity. RESOLVE when that check now passes or no longer applies.
+DELETE when the matching policy is draft, the matching rule is inactive, the rule does not apply to this event_type, or the alert was an invented default-threshold check with no catalog item.
+
+Do not invent numeric thresholds. Do not re-open resolved alerts. Do not keep orphan alerts "just in case".`,
+  },
 };
 
 export const GOVERNANCE_AGENT_KEYS = Object.keys(GOVERNANCE_AGENT_DEFINITIONS);
 
 const DISPLAY_NAMES = {
   aegis: 'Aegis',
+  vigil: 'Vigil',
   profitPolicy: 'Profit Policy Agent',
   inventoryCheck: 'Inventory Check Agent',
   customerCheck: 'Customer Check Agent',
 };
+
+export function pipelineGovernanceAgentKeys() {
+  return Object.entries(GOVERNANCE_AGENT_DEFINITIONS)
+    .filter(([, def]) => !def.housekeeping)
+    .map(([key]) => key);
+}
 
 export function isGovernanceAgentKey(key) {
   return Object.prototype.hasOwnProperty.call(GOVERNANCE_AGENT_DEFINITIONS, key);

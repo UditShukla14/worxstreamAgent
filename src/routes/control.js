@@ -13,12 +13,15 @@ import WebhookDelivery from '../models/WebhookDelivery.js';
 import {
   GOVERNANCE_AGENT_DEFINITIONS,
   getGovernanceAgentName,
+  pipelineGovernanceAgentKeys,
   listPipelines,
   countActivePipelines,
   removeDocumentChunks,
   syncGovernanceDocumentChunks,
   stopPipelineRun,
   restartPipelineRun,
+  runAlertSweep,
+  deleteAlertsPermanently,
 } from '../control/index.js';
 import { callWorxstreamAPI } from '../services/httpClient.js';
 import { customerTypeFromPayload } from '../control/contextBuilder.js';
@@ -638,6 +641,61 @@ router.get('/alerts', async (req, res, next) => {
   }
 });
 
+router.post('/alerts/sweep', async (req, res, next) => {
+  let started = false;
+  const writeEvent = (event) => {
+    res.write(`${JSON.stringify(event)}\n`);
+    if (typeof res.flush === 'function') res.flush();
+  };
+
+  try {
+    await runAlertSweep({
+      companyId: req.companyId,
+      onStart: () => {
+        started = true;
+        res.status(200);
+        res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache, no-transform');
+        res.setHeader('X-Accel-Buffering', 'no');
+        if (typeof res.flushHeaders === 'function') res.flushHeaders();
+      },
+      onProgress: writeEvent,
+    });
+    res.end();
+  } catch (error) {
+    if (started) {
+      writeEvent({
+        type: 'error',
+        processed: 0,
+        total: 0,
+        deleted: 0,
+        resolved: 0,
+        kept: 0,
+        message: error.message || String(error),
+      });
+      res.end();
+      return;
+    }
+    if (error.status === 409) {
+      return res.status(409).json({ success: false, error: error.message });
+    }
+    next(error);
+  }
+});
+
+router.post('/alerts/delete', async (req, res, next) => {
+  try {
+    const alertIds = parseIdList(req.body?.alert_ids ?? req.body?.alertIds);
+    if (alertIds.length === 0) {
+      return res.status(400).json({ success: false, error: 'alert_ids is required' });
+    }
+    const deleted = await deleteAlertsPermanently(req.companyId, alertIds);
+    res.json({ success: true, data: { deleted } });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post('/alerts/resolve', async (req, res, next) => {
   try {
     const alertIds = parseIdList(req.body?.alert_ids ?? req.body?.alertIds);
@@ -703,7 +761,7 @@ router.get('/dashboard', async (req, res, next) => {
         .sort({ timestamp: -1 })
         .lean(),
       GovernanceAlert.countDocuments({ company_id: companyId, status: 'open' }),
-      Promise.resolve(Object.keys(GOVERNANCE_AGENT_DEFINITIONS)),
+      Promise.resolve(pipelineGovernanceAgentKeys()),
     ]);
 
     const weekPassed = weekRuns.filter((r) => r.status === 'pass').length;
