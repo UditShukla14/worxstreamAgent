@@ -5,6 +5,7 @@
 import { getGovernanceAgentName } from './governanceAgents.js';
 import GovernancePolicy from '../models/GovernancePolicy.js';
 import GovernanceRule from '../models/GovernanceRule.js';
+import { eventTypesFromRule, ruleAppliesToEvent } from './ruleEvents.js';
 
 export function entityLabelFromPayload(payload = {}, eventType = '') {
   const p = payload && typeof payload === 'object' ? payload : {};
@@ -92,11 +93,18 @@ export function buildRagQuery(eventType, agentKey, payload = {}) {
 export async function loadPolicyCatalog(companyId) {
   const [policies, rules] = await Promise.all([
     GovernancePolicy.find({ company_id: String(companyId), status: 'active' }).select('name type').lean(),
-    GovernanceRule.find({ company_id: String(companyId), active: true }).select('name event_type').lean(),
+    GovernanceRule.find({ company_id: String(companyId), active: true }).select('name event_type event_types').lean(),
   ]);
   return {
     policies: (policies || []).map((row) => ({ name: row.name, type: row.type || 'policy' })),
-    rules: (rules || []).map((row) => ({ name: row.name, eventType: row.event_type })),
+    rules: (rules || []).map((row) => {
+      const eventTypes = eventTypesFromRule(row);
+      return {
+        name: row.name,
+        eventType: eventTypes[0] || row.event_type,
+        eventTypes,
+      };
+    }),
   };
 }
 
@@ -154,8 +162,12 @@ function formatCatalog(catalog, eventType) {
   }
   const policyLines = policies.map((row) => `- policy: ${row.name}`);
   const ruleLines = rules.map((row) => {
-    const applies = row.eventType && row.eventType === eventType ? ' [applies to this event]' : '';
-    return `- rule: ${row.name} (${row.eventType || 'any'})${applies}`;
+    const eventTypes = Array.isArray(row.eventTypes) && row.eventTypes.length
+      ? row.eventTypes
+      : (row.eventType ? [row.eventType] : []);
+    const applies = ruleAppliesToEvent(row, eventType) ? ' [applies to this event]' : '';
+    const eventsLabel = eventTypes.length > 0 ? eventTypes.join(', ') : 'any';
+    return `- rule: ${row.name} (${eventsLabel})${applies}`;
   });
   return ['Active policy catalog (evaluate every item that applies):', ...policyLines, ...ruleLines].join('\n');
 }

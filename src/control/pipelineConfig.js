@@ -1,6 +1,6 @@
 /**
- * event_type → Aegis. One agent evaluates all policies/rules for the event.
- * Adding a policy does not require a new pipeline agent.
+ * event_type → Aegis. Known catalog events are listed below; any other
+ * non-empty event still runs Aegis so subscribed webhooks are governed.
  */
 
 import { AEGIS_AGENT_KEY } from './governanceAgents.js';
@@ -41,8 +41,9 @@ export function normalizeEventType(eventType) {
 
 export function getPipelineForEvent(eventType) {
   const key = normalizeEventType(eventType);
-  const pipeline = PIPELINE_BY_EVENT[key];
-  return Array.isArray(pipeline) ? [...pipeline] : [];
+  if (!key) return [];
+  const pipeline = PIPELINE_BY_EVENT[key] ?? AEGIS_PIPELINE;
+  return [...pipeline];
 }
 
 export function listPipelines() {

@@ -7,10 +7,7 @@ import GovernancePolicy from '../models/GovernancePolicy.js';
 import GovernanceRule from '../models/GovernanceRule.js';
 import { reindexDocument } from './rag.js';
 import { SEED_POLICIES, SEED_RULES } from './seedData.js';
-
-function ruleContent(rule) {
-  return `${rule.name}\nEvent: ${rule.event_type}\nWhen: ${rule.condition}\nThen: ${rule.action}`;
-}
+import { ruleChunkContent } from './ruleEvents.js';
 
 /**
  * @param {string} companyId
@@ -59,6 +56,7 @@ export async function seedGovernanceForCompany(companyId) {
     if (existing) {
       existing.name = seed.name;
       existing.event_type = seed.event_type;
+      existing.event_types = [seed.event_type];
       existing.condition = seed.condition;
       existing.action = seed.action;
       existing.priority = seed.priority;
@@ -71,6 +69,7 @@ export async function seedGovernanceForCompany(companyId) {
         seed_key: seed.seed_key,
         name: seed.name,
         event_type: seed.event_type,
+        event_types: [seed.event_type],
         condition: seed.condition,
         action: seed.action,
         priority: seed.priority,
@@ -83,7 +82,7 @@ export async function seedGovernanceForCompany(companyId) {
       documentId: String(doc._id),
       documentType: 'rule',
       name: doc.name,
-      content: ruleContent(doc),
+      content: ruleChunkContent(doc),
     });
   }
 

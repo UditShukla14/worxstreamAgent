@@ -22,21 +22,9 @@ import {
 } from '../control/index.js';
 import { callWorxstreamAPI } from '../services/httpClient.js';
 import { customerTypeFromPayload } from '../control/contextBuilder.js';
+import { eventTypesFromRule, parseRuleEventTypes, ruleChunkContent } from '../control/ruleEvents.js';
 
 const router = Router();
-
-const RULE_EVENT_TYPES = new Set([
-  'estimate.created',
-  'estimate.updated',
-  'invoice.created',
-  'invoice.updated',
-  'invoice.paid',
-  'customer.created',
-  'customer.updated',
-  'product.updated',
-  'job.created',
-  'credit_memo.created',
-]);
 
 function companyIdFromReq(req) {
   const raw = req.query.company_id
@@ -77,10 +65,12 @@ function policyToApi(doc) {
 }
 
 function ruleToApi(doc) {
+  const eventTypes = eventTypesFromRule(doc);
   return {
     id: String(doc._id),
     name: doc.name,
-    eventType: doc.event_type,
+    eventType: eventTypes[0] || doc.event_type,
+    eventTypes,
     condition: doc.condition,
     action: doc.action,
     priority: doc.priority,
@@ -395,8 +385,16 @@ router.get('/rules', async (req, res, next) => {
 function ruleFieldsFromBody(body, partial = false) {
   const out = {};
   if (!partial || body.name != null) out.name = String(body.name || '').trim();
-  if (!partial || body.eventType != null || body.event_type != null) {
-    out.event_type = String(body.eventType || body.event_type || '').trim();
+  if (
+    !partial
+    || body.eventTypes != null
+    || body.event_types != null
+    || body.eventType != null
+    || body.event_type != null
+  ) {
+    const eventTypes = parseRuleEventTypes(body);
+    out.event_types = eventTypes;
+    out.event_type = eventTypes[0] || '';
   }
   if (!partial || body.condition != null) out.condition = String(body.condition || '').trim();
   if (!partial || body.action != null) out.action = String(body.action || '').trim();
@@ -412,16 +410,13 @@ router.post('/rules', async (req, res, next) => {
   try {
     const fields = ruleFieldsFromBody(req.body || {}, false);
     if (!fields.name || !fields.condition || !fields.action || !fields.event_type) {
-      return res.status(400).json({ success: false, error: 'name, eventType, condition, and action are required' });
-    }
-    if (!RULE_EVENT_TYPES.has(fields.event_type)) {
-      return res.status(400).json({ success: false, error: `Unsupported eventType: ${fields.event_type}` });
+      return res.status(400).json({ success: false, error: 'name, eventType(s), condition, and action are required' });
     }
     const doc = await GovernanceRule.create({
       company_id: req.companyId,
       ...fields,
     });
-    const content = `${doc.name}\nEvent: ${doc.event_type}\nWhen: ${doc.condition}\nThen: ${doc.action}`;
+    const content = ruleChunkContent(doc);
     await reindexDocument({
       companyId: req.companyId,
       documentId: String(doc._id),
@@ -440,15 +435,12 @@ router.put('/rules/:id', async (req, res, next) => {
     const doc = await GovernanceRule.findOne({ _id: req.params.id, company_id: req.companyId });
     if (!doc) return res.status(404).json({ success: false, error: 'Rule not found' });
     const fields = ruleFieldsFromBody(req.body || {}, true);
-    if (fields.event_type && !RULE_EVENT_TYPES.has(fields.event_type)) {
-      return res.status(400).json({ success: false, error: `Unsupported eventType: ${fields.event_type}` });
-    }
     Object.assign(doc, fields);
     if (!doc.name || !doc.condition || !doc.action || !doc.event_type) {
-      return res.status(400).json({ success: false, error: 'name, eventType, condition, and action are required' });
+      return res.status(400).json({ success: false, error: 'name, eventType(s), condition, and action are required' });
     }
     await doc.save();
-    const content = `${doc.name}\nEvent: ${doc.event_type}\nWhen: ${doc.condition}\nThen: ${doc.action}`;
+    const content = ruleChunkContent(doc);
     await reindexDocument({
       companyId: req.companyId,
       documentId: String(doc._id),

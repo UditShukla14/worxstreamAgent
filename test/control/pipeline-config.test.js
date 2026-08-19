@@ -6,6 +6,7 @@ import { isChildAgentKey } from '../../src/agents/agentDefinitions.js';
 import { isGovernanceAgentKey } from '../../src/control/governanceAgents.js';
 import { parseAgentVerdict, parseGovernanceFindings, runStatusFromSteps, stripJsonCodeFence } from '../../src/control/parseVerdict.js';
 import { entityLabelFromPayload, customerTypeFromPayload, buildRagQuery, buildMasterMessage } from '../../src/control/contextBuilder.js';
+import { eventTypesFromRule, parseRuleEventTypes, ruleAppliesToEvent } from '../../src/control/ruleEvents.js';
 import { tokenize, chunkText, scoreChunk } from '../../src/control/rag.js';
 
 describe('pipeline config', () => {
@@ -21,8 +22,8 @@ describe('pipeline config', () => {
     assert.deepEqual(getPipelineForEvent('creditMemoCreated'), ['aegis']);
   });
 
-  it('returns an empty pipeline for unknown events', () => {
-    assert.deepEqual(getPipelineForEvent('unknown.event'), []);
+  it('returns an empty pipeline only when the event type is blank', () => {
+    assert.deepEqual(getPipelineForEvent('unknown.event'), ['aegis']);
     assert.deepEqual(getPipelineForEvent(''), []);
   });
 
@@ -277,6 +278,41 @@ describe('context builder + rag scoring', () => {
     const payloadIdx = message.indexOf('WORXSTREAM EVENT PAYLOAD');
     const enrichmentIdx = message.indexOf('SUPPLEMENTARY ENRICHMENT');
     assert.ok(payloadIdx >= 0 && enrichmentIdx > payloadIdx);
+  });
+
+  it('marks multi-event rules as applicable when any trigger matches', () => {
+    const message = buildMasterMessage({
+      eventType: 'estimate.updated',
+      payload: { estimate_id: 1 },
+      companyId: '1',
+      ragChunks: [],
+      agentKey: 'aegis',
+      catalog: {
+        policies: [],
+        rules: [
+          { name: 'Low margin', eventTypes: ['estimate.created', 'estimate.updated'] },
+          { name: 'Invoice only', eventType: 'invoice.created' },
+        ],
+      },
+    });
+    assert.match(message, /Low margin \(estimate\.created, estimate\.updated\) \[applies to this event\]/);
+    assert.match(message, /Invoice only \(invoice\.created\)/);
+    assert.doesNotMatch(message, /Invoice only \(invoice\.created\) \[applies to this event\]/);
+  });
+});
+
+describe('rule event types', () => {
+  it('parses a list of webhook codes into dotted types', () => {
+    assert.deepEqual(
+      parseRuleEventTypes({ eventTypes: ['estimate_created', 'estimate.updated'] }),
+      ['estimate.created', 'estimate.updated'],
+    );
+    assert.deepEqual(
+      eventTypesFromRule({ event_type: 'invoice.created' }),
+      ['invoice.created'],
+    );
+    assert.equal(ruleAppliesToEvent({ event_types: ['estimate.created', 'invoice.paid'] }, 'estimate_created'), true);
+    assert.equal(ruleAppliesToEvent({ event_types: ['estimate.created'] }, 'invoice.paid'), false);
   });
 });
 

@@ -5,6 +5,7 @@ const ruleSchema = new mongoose.Schema({
   seed_key: { type: String, default: undefined },
   name: { type: String, required: true },
   event_type: { type: String, required: true },
+  event_types: { type: [String], default: [] },
   condition: { type: String, required: true },
   action: { type: String, required: true },
   priority: { type: Number, default: 2, min: 1, max: 5 },
