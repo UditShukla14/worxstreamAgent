@@ -21,6 +21,7 @@ import {
   restartPipelineRun,
 } from '../control/index.js';
 import { callWorxstreamAPI } from '../services/httpClient.js';
+import { customerTypeFromPayload } from '../control/contextBuilder.js';
 
 const router = Router();
 
@@ -120,7 +121,7 @@ function runToApi(doc) {
   };
 }
 
-function alertToApi(doc) {
+function alertToApi(doc, extras = {}) {
   return {
     alertId: doc.alert_id,
     severity: doc.severity,
@@ -128,6 +129,7 @@ function alertToApi(doc) {
     detail: doc.detail,
     triggeredBy: doc.triggered_by,
     relatedEntity: doc.related_entity,
+    customerType: extras.customerType || doc.customer_type || '',
     eventType: doc.event_type,
     policyViolated: doc.policy_violated,
     suggestedAction: doc.suggested_action,
@@ -135,6 +137,25 @@ function alertToApi(doc) {
     status: doc.status,
     timestamp: (doc.timestamp || doc.created_at || new Date()).toISOString(),
   };
+}
+
+async function customerTypeByRunId(companyId, rows) {
+  const runIds = [...new Set(
+    rows
+      .filter((row) => !row.customer_type && row.run_id)
+      .map((row) => String(row.run_id)),
+  )];
+  if (runIds.length === 0) return new Map();
+  const runs = await PipelineRun.find({
+    company_id: String(companyId),
+    run_id: { $in: runIds },
+  }).select('run_id payload').lean();
+  const mapped = new Map();
+  for (const run of runs) {
+    const label = customerTypeFromPayload(run.payload);
+    if (label) mapped.set(String(run.run_id), label);
+  }
+  return mapped;
 }
 
 function activeRunQuery(filter) {
@@ -628,7 +649,14 @@ router.get('/alerts', async (req, res, next) => {
       .sort({ timestamp: -1 })
       .skip(sliced.skip)
       .limit(perPage);
-    res.json({ success: true, data: rows.map(alertToApi), pagination: sliced.pagination });
+    const typeByRun = await customerTypeByRunId(req.companyId, rows);
+    res.json({
+      success: true,
+      data: rows.map((row) => alertToApi(row, {
+        customerType: row.customer_type || typeByRun.get(String(row.run_id)) || '',
+      })),
+      pagination: sliced.pagination,
+    });
   } catch (error) {
     next(error);
   }
@@ -646,7 +674,12 @@ router.patch('/alerts/:alertId', async (req, res, next) => {
       { new: true },
     );
     if (!doc) return res.status(404).json({ success: false, error: 'Alert not found' });
-    res.json({ success: true, data: alertToApi(doc) });
+    let customerType = doc.customer_type || '';
+    if (!customerType && doc.run_id) {
+      const typeByRun = await customerTypeByRunId(req.companyId, [doc]);
+      customerType = typeByRun.get(String(doc.run_id)) || '';
+    }
+    res.json({ success: true, data: alertToApi(doc, { customerType }) });
   } catch (error) {
     next(error);
   }

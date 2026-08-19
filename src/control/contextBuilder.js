@@ -25,6 +25,40 @@ export function entityLabelFromPayload(payload = {}, eventType = '') {
   return eventType || 'Unknown entity';
 }
 
+function customerTypeLabel(value) {
+  if (value == null || value === '') return '';
+  if (typeof value === 'string' || typeof value === 'number') {
+    const label = String(value).trim();
+    if (!label || /^\d+$/.test(label)) return '';
+    return label;
+  }
+  if (typeof value !== 'object' || Array.isArray(value)) return '';
+  const label = String(value.label || value.value || value.name || value.type || '').trim();
+  if (!label || /^\d+$/.test(label)) return '';
+  return label;
+}
+
+/** Human customer type from a WorxStream payload (Reseller, Contractor, …). Skips raw IDs. */
+export function customerTypeFromPayload(payload = {}) {
+  const p = payload && typeof payload === 'object' ? payload : {};
+  const customer = p.customer && typeof p.customer === 'object' ? p.customer : {};
+  const candidates = [
+    customer.customerType,
+    customer.customer_type,
+    customer.type_of_customer,
+    customer.typeOfCustomer,
+    p.customerType,
+    p.customer_type,
+    p.type_of_customer,
+    p.typeOfCustomer,
+  ];
+  for (const candidate of candidates) {
+    const label = customerTypeLabel(candidate);
+    if (label) return label;
+  }
+  return '';
+}
+
 export function buildRagQuery(eventType, agentKey, payload = {}) {
   const agentName = getGovernanceAgentName(agentKey);
   const p = payload && typeof payload === 'object' ? payload : {};

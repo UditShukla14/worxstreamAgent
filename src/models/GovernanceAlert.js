@@ -10,6 +10,7 @@ const alertSchema = new mongoose.Schema({
   detail: { type: String, default: '' },
   triggered_by: { type: String, default: '' },
   related_entity: { type: String, default: '' },
+  customer_type: { type: String, default: '' },
   event_type: { type: String, default: '' },
   policy_violated: { type: String, default: '' },
   suggested_action: { type: String, default: '' },

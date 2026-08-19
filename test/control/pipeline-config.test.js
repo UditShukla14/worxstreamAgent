@@ -5,7 +5,7 @@ import { eventFromWorxstreamDelivery, eventFromWorxstreamWebhook } from '../../s
 import { isChildAgentKey } from '../../src/agents/agentDefinitions.js';
 import { isGovernanceAgentKey } from '../../src/control/governanceAgents.js';
 import { parseAgentVerdict, parseGovernanceFindings, runStatusFromSteps, stripJsonCodeFence } from '../../src/control/parseVerdict.js';
-import { entityLabelFromPayload, buildRagQuery, buildMasterMessage } from '../../src/control/contextBuilder.js';
+import { entityLabelFromPayload, customerTypeFromPayload, buildRagQuery, buildMasterMessage } from '../../src/control/contextBuilder.js';
 import { tokenize, chunkText, scoreChunk } from '../../src/control/rag.js';
 
 describe('pipeline config', () => {
@@ -231,6 +231,19 @@ describe('context builder + rag scoring', () => {
     assert.equal(entityLabelFromPayload({ estimate_number: '26-3797-3', estimate_id: 8001 }), 'Estimate #26-3797-3');
     assert.equal(entityLabelFromPayload({ customNumber: '26-5107', estimate_id: 8001 }), 'Estimate #26-5107');
     assert.equal(entityLabelFromPayload({ customer_id: 9, name: 'Acme' }), 'Acme (Customer #9)');
+  });
+
+  it('reads customer type labels from nested customer objects', () => {
+    assert.equal(customerTypeFromPayload({
+      customer: { customerType: { id: 3, value: 'reseller', label: 'Reseller' } },
+    }), 'Reseller');
+    assert.equal(customerTypeFromPayload({
+      customer: { customer_type: { label: 'Contractor' } },
+    }), 'Contractor');
+    assert.equal(customerTypeFromPayload({ type_of_customer: 'Retail' }), 'Retail');
+    assert.equal(customerTypeFromPayload({ customer: { customerTypeId: 3 } }), '');
+    assert.equal(customerTypeFromPayload({ customerType: { id: 8 } }), '');
+    assert.equal(customerTypeFromPayload({}), '');
   });
 
   it('builds a query that includes the agent and event', () => {

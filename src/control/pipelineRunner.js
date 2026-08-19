@@ -15,6 +15,7 @@ import { AEGIS_AGENT_KEY, getGovernanceAgentName } from './governanceAgents.js';
 import { retrieveAllGovernanceChunks } from './rag.js';
 import {
   buildMasterMessage,
+  customerTypeFromPayload,
   entityLabelFromPayload,
   loadPolicyCatalog,
 } from './contextBuilder.js';
@@ -144,7 +145,7 @@ async function markRemainingSkipped(runId, reason) {
   });
 }
 
-async function createStepAlert({ companyId, runId, eventId, eventType, entityLabel, step }) {
+async function createStepAlert({ companyId, runId, eventId, eventType, entityLabel, customerType, step }) {
   if (step.verdict === 'pass' || step.verdict === 'running' || step.verdict === 'skipped') return null;
   const alertId = `alr_${randomUUID()}`;
   await GovernanceAlert.create({
@@ -157,6 +158,7 @@ async function createStepAlert({ companyId, runId, eventId, eventType, entityLab
     detail: step.detail || step.responseExcerpt,
     triggered_by: step.agentName,
     related_entity: step.relatedEntity || entityLabel,
+    customer_type: customerType || '',
     event_type: eventType,
     policy_violated: step.policyViolated || (step.verdict === 'error' ? 'N/A — System Error' : ''),
     suggested_action: step.suggestedAction || '',
@@ -406,6 +408,7 @@ export async function runPipeline(event) {
   const workingPayload = hydrated.payload;
   const snapshot = hydrated.snapshot;
   const workingLabel = entityLabelFromPayload(workingPayload, eventType);
+  const customerType = customerTypeFromPayload(workingPayload);
   runDoc.payload = workingPayload;
   runDoc.entity_label = workingLabel;
   runDoc.execution_mode = 'single';
@@ -440,6 +443,7 @@ export async function runPipeline(event) {
       eventId,
       eventType,
       entityLabel: workingLabel,
+      customerType,
       step,
     });
     if (alertId) alerts.push(alertId);
