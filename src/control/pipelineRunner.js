@@ -306,28 +306,21 @@ function uniformCatalogSteps(items, fields) {
   }));
 }
 
-function mergeCatalogFindings({ items, findings, failure, excerpt, entityLabel }) {
+export function mergeCatalogFindings({ items, findings, failure, excerpt, entityLabel }) {
   const leftover = [...findings];
   if (!items.length) {
-    if (leftover.length > 0) {
-      return leftover.map((finding) => stepFromFinding(finding, {
-        agentKey: finding.agentKey,
-        agentName: finding.check || getGovernanceAgentName(AEGIS_AGENT_KEY),
-        entityLabel,
-      }));
-    }
-    return uniformCatalogSteps(items, {
-      verdict: 'error',
-      responseExcerpt: excerpt || failure || 'Aegis did not return structured JSON.',
-      message: failure ? 'Aegis failed' : 'Aegis did not return findings',
-      detail: failure || excerpt || 'Empty Aegis response.',
-      suggestedAction: 'Re-run the pipeline or inspect agent logs.',
+    return [asStep({
+      agentKey: AEGIS_AGENT_KEY,
+      agentName: getGovernanceAgentName(AEGIS_AGENT_KEY),
+      verdict: 'pass',
+      responseExcerpt: 'No active policies or applicable rules for this event.',
+      message: 'No active policies',
+      detail: 'Draft policies and inactive rules are ignored. Aegis does not apply built-in default thresholds.',
       relatedEntity: entityLabel,
-      severity: 'info',
-    });
+    })];
   }
 
-  const steps = items.map((item, index) => {
+  return items.map((item, index) => {
     const agentKey = catalogStepKey(item, index);
     const matchIdx = leftover.findIndex((finding) => (
       checksMatch(finding.check, item.name) || checksMatch(finding.policyViolated, item.name)
@@ -361,15 +354,6 @@ function mergeCatalogFindings({ items, findings, failure, excerpt, entityLabel }
       severity: 'info',
     });
   });
-
-  for (const finding of leftover) {
-    steps.push(stepFromFinding(finding, {
-      agentKey: finding.agentKey,
-      agentName: finding.check || getGovernanceAgentName(AEGIS_AGENT_KEY),
-      entityLabel,
-    }));
-  }
-  return steps;
 }
 
 async function runAegisChecks({
@@ -384,6 +368,19 @@ async function runAegisChecks({
   const items = catalogCheckItems(catalog);
   const stepStart = Date.now();
   const agent = getGovernanceAgent(AEGIS_AGENT_KEY);
+
+  if (!items.length) {
+    return [asStep({
+      agentKey: AEGIS_AGENT_KEY,
+      agentName: getGovernanceAgentName(AEGIS_AGENT_KEY),
+      verdict: 'pass',
+      responseExcerpt: 'No active policies or applicable rules for this event.',
+      message: 'No active policies',
+      detail: 'Draft policies and inactive rules are ignored. Aegis does not apply built-in default thresholds.',
+      relatedEntity: entityLabel,
+      durationMs: Date.now() - stepStart,
+    })];
+  }
 
   if (stopRequested(runId)) {
     return uniformCatalogSteps(items, {

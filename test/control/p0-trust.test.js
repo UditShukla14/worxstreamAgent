@@ -148,3 +148,50 @@ describe('orphan run interrupt', () => {
     assert.equal(patched.steps[1].detail, ORPHAN_RUN_DETAIL);
   });
 });
+
+describe('catalog findings merge', () => {
+  it('drops invented default-threshold findings that are not in the catalog', async () => {
+    const { mergeCatalogFindings } = await import('../../src/control/pipelineRunner.js');
+    const steps = mergeCatalogFindings({
+      items: [
+        { kind: 'policy', id: '1', name: 'Credit Hold Policy' },
+        { kind: 'policy', id: '2', name: 'Inventory Fulfilment Policy' },
+        { kind: 'rule', id: '3', name: 'Resellers' },
+      ],
+      findings: [
+        { check: 'Credit Hold Policy', verdict: 'pass', message: 'ok', detail: 'ok', agentKey: 'aegis_0_credit' },
+        { check: 'Inventory Fulfilment Policy', verdict: 'pass', message: 'ok', detail: 'ok', agentKey: 'aegis_1_inv' },
+        { check: 'Resellers', verdict: 'pass', message: 'ok', detail: 'ok', agentKey: 'aegis_2_res' },
+        {
+          check: 'Gross Margin — Default Threshold',
+          verdict: 'flag',
+          message: 'Below 20%',
+          detail: 'Invoice margin 15% is below the 20% default warning threshold.',
+          agentKey: 'aegis_3_margin',
+        },
+      ],
+      entityLabel: 'Invoice #26-4519',
+    });
+    assert.equal(steps.length, 3);
+    assert.equal(steps.every((step) => step.verdict === 'pass'), true);
+    assert.equal(steps.some((step) => /margin/i.test(step.agentName)), false);
+  });
+
+  it('does not turn leftover findings into steps when the catalog is empty', async () => {
+    const { mergeCatalogFindings } = await import('../../src/control/pipelineRunner.js');
+    const steps = mergeCatalogFindings({
+      items: [],
+      findings: [{
+        check: 'Gross Margin — Default Threshold',
+        verdict: 'flag',
+        message: 'Below 20%',
+        detail: '15%',
+        agentKey: 'aegis_0_margin',
+      }],
+      entityLabel: 'Invoice #1',
+    });
+    assert.equal(steps.length, 1);
+    assert.equal(steps[0].verdict, 'pass');
+    assert.match(steps[0].detail, /Draft policies/);
+  });
+});

@@ -205,24 +205,24 @@ describe('parseAgentVerdict', () => {
 
 describe('parseGovernanceFindings', () => {
   it('expands findings into one check per policy', () => {
-    const findings = parseGovernanceFindings(JSON.stringify({
+    const parsed = parseGovernanceFindings(JSON.stringify({
       verdict: 'flag',
       findings: [
         { check: 'Minimum Margin Policy', verdict: 'flag', severity: 'critical', message: 'Low margin', detail: '5%' },
         { check: 'Customer Credit Hold', verdict: 'pass', message: 'Ok', detail: 'No overdue' },
       ],
     }));
-    assert.equal(findings.length, 2);
-    assert.equal(findings[0].verdict, 'flag');
-    assert.equal(findings[0].check, 'Minimum Margin Policy');
-    assert.match(findings[0].agentKey, /^aegis_/);
-    assert.equal(findings[1].verdict, 'pass');
+    assert.equal(parsed.findings.length, 2);
+    assert.equal(parsed.findings[0].verdict, 'flag');
+    assert.equal(parsed.findings[0].check, 'Minimum Margin Policy');
+    assert.match(parsed.findings[0].agentKey, /^aegis_/);
+    assert.equal(parsed.findings[1].verdict, 'pass');
   });
 
   it('wraps a legacy single verdict as one finding', () => {
-    const findings = parseGovernanceFindings('{"verdict":"pass","message":"Ok","detail":"fine"}');
-    assert.equal(findings.length, 1);
-    assert.equal(findings[0].verdict, 'pass');
+    const parsed = parseGovernanceFindings('{"verdict":"pass","message":"Ok","detail":"fine"}');
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.findings.length, 0);
   });
 });
 
@@ -298,6 +298,19 @@ describe('context builder + rag scoring', () => {
     assert.match(message, /Low margin \(estimate\.created, estimate\.updated\) \[applies to this event\]/);
     assert.match(message, /Invoice only \(invoice\.created\)/);
     assert.doesNotMatch(message, /Invoice only \(invoice\.created\) \[applies to this event\]/);
+  });
+
+  it('does not tell Aegis to use default thresholds when the catalog is empty', () => {
+    const message = buildMasterMessage({
+      eventType: 'invoice.created',
+      payload: { invoice_id: 1, grossProfitPercentage: '15.00' },
+      companyId: '1',
+      ragChunks: [],
+      agentKey: 'aegis',
+      catalog: { policies: [], rules: [] },
+    });
+    assert.match(message, /none active — do not invent checks/);
+    assert.doesNotMatch(message, /use default thresholds/);
   });
 });
 

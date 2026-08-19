@@ -176,7 +176,7 @@ export function buildMasterMessage({
     'Do not call list_estimates, list_invoices, get_estimate_details, get_invoice_details, get_product_details, get_customer_details, get_estimate_line_items, or invoke_agent to rediscover payload fields.',
     'Product stock may appear on payload line items (availableQty) or in enrichment.products[].stock_qty.',
     'Only call tools for a fact neither the payload nor snapshot provides.',
-    'Evaluate every catalog policy/rule that applies to this event. Return the JSON output contract only.',
+    'Evaluate every catalog policy/rule that applies to this event. Do not add checks that are not in the catalog. Return the JSON output contract only.',
   ].join('\n');
 }
 
@@ -184,7 +184,7 @@ function formatCatalog(catalog, eventType) {
   const policies = Array.isArray(catalog?.policies) ? catalog.policies : [];
   const rules = Array.isArray(catalog?.rules) ? catalog.rules : [];
   if (policies.length === 0 && rules.length === 0) {
-    return 'Policy catalog:\n(none active — use default thresholds)';
+    return 'Policy catalog:\n(none active — do not invent checks or default thresholds)';
   }
   const policyLines = policies.map((row) => `- policy: ${row.name}`);
   const ruleLines = rules.map((row) => {
@@ -200,7 +200,7 @@ function formatCatalog(catalog, eventType) {
 
 function formatRagChunks(chunks) {
   if (!Array.isArray(chunks) || chunks.length === 0) {
-    return 'Policy/rule text:\n(none retrieved — apply default thresholds in your system prompt)';
+    return 'Policy/rule text:\n(none retrieved — evaluate only the catalog names above; do not apply default thresholds)';
   }
   const body = chunks.map((chunk, i) => {
     const title = chunk.name || chunk.document_id || `chunk ${i + 1}`;
