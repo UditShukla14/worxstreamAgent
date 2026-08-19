@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { decideAlertAction, actionFromReview } from '../../src/control/alertSweep.js';
+import { decideAlertAction, actionFromReview, alertNeedsResolveReason, reasonForResolvedReview, LEGACY_RESOLVE_REASON } from '../../src/control/alertSweep.js';
 import { isGovernanceAgentKey, pipelineGovernanceAgentKeys, VIGIL_AGENT_KEY } from '../../src/control/governanceAgents.js';
 import { isChildAgentKey } from '../../src/agents/agentDefinitions.js';
 
@@ -83,25 +83,51 @@ describe('Vigil status updates from a catalog re-check', () => {
   };
 
   it('resolves an open alert when the current check passes', () => {
-    assert.equal(actionFromReview(alert, [
-      { check: 'Credit Hold Policy', verdict: 'pass', policyViolated: null },
-    ], { evaluationOk: true }), 'resolve');
+    const decision = actionFromReview(alert, [
+      { check: 'Credit Hold Policy', verdict: 'pass', policyViolated: null, detail: 'No overdue invoices.' },
+    ], { evaluationOk: true });
+    assert.equal(decision.action, 'resolve');
+    assert.match(decision.reason, /Credit Hold Policy now passes/);
   });
 
   it('keeps an open alert when the current check still flags', () => {
     assert.equal(actionFromReview(alert, [
       { check: 'Credit Hold Policy', verdict: 'flag', policyViolated: 'Credit Hold Policy' },
-    ], { evaluationOk: true }), 'keep');
+    ], { evaluationOk: true }).action, 'keep');
   });
 
   it('resolves an open alert when Aegis no longer reports that check', () => {
-    assert.equal(actionFromReview(alert, [
+    const decision = actionFromReview(alert, [
       { check: 'Inventory Fulfilment Policy', verdict: 'flag', policyViolated: 'Inventory Fulfilment Policy' },
-    ], { evaluationOk: true }), 'resolve');
+    ], { evaluationOk: true });
+    assert.equal(decision.action, 'resolve');
+    assert.match(decision.reason, /no longer reported/);
   });
 
   it('keeps the alert when the re-check did not return structured findings', () => {
-    assert.equal(actionFromReview(alert, [], { evaluationOk: false }), 'keep');
+    assert.equal(actionFromReview(alert, [], { evaluationOk: false }).action, 'keep');
+  });
+
+  it('treats resolved alerts without a reason as needing one', () => {
+    assert.equal(alertNeedsResolveReason({ status: 'resolved', resolve_reason: '' }), true);
+    assert.equal(alertNeedsResolveReason({ status: 'resolved', resolve_reason: LEGACY_RESOLVE_REASON }), true);
+    assert.equal(alertNeedsResolveReason({ status: 'resolved', resolve_reason: 'Vigil: Credit Hold Policy now passes.' }), false);
+    assert.equal(alertNeedsResolveReason({ status: 'open', resolve_reason: '' }), false);
+  });
+
+  it('writes a reason for already-resolved alerts after a re-check', () => {
+    const passed = actionFromReview(alert, [
+      { check: 'Credit Hold Policy', verdict: 'pass', policyViolated: null, detail: 'No overdue invoices.' },
+    ], { evaluationOk: true });
+    assert.match(reasonForResolvedReview(passed, { evaluationOk: true }), /Credit Hold Policy now passes/);
+    assert.equal(
+      reasonForResolvedReview({ action: 'keep', reason: '' }, { evaluationOk: true }),
+      'Previously resolved; live check still flags this policy/rule.',
+    );
+    assert.equal(
+      reasonForResolvedReview({ action: 'keep', reason: '' }, { evaluationOk: false }),
+      'Previously resolved; live re-check could not be completed.',
+    );
   });
 });
 

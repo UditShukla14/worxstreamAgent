@@ -6,23 +6,74 @@ import { getGovernanceAgentName } from './governanceAgents.js';
 import GovernancePolicy from '../models/GovernancePolicy.js';
 import GovernanceRule from '../models/GovernanceRule.js';
 import { eventTypesFromRule, ruleAppliesToEvent } from './ruleEvents.js';
+import { normalizeEventType } from './pipelineConfig.js';
 
+function firstLabel(...values) {
+  for (const value of values) {
+    if (value == null) continue;
+    const text = String(value).trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+function eventKind(eventType) {
+  return normalizeEventType(eventType).split('.')[0] || '';
+}
+
+/**
+ * Human label for the Runs table. WorxStream uses customNumber on estimates
+ * AND invoices — do not treat that field as estimate-only. Prefer event_type.
+ */
 export function entityLabelFromPayload(payload = {}, eventType = '') {
   const p = payload && typeof payload === 'object' ? payload : {};
-  const estimateNumber = p.estimate_number || p.custom_number || p.customNumber;
-  if (estimateNumber) return `Estimate #${estimateNumber}`;
-  if (p.estimate_id != null) return `Estimate #${p.estimate_id}`;
-  const invoiceNumber = p.invoice_number;
-  if (invoiceNumber) return `Invoice #${invoiceNumber}`;
-  if (p.invoice_id != null) return `Invoice #${p.invoice_id}`;
-  if (p.product_id != null) return `Product #${p.product_id}`;
-  if (p.job_id != null) return `Job #${p.job_id}`;
-  if (p.credit_memo_id != null) return `Credit Memo #${p.credit_memo_id}`;
-  if (p.purchase_order_id != null) return `Purchase Order #${p.purchase_order_id}`;
-  if (p.customer_id != null) {
-    const name = p.customer_name || p.name;
-    return name ? `${name} (Customer #${p.customer_id})` : `Customer #${p.customer_id}`;
+  const kind = eventKind(eventType);
+  const docNumber = firstLabel(
+    p.invoice_number,
+    p.estimate_number,
+    p.credit_memo_number,
+    p.custom_number,
+    p.customNumber,
+  );
+
+  if (kind === 'invoice' || (kind !== 'estimate' && (p.invoice_id != null || p.invoice_number))) {
+    const num = firstLabel(p.invoice_number, docNumber, p.invoice_id);
+    if (num) return `Invoice #${num}`;
   }
+  if (kind === 'estimate' || p.estimate_id != null || p.estimate_number) {
+    const num = firstLabel(p.estimate_number, p.custom_number, p.customNumber, p.estimate_id);
+    if (num) return `Estimate #${num}`;
+  }
+  if (kind === 'credit_memo' || p.credit_memo_id != null) {
+    const num = firstLabel(p.credit_memo_number, docNumber, p.credit_memo_id);
+    if (num) return `Credit Memo #${num}`;
+  }
+  if (kind === 'job' || p.job_id != null) {
+    const num = firstLabel(p.job_number, docNumber, p.job_id);
+    if (num) return `Job #${num}`;
+  }
+  if (kind === 'product' || p.product_id != null) {
+    const title = firstLabel(p.title, p.name, p.sku);
+    if (title && p.product_id != null) return `${title} (Product #${p.product_id})`;
+    if (p.product_id != null) return `Product #${p.product_id}`;
+    if (title) return title;
+  }
+  if (kind === 'customer' || p.customer_id != null) {
+    const name = firstLabel(p.customer_name, p.name, p.customer?.name, p.customer?.customerName);
+    const id = p.customer_id ?? p.customer?.customer_id ?? p.customer?.customerId;
+    if (name && id != null) return `${name} (Customer #${id})`;
+    if (id != null) return `Customer #${id}`;
+    if (name) return name;
+  }
+  if (kind === 'purchase_order' || p.purchase_order_id != null) {
+    const num = firstLabel(p.purchase_order_number, docNumber, p.purchase_order_id);
+    if (num) return `Purchase Order #${num}`;
+  }
+  if (kind && docNumber) {
+    const noun = kind.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
+    return `${noun} #${docNumber}`;
+  }
+  if (docNumber) return `Document #${docNumber}`;
   return eventType || 'Unknown entity';
 }
 

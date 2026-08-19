@@ -22,9 +22,12 @@ import {
   restartPipelineRun,
   runAlertSweep,
   deleteAlertsPermanently,
+  resolveAlertsById,
+  backfillMissingResolveReasons,
+  LEGACY_RESOLVE_REASON,
 } from '../control/index.js';
 import { callWorxstreamAPI } from '../services/httpClient.js';
-import { customerTypeFromPayload } from '../control/contextBuilder.js';
+import { customerTypeFromPayload, entityLabelFromPayload } from '../control/contextBuilder.js';
 import { eventTypesFromRule, parseRuleEventTypes, ruleChunkContent } from '../control/ruleEvents.js';
 import { requireControlAuth } from '../middleware/requireControlAuth.js';
 import { agentStatFromRuns } from '../control/dashboardStats.js';
@@ -64,7 +67,7 @@ function runToApi(doc) {
     runId: doc.run_id,
     eventId: doc.event_id,
     eventType: doc.event_type,
-    entityLabel: doc.entity_label,
+    entityLabel: entityLabelFromPayload(doc.payload, doc.event_type) || doc.entity_label,
     companyId: Number.parseInt(doc.company_id, 10) || doc.company_id,
     pipeline: doc.pipeline || [],
     executionMode: doc.execution_mode || 'sequential',
@@ -109,6 +112,11 @@ function alertToApi(doc, extras = {}) {
     suggestedAction: doc.suggested_action,
     agentResponseExcerpt: doc.agent_response_excerpt,
     status: doc.status,
+    resolveReason: doc.status === 'resolved'
+      ? String(doc.resolve_reason || '').trim() || LEGACY_RESOLVE_REASON
+      : String(doc.resolve_reason || ''),
+    resolvedBy: doc.resolved_by || '',
+    resolvedAt: doc.resolved_at ? new Date(doc.resolved_at).toISOString() : '',
     timestamp: (doc.timestamp || doc.created_at || new Date()).toISOString(),
   };
 }
@@ -139,6 +147,10 @@ function activeRunQuery(filter) {
       { $or: [{ deleted_at: { $exists: false } }, { deleted_at: null }] },
     ],
   };
+}
+
+function parseResolveReason(value) {
+  return String(value ?? '').trim().slice(0, 2000);
 }
 
 function parseIdList(value) {
@@ -614,6 +626,7 @@ router.post('/deliveries/delete', async (req, res, next) => {
 
 router.get('/alerts', async (req, res, next) => {
   try {
+    await backfillMissingResolveReasons(req.companyId);
     const filter = { company_id: req.companyId };
     if (req.query.severity && req.query.severity !== 'all') {
       filter.severity = String(req.query.severity);
@@ -702,15 +715,15 @@ router.post('/alerts/resolve', async (req, res, next) => {
     if (alertIds.length === 0) {
       return res.status(400).json({ success: false, error: 'alert_ids is required' });
     }
-    const result = await GovernanceAlert.updateMany(
-      {
-        company_id: req.companyId,
-        alert_id: { $in: alertIds },
-        status: 'open',
-      },
-      { $set: { status: 'resolved' } },
-    );
-    res.json({ success: true, data: { resolved: result.modifiedCount || 0 } });
+    const reason = parseResolveReason(req.body?.reason ?? req.body?.resolve_reason);
+    if (!reason) {
+      return res.status(400).json({ success: false, error: 'reason is required' });
+    }
+    const resolved = await resolveAlertsById(req.companyId, alertIds, {
+      reason,
+      resolvedBy: 'operator',
+    });
+    res.json({ success: true, data: { resolved } });
   } catch (error) {
     next(error);
   }
@@ -722,9 +735,32 @@ router.patch('/alerts/:alertId', async (req, res, next) => {
     if (status !== 'open' && status !== 'resolved') {
       return res.status(400).json({ success: false, error: 'status must be open or resolved' });
     }
+    const reason = parseResolveReason(req.body?.reason ?? req.body?.resolve_reason);
+    if (status === 'resolved' && !reason) {
+      return res.status(400).json({ success: false, error: 'reason is required' });
+    }
+    const existing = await GovernanceAlert.findOne({
+      company_id: req.companyId,
+      alert_id: req.params.alertId,
+    });
+    if (!existing) return res.status(404).json({ success: false, error: 'Alert not found' });
+    const alreadyResolved = existing.status === 'resolved';
+    const update = status === 'resolved'
+      ? {
+        status,
+        resolve_reason: reason,
+        resolved_at: alreadyResolved && existing.resolved_at ? existing.resolved_at : new Date(),
+        resolved_by: alreadyResolved && existing.resolved_by ? existing.resolved_by : 'operator',
+      }
+      : {
+        status,
+        resolve_reason: '',
+        resolved_at: null,
+        resolved_by: '',
+      };
     const doc = await GovernanceAlert.findOneAndUpdate(
       { company_id: req.companyId, alert_id: req.params.alertId },
-      { $set: { status } },
+      { $set: update },
       { new: true },
     );
     if (!doc) return res.status(404).json({ success: false, error: 'Alert not found' });

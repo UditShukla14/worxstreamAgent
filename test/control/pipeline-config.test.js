@@ -233,7 +233,11 @@ describe('context builder + rag scoring', () => {
     assert.equal(entityLabelFromPayload({ estimate_id: 1001 }), 'Estimate #1001');
     assert.equal(entityLabelFromPayload({ estimate_number: '26-3797-3', estimate_id: 8001 }), 'Estimate #26-3797-3');
     assert.equal(entityLabelFromPayload({ customNumber: '26-5107', estimate_id: 8001 }), 'Estimate #26-5107');
+    assert.equal(entityLabelFromPayload({ customNumber: '26-5107' }, 'estimate.created'), 'Estimate #26-5107');
+    assert.equal(entityLabelFromPayload({ customNumber: '26-4519', invoice_id: 9001 }, 'invoice.created'), 'Invoice #26-4519');
+    assert.equal(entityLabelFromPayload({ custom_number: '26-4519' }, 'invoice.updated'), 'Invoice #26-4519');
     assert.equal(entityLabelFromPayload({ customer_id: 9, name: 'Acme' }), 'Acme (Customer #9)');
+    assert.equal(entityLabelFromPayload({ customNumber: '26-100' }, 'customer.updated'), 'Customer #26-100');
   });
 
   it('reads customer type labels from nested customer objects', () => {

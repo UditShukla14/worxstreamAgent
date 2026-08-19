@@ -16,6 +16,9 @@ export {
   runAlertSweep,
   decideAlertAction,
   deleteAlertsPermanently,
+  resolveAlertsById,
+  backfillMissingResolveReasons,
+  LEGACY_RESOLVE_REASON,
   isAlertSweepRunning,
 } from './alertSweep.js';
 export { verifyWebhookRequest, verifyWebhookAuth } from './verifyWebhook.js';

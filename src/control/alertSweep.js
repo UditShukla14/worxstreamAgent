@@ -15,6 +15,7 @@ import { evaluateGovernanceEvent } from './pipelineRunner.js';
 
 const runningCompanies = new Set();
 const FLUSH_EVERY = 20;
+export const LEGACY_RESOLVE_REASON = 'Resolved before a reason was required.';
 
 export function isAlertSweepRunning(companyId) {
   return runningCompanies.has(String(companyId));
@@ -73,18 +74,149 @@ export function decideAlertAction(alert, catalog) {
  * Map an Aegis re-check onto one stored alert.
  * Fail closed (keep) when the evaluation did not return structured findings.
  * Resolve when the check now passes or Aegis no longer reports it.
+ *
+ * @returns {{ action: 'keep' | 'resolve', reason: string }}
  */
 export function actionFromReview(alert, findings, { evaluationOk = true } = {}) {
-  if (!evaluationOk) return 'keep';
+  if (!evaluationOk) return { action: 'keep', reason: '' };
   const labels = alertLabels(alert);
   const match = (findings || []).find((row) => (
     labels.some((label) => (
       checksMatch(label, row.check) || checksMatch(label, row.policyViolated)
     ))
   ));
-  if (!match) return 'resolve';
-  if (match.verdict === 'pass') return 'resolve';
-  return 'keep';
+  if (!match) {
+    return {
+      action: 'resolve',
+      reason: 'Vigil: this check is no longer reported for the live record against the current catalog.',
+    };
+  }
+  if (match.verdict === 'pass') {
+    const check = String(match.check || 'this policy/rule').trim();
+    const detail = String(match.detail || '').trim();
+    return {
+      action: 'resolve',
+      reason: detail
+        ? `Vigil: ${check} now passes. ${detail}`
+        : `Vigil: ${check} now passes on the live record.`,
+    };
+  }
+  return { action: 'keep', reason: '' };
+}
+
+export function alertNeedsResolveReason(alert) {
+  if (String(alert?.status || '') !== 'resolved') return false;
+  const reason = String(alert?.resolve_reason ?? alert?.resolveReason ?? '').trim();
+  return !reason || reason === LEGACY_RESOLVE_REASON;
+}
+
+export function reasonForResolvedReview(decision, { evaluationOk = true } = {}) {
+  if (decision?.action === 'resolve' && String(decision.reason || '').trim()) {
+    return String(decision.reason).trim().slice(0, 2000);
+  }
+  if (!evaluationOk) return 'Previously resolved; live re-check could not be completed.';
+  return 'Previously resolved; live check still flags this policy/rule.';
+}
+
+function missingResolveReasonFilter(companyId) {
+  return {
+    company_id: String(companyId),
+    status: 'resolved',
+    $or: [
+      { resolve_reason: { $exists: false } },
+      { resolve_reason: null },
+      { resolve_reason: '' },
+    ],
+  };
+}
+
+export async function backfillMissingResolveReasons(companyId) {
+  const result = await GovernanceAlert.updateMany(
+    missingResolveReasonFilter(companyId),
+    { $set: { resolve_reason: LEGACY_RESOLVE_REASON } },
+  );
+  return result.modifiedCount || 0;
+}
+
+function normalizeResolveEntries(entries, fallbackReason = '') {
+  const reasonFallback = String(fallbackReason || '').trim().slice(0, 2000);
+  if (!Array.isArray(entries)) return [];
+  const mapped = [];
+  for (const entry of entries) {
+    if (typeof entry === 'string' || typeof entry === 'number') {
+      const alertId = String(entry).trim();
+      if (alertId) mapped.push({ alertId, reason: reasonFallback });
+      continue;
+    }
+    if (!entry || typeof entry !== 'object') continue;
+    const alertId = String(entry.alertId ?? entry.alert_id ?? '').trim();
+    if (!alertId) continue;
+    mapped.push({
+      alertId,
+      reason: String(entry.reason || reasonFallback).trim().slice(0, 2000),
+    });
+  }
+  return mapped;
+}
+
+export async function resolveAlertsById(companyId, alertIds, { reason = '', resolvedBy = 'operator' } = {}) {
+  const rows = normalizeResolveEntries(alertIds, reason).filter((row) => row.reason);
+  if (rows.length === 0) return 0;
+  const now = new Date();
+  const result = await GovernanceAlert.bulkWrite(
+    rows.map((row) => ({
+      updateOne: {
+        filter: {
+          company_id: String(companyId),
+          alert_id: row.alertId,
+          status: 'open',
+        },
+        update: {
+          $set: {
+            status: 'resolved',
+            resolve_reason: row.reason,
+            resolved_at: now,
+            resolved_by: resolvedBy,
+          },
+        },
+      },
+    })),
+    { ordered: false },
+  );
+  return result.modifiedCount || 0;
+}
+
+export async function writeAlertResolveReasons(companyId, entries, { resolvedBy = 'vigil' } = {}) {
+  const rows = normalizeResolveEntries(entries).filter((row) => row.reason);
+  if (rows.length === 0) return 0;
+  const actor = String(resolvedBy || 'vigil').trim() || 'vigil';
+  const result = await GovernanceAlert.bulkWrite(
+    rows.map((row) => ({
+      updateOne: {
+        filter: {
+          company_id: String(companyId),
+          alert_id: row.alertId,
+          status: 'resolved',
+        },
+        update: [
+          {
+            $set: {
+              resolve_reason: row.reason,
+              resolved_by: {
+                $cond: [
+                  { $eq: [{ $ifNull: ['$resolved_by', ''] }, ''] },
+                  actor,
+                  '$resolved_by',
+                ],
+              },
+            },
+          },
+        ],
+      },
+    })),
+    { ordered: false },
+  );
+  return result.modifiedCount || 0;
 }
 
 export async function loadSweepCatalog(companyId) {
@@ -115,20 +247,6 @@ export async function deleteAlertsPermanently(companyId, alertIds) {
     alert_id: { $in: ids },
   });
   return result.deletedCount || 0;
-}
-
-export async function resolveAlertsById(companyId, alertIds) {
-  const ids = [...new Set((alertIds || []).map((id) => String(id || '').trim()).filter(Boolean))];
-  if (ids.length === 0) return 0;
-  const result = await GovernanceAlert.updateMany(
-    {
-      company_id: String(companyId),
-      alert_id: { $in: ids },
-      status: 'open',
-    },
-    { $set: { status: 'resolved' } },
-  );
-  return result.modifiedCount || 0;
 }
 
 function emptyProgress(total = 0) {
@@ -180,7 +298,7 @@ export async function runAlertSweep({ companyId, onStart, onProgress }) {
   try {
     const catalog = await loadSweepCatalog(tenant);
     const alerts = await GovernanceAlert.find({ company_id: tenant })
-      .select('alert_id status event_type policy_violated triggered_by run_id')
+      .select('alert_id status event_type policy_violated triggered_by run_id resolve_reason')
       .sort({ timestamp: -1 })
       .lean();
 
@@ -189,13 +307,21 @@ export async function runAlertSweep({ companyId, onStart, onProgress }) {
 
     const pendingDelete = [];
     const pendingResolve = [];
+    const pendingReasons = [];
 
     async function flush() {
       if (pendingDelete.length > 0) {
         totals.deleted += await deleteAlertsPermanently(tenant, pendingDelete.splice(0, pendingDelete.length));
       }
       if (pendingResolve.length > 0) {
-        totals.resolved += await resolveAlertsById(tenant, pendingResolve.splice(0, pendingResolve.length));
+        totals.resolved += await resolveAlertsById(tenant, pendingResolve.splice(0, pendingResolve.length), {
+          resolvedBy: 'vigil',
+        });
+      }
+      if (pendingReasons.length > 0) {
+        await writeAlertResolveReasons(tenant, pendingReasons.splice(0, pendingReasons.length), {
+          resolvedBy: 'vigil',
+        });
       }
     }
 
@@ -214,14 +340,18 @@ export async function runAlertSweep({ companyId, onStart, onProgress }) {
       }
     }
 
-    const alreadyResolved = toReview.filter((alert) => alert.status !== 'open');
-    totals.kept += alreadyResolved.length;
-    totals.processed += alreadyResolved.length;
+    const alreadyResolvedDone = toReview.filter((alert) => (
+      alert.status !== 'open' && !alertNeedsResolveReason(alert)
+    ));
+    totals.kept += alreadyResolvedDone.length;
+    totals.processed += alreadyResolvedDone.length;
     await flush();
     emit({ ...totals, type: 'progress' });
 
-    const openReviews = toReview.filter((alert) => alert.status === 'open');
-    const byRun = groupByRunId(openReviews);
+    const reviewGroup = toReview.filter((alert) => (
+      alert.status === 'open' || alertNeedsResolveReason(alert)
+    ));
+    const byRun = groupByRunId(reviewGroup);
 
     for (const [runKey, group] of byRun) {
       const runId = runKey.startsWith('__none_') ? '' : runKey;
@@ -244,9 +374,20 @@ export async function runAlertSweep({ companyId, onStart, onProgress }) {
       }
 
       for (const alert of group) {
-        const action = actionFromReview(alert, evaluation.findings, { evaluationOk: evaluation.ok });
-        if (action === 'resolve') pendingResolve.push(alert.alert_id);
-        else totals.kept += 1;
+        const decision = actionFromReview(alert, evaluation.findings, { evaluationOk: evaluation.ok });
+        if (alert.status === 'open') {
+          if (decision.action === 'resolve') {
+            pendingResolve.push({ alertId: alert.alert_id, reason: decision.reason });
+          } else {
+            totals.kept += 1;
+          }
+        } else {
+          pendingReasons.push({
+            alertId: alert.alert_id,
+            reason: reasonForResolvedReview(decision, { evaluationOk: evaluation.ok }),
+          });
+          totals.kept += 1;
+        }
         totals.processed += 1;
       }
 
