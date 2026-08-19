@@ -7,7 +7,6 @@
  */
 
 export const AEGIS_AGENT_KEY = 'aegis';
-export const SENTINEL_AGENT_KEY = 'sentinel';
 
 const GOVERNANCE_OUTPUT_CONTRACT = `
 OUTPUT CONTRACT (mandatory):
@@ -80,37 +79,12 @@ HOW TO CHECK:
 
 ${GOVERNANCE_OUTPUT_CONTRACT}`,
   },
-  [SENTINEL_AGENT_KEY]: {
-    name: 'sentinel_agent',
-    description: 'Re-checks Aegis outcomes when the live document or the policy catalog changes',
-    domain: 'governance',
-    extraTools: [
-      'get_estimate_details',
-      'get_invoice_details',
-      'get_product_details',
-      'get_customer_details',
-      'get_estimate_line_items',
-    ],
-    systemPrompt: `You are Sentinel, Aegis's child agent for Worxstream Control Tower.
-You do not chat with a user. You do not run on inbound webhooks.
-
-Your job is to keep Aegis outcomes current:
-- Re-read the live WorxStream document Aegis already checked.
-- Re-read the company's current active policies and rules.
-- If the document or the catalog changed, ask Aegis to evaluate again.
-- Update the existing pipeline run and its alerts so Control Tower never shows a stale verdict.
-- Do not create a duplicate run for the same document. Do not reopen an alert a human already resolved.
-
-You are invoked by the Control Tower scheduler, not by the chat router.`,
-  },
 };
 
-export const GOVERNANCE_PIPELINE_KEYS = [AEGIS_AGENT_KEY];
 export const GOVERNANCE_AGENT_KEYS = Object.keys(GOVERNANCE_AGENT_DEFINITIONS);
 
 const DISPLAY_NAMES = {
   aegis: 'Aegis',
-  sentinel: 'Sentinel',
   profitPolicy: 'Profit Policy Agent',
   inventoryCheck: 'Inventory Check Agent',
   customerCheck: 'Customer Check Agent',

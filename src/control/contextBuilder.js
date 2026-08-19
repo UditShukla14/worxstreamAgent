@@ -98,17 +98,40 @@ export async function loadPolicyCatalog(companyId, eventType) {
   const mappedRules = (rules || []).map((row) => {
     const eventTypes = eventTypesFromRule(row);
     return {
+      id: String(row._id),
       name: row.name,
       eventType: eventTypes[0] || row.event_type,
       eventTypes,
     };
   });
   return {
-    policies: (policies || []).map((row) => ({ name: row.name, type: row.type || 'policy' })),
+    policies: (policies || []).map((row) => ({
+      id: String(row._id),
+      name: row.name,
+      type: row.type || 'policy',
+    })),
     rules: eventType
       ? mappedRules.filter((row) => ruleAppliesToEvent(row, eventType))
       : mappedRules,
   };
+}
+
+/** One UI/pipeline step per active policy and applicable rule. */
+export function catalogCheckItems(catalog) {
+  const policies = Array.isArray(catalog?.policies) ? catalog.policies : [];
+  const rules = Array.isArray(catalog?.rules) ? catalog.rules : [];
+  return [
+    ...policies.map((row) => ({
+      kind: 'policy',
+      id: row.id != null ? String(row.id) : '',
+      name: String(row.name || '').trim(),
+    })),
+    ...rules.map((row) => ({
+      kind: 'rule',
+      id: row.id != null ? String(row.id) : '',
+      name: String(row.name || '').trim(),
+    })),
+  ].filter((row) => row.name);
 }
 
 export function buildMasterMessage({

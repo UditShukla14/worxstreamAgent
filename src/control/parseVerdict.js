@@ -91,7 +91,7 @@ export function parseAgentVerdict(rawText, fallbacks = {}) {
   return normalizeVerdict(parsed, fallbacks, excerpt);
 }
 
-function findingKey(check, index) {
+export function findingKey(check, index) {
   const slug = String(check || `finding_${index + 1}`)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '_')
@@ -100,46 +100,101 @@ function findingKey(check, index) {
   return `aegis_${index}_${slug || 'check'}`;
 }
 
+function findMatchingBrace(text, start) {
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (ch === '\\') {
+        escape = true;
+        continue;
+      }
+      if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === '{') depth += 1;
+    else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/** Salvage complete findings objects when the model truncates the JSON array. */
+function recoverPartialFindings(text) {
+  const stripped = stripJsonCodeFence(text);
+  const marker = stripped.search(/"findings"\s*:\s*\[/);
+  if (marker < 0) return null;
+  const start = stripped.indexOf('[', marker);
+  if (start < 0) return null;
+  const rows = [];
+  let i = start + 1;
+  while (i < stripped.length) {
+    while (i < stripped.length && /[\s,]/.test(stripped[i])) i += 1;
+    if (stripped[i] === ']') break;
+    if (stripped[i] !== '{') break;
+    const end = findMatchingBrace(stripped, i);
+    if (end < 0) break;
+    try {
+      rows.push(JSON.parse(stripped.slice(i, end + 1)));
+    } catch {
+      break;
+    }
+    i = end + 1;
+  }
+  return rows.length > 0 ? rows : null;
+}
+
+function normalizeFindingRow(row, index, fallbacks, excerpt) {
+  const item = row && typeof row === 'object' ? row : {};
+  const normalized = normalizeVerdict(item, fallbacks, excerpt);
+  const check = asString(
+    item.check || item.policyViolated || item.message,
+    `Check ${index + 1}`,
+  );
+  return {
+    ...normalized,
+    check,
+    agentKey: findingKey(check, index),
+  };
+}
+
 /**
  * Aegis returns findings[] (one per policy/rule). Legacy masters returned a single verdict.
- * @returns {{ check: string, agentKey: string, ...parseAgentVerdict }[]}
+ * @returns {{ ok: boolean, findings: Array<object>, excerpt: string }}
  */
 export function parseGovernanceFindings(rawText, fallbacks = {}) {
   const excerpt = asString(rawText).slice(0, 800);
   const parsed = extractJsonObject(rawText);
+  const recovered = (!parsed || typeof parsed !== 'object')
+    ? recoverPartialFindings(rawText)
+    : null;
 
-  if (!parsed || typeof parsed !== 'object') {
-    return [{
-      check: 'Aegis',
-      agentKey: 'aegis',
-      verdict: 'error',
-      severity: 'info',
-      message: fallbacks.message || 'Aegis did not return structured JSON',
-      detail: excerpt || 'Empty agent response.',
-      policyViolated: null,
-      suggestedAction: 'Re-run the pipeline or inspect agent logs.',
-      relatedEntity: fallbacks.relatedEntity || 'Unknown',
-      responseExcerpt: excerpt,
-    }];
+  if ((!parsed || typeof parsed !== 'object') && !recovered) {
+    return { ok: false, findings: [], excerpt };
   }
 
-  const rows = Array.isArray(parsed.findings) && parsed.findings.length > 0
-    ? parsed.findings
-    : [parsed];
+  const source = parsed && typeof parsed === 'object' ? parsed : { findings: recovered };
+  if (!Array.isArray(source.findings)) {
+    return { ok: false, findings: [], excerpt };
+  }
 
-  return rows.map((row, index) => {
-    const item = row && typeof row === 'object' ? row : {};
-    const normalized = normalizeVerdict(item, fallbacks, excerpt);
-    const check = asString(
-      item.check || item.policyViolated || item.message,
-      `Check ${index + 1}`,
-    );
-    return {
-      ...normalized,
-      check,
-      agentKey: findingKey(check, index),
-    };
-  });
+  return {
+    ok: true,
+    findings: source.findings.map((row, index) => normalizeFindingRow(row, index, fallbacks, excerpt)),
+    excerpt,
+  };
 }
 
 export function runStatusFromSteps(steps) {

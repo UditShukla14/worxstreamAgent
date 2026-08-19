@@ -39,10 +39,6 @@ const pipelineRunSchema = new mongoose.Schema({
   total_duration_ms: { type: Number, default: 0 },
   total_tokens: { type: Number, default: 0 },
   timestamp: { type: Date, default: Date.now },
-  last_reconciled_at: { type: Date, default: null },
-  payload_fingerprint: { type: String, default: '' },
-  catalog_fingerprint: { type: String, default: '' },
-  reconcile_reason: { type: String, default: '' },
   deleted_at: { type: Date, default: null, index: true },
 }, {
   timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },

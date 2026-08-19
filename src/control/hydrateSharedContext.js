@@ -327,104 +327,16 @@ async function hydrateJobEvent(snapshot, payload) {
   await enrichCustomerCredit(snapshot, snapshot.ids.customer_id);
 }
 
-async function refreshLiveEntity(snapshot, payload, prefix) {
-  if (prefix === 'estimate' || prefix === 'invoice' || prefix === 'credit_memo') {
-    const idKey = prefix === 'invoice' ? 'invoice_id' : `${prefix}_id`;
-    if (snapshot.ids[idKey] == null) snapshot.ids[idKey] = asNumber(payload.id);
-    const entityId = snapshot.ids[idKey];
-    if (entityId == null) {
-      snapshot.errors.push(`Cannot refresh ${prefix}: missing id.`);
-      return;
-    }
-    const details = await showMasterObject(entityId);
-    const record = apiRecord(details);
-    if (!record) {
-      snapshot.errors.push(`Live refresh failed for ${prefix} ${entityId}.`);
-      return;
-    }
-    snapshot.enrichment.from_api = record;
-    snapshot.ids.customer_id = snapshot.ids.customer_id
-      ?? asNumber(record.customer_id ?? record.customerId);
-    snapshot.notes.push(`Sentinel refreshed ${prefix} ${entityId} from WorxStream.`);
-    return;
-  }
-
-  if (prefix === 'customer') {
-    if (snapshot.ids.customer_id == null) snapshot.ids.customer_id = asNumber(payload.id);
-    if (snapshot.ids.customer_id == null) {
-      snapshot.errors.push('Cannot refresh customer: missing id.');
-      return;
-    }
-    const details = await showMasterObject(snapshot.ids.customer_id);
-    const record = apiRecord(details);
-    if (record) snapshot.enrichment.from_api = record;
-    snapshot.notes.push(`Sentinel refreshed customer ${snapshot.ids.customer_id} from WorxStream.`);
-    return;
-  }
-
-  if (prefix === 'product') {
-    if (snapshot.ids.product_id == null) snapshot.ids.product_id = asNumber(payload.id);
-    await hydrateProductEvent(snapshot, {});
-    return;
-  }
-
-  if (prefix === 'job') {
-    if (snapshot.ids.job_id == null) snapshot.ids.job_id = asNumber(payload.id);
-    const jobId = snapshot.ids.job_id;
-    if (jobId == null) {
-      snapshot.errors.push('Cannot refresh job: missing id.');
-      return;
-    }
-    const { companyId, userId } = getWorxstreamContext();
-    const result = await callWorxstreamAPI({
-      method: 'GET',
-      endpoint: '/transaction/job/get-job-details',
-      data: { company_id: companyId, user_id: userId, id: jobId },
-    });
-    const record = apiRecord(result);
-    if (!record) {
-      snapshot.errors.push(`Live refresh failed for job ${jobId}.`);
-      return;
-    }
-    snapshot.enrichment.from_api = record;
-    snapshot.ids.customer_id = snapshot.ids.customer_id ?? asNumber(record.customer_id ?? record.customerId);
-    snapshot.notes.push(`Sentinel refreshed job ${jobId} from WorxStream.`);
-  }
-}
-
 /**
  * @returns {Promise<{ payload: object, snapshot: object }>}
  */
-export async function hydrateSharedContext({ eventType, payload, refreshEntity = false }) {
+export async function hydrateSharedContext({ eventType, payload }) {
   const eventPayload = payload && typeof payload === 'object' ? payload : {};
   const ids = extractEntityIds(eventPayload, eventType);
   const snapshot = emptySnapshot(ids);
   const prefix = String(eventType || '').split('.')[0];
 
   try {
-    if (refreshEntity) {
-      await refreshLiveEntity(snapshot, eventPayload, prefix);
-      const live = snapshot.enrichment.from_api;
-      const working = live && typeof live === 'object' && !Array.isArray(live)
-        ? { ...live }
-        : { ...eventPayload };
-      for (const [key, value] of Object.entries(snapshot.ids)) {
-        if (value != null && working[key] == null) working[key] = value;
-      }
-      const customerId = snapshot.ids.customer_id
-        ?? asNumber(working.customer_id ?? working.customerId ?? working.customer?.customerId);
-      const productIds = productIdsFromPayload(working);
-      const tasks = [];
-      if (productIds.length > 0 && (payloadLinesNeedStockLookup(working) || refreshEntity)) {
-        tasks.push(enrichProducts(snapshot, productIds));
-      }
-      if (customerId != null && prefix !== 'product') {
-        tasks.push(enrichCustomerCredit(snapshot, customerId));
-      }
-      if (tasks.length > 0) await Promise.all(tasks);
-      return { payload: working, snapshot };
-    }
-
     if (prefix === 'estimate' || prefix === 'invoice' || prefix === 'credit_memo') {
       await hydrateDocumentEvent(snapshot, eventPayload, prefix);
     } else if (prefix === 'customer') {

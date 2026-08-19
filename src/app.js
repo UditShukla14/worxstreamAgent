@@ -13,7 +13,7 @@ import { requestContextMiddleware } from './middleware/requestContext.js';
 import { getAvailableTools } from './mcp/server.js';
 import { connectDB } from './db/connection.js';
 import { initializeAgents, getAgentKeys } from './agents/index.js';
-import { initializeGovernanceAgents, getGovernanceAgentKeys, startAegisSentinel } from './control/index.js';
+import { initializeGovernanceAgents, getGovernanceAgentKeys } from './control/index.js';
 
 // Import tools to trigger registration (must happen before agent init)
 import './mcp/tools/index.js';
@@ -115,7 +115,6 @@ async function startServer() {
       console.log('='.repeat(60));
       console.log('🦖 Rex admin dashboard: open /rex in the frontend');
       console.log('='.repeat(60) + '\n');
-      startAegisSentinel();
     });
   } catch (error) {
     console.error('❌ Failed to start server:', error);

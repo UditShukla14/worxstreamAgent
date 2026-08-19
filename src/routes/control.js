@@ -12,7 +12,6 @@ import HiddenWebhookDelivery from '../models/HiddenWebhookDelivery.js';
 import WebhookDelivery from '../models/WebhookDelivery.js';
 import {
   GOVERNANCE_AGENT_DEFINITIONS,
-  GOVERNANCE_PIPELINE_KEYS,
   getGovernanceAgentName,
   listPipelines,
   countActivePipelines,
@@ -20,7 +19,6 @@ import {
   syncGovernanceDocumentChunks,
   stopPipelineRun,
   restartPipelineRun,
-  scheduleSentinelSweep,
 } from '../control/index.js';
 import { callWorxstreamAPI } from '../services/httpClient.js';
 import { customerTypeFromPayload } from '../control/contextBuilder.js';
@@ -96,6 +94,9 @@ function runToApi(doc) {
       agentName: step.agentName,
       verdict: step.verdict,
       message: step.message || '',
+      detail: step.detail || '',
+      policyViolated: step.policyViolated || null,
+      suggestedAction: step.suggestedAction || null,
       responseExcerpt: step.responseExcerpt,
       toolsUsed: (step.toolsUsed || []).map((tool) => ({
         name: tool.name,
@@ -110,8 +111,6 @@ function runToApi(doc) {
     totalDurationMs: doc.total_duration_ms || 0,
     totalTokens: doc.total_tokens || 0,
     timestamp: (doc.timestamp || doc.created_at || new Date()).toISOString(),
-    lastReconciledAt: doc.last_reconciled_at ? new Date(doc.last_reconciled_at).toISOString() : null,
-    reconcileReason: doc.reconcile_reason || '',
   };
 }
 
@@ -326,7 +325,6 @@ router.post('/policies', async (req, res, next) => {
       content,
       enabled: status === 'active',
     });
-    scheduleSentinelSweep(req.companyId);
     res.status(201).json({ success: true, data: policyToApi(doc) });
   } catch (error) {
     next(error);
@@ -354,7 +352,6 @@ router.put('/policies/:id', async (req, res, next) => {
       content: doc.content,
       enabled: doc.status === 'active',
     });
-    scheduleSentinelSweep(req.companyId);
     res.json({ success: true, data: policyToApi(doc) });
   } catch (error) {
     next(error);
@@ -366,7 +363,6 @@ router.delete('/policies/:id', async (req, res, next) => {
     const doc = await GovernancePolicy.findOneAndDelete({ _id: req.params.id, company_id: req.companyId });
     if (!doc) return res.status(404).json({ success: false, error: 'Policy not found' });
     await removeDocumentChunks(req.companyId, String(doc._id));
-    scheduleSentinelSweep(req.companyId);
     res.json({ success: true, data: { id: String(doc._id) } });
   } catch (error) {
     next(error);
@@ -434,7 +430,6 @@ router.post('/rules', async (req, res, next) => {
       content,
       enabled: Boolean(doc.active),
     });
-    scheduleSentinelSweep(req.companyId);
     res.status(201).json({ success: true, data: ruleToApi(doc) });
   } catch (error) {
     next(error);
@@ -460,7 +455,6 @@ router.put('/rules/:id', async (req, res, next) => {
       content,
       enabled: Boolean(doc.active),
     });
-    scheduleSentinelSweep(req.companyId);
     res.json({ success: true, data: ruleToApi(doc) });
   } catch (error) {
     next(error);
@@ -472,7 +466,6 @@ router.delete('/rules/:id', async (req, res, next) => {
     const doc = await GovernanceRule.findOneAndDelete({ _id: req.params.id, company_id: req.companyId });
     if (!doc) return res.status(404).json({ success: false, error: 'Rule not found' });
     await removeDocumentChunks(req.companyId, String(doc._id));
-    scheduleSentinelSweep(req.companyId);
     res.json({ success: true, data: { id: String(doc._id) } });
   } catch (error) {
     next(error);
@@ -680,7 +673,7 @@ router.post('/alerts/resolve', async (req, res, next) => {
         alert_id: { $in: alertIds },
         status: 'open',
       },
-      { $set: { status: 'resolved', resolved_by: 'user' } },
+      { $set: { status: 'resolved' } },
     );
     res.json({ success: true, data: { resolved: result.modifiedCount || 0 } });
   } catch (error) {
@@ -696,7 +689,7 @@ router.patch('/alerts/:alertId', async (req, res, next) => {
     }
     const doc = await GovernanceAlert.findOneAndUpdate(
       { company_id: req.companyId, alert_id: req.params.alertId },
-      { $set: { status, resolved_by: status === 'resolved' ? 'user' : '' } },
+      { $set: { status } },
       { new: true },
     );
     if (!doc) return res.status(404).json({ success: false, error: 'Alert not found' });
@@ -733,7 +726,7 @@ router.get('/dashboard', async (req, res, next) => {
         .sort({ timestamp: -1 })
         .lean(),
       GovernanceAlert.countDocuments({ company_id: companyId, status: 'open' }),
-      Promise.resolve(GOVERNANCE_PIPELINE_KEYS),
+      Promise.resolve(Object.keys(GOVERNANCE_AGENT_DEFINITIONS)),
     ]);
 
     const weekPassed = weekRuns.filter((r) => r.status === 'pass').length;

@@ -15,13 +15,13 @@ import { AEGIS_AGENT_KEY, getGovernanceAgentName } from './governanceAgents.js';
 import { retrieveAllGovernanceChunks } from './rag.js';
 import {
   buildMasterMessage,
+  catalogCheckItems,
   customerTypeFromPayload,
   entityLabelFromPayload,
   loadPolicyCatalog,
 } from './contextBuilder.js';
-import { parseGovernanceFindings, runStatusFromSteps } from './parseVerdict.js';
+import { findingKey, parseGovernanceFindings, runStatusFromSteps } from './parseVerdict.js';
 import { hydrateSharedContext } from './hydrateSharedContext.js';
-import { catalogFingerprint, payloadFingerprint } from './governanceFingerprint.js';
 import { getDefaultTenantIds } from '../config/index.js';
 import { runWithRequestContext } from '../request/requestContext.js';
 
@@ -97,10 +97,15 @@ function httpError(status, message) {
   return error;
 }
 
-function pendingStep(agentKey) {
+function catalogStepKey(item, index) {
+  if (item.id) return `aegis_${item.kind}_${item.id}`;
+  return findingKey(item.name, index);
+}
+
+function pendingStep(agentKey, agentName = getGovernanceAgentName(agentKey)) {
   return {
     agentKey,
-    agentName: getGovernanceAgentName(agentKey),
+    agentName,
     verdict: 'running',
     responseExcerpt: 'In progress…',
     toolsUsed: [],
@@ -113,6 +118,25 @@ function pendingStep(agentKey) {
     relatedEntity: '',
     severity: null,
   };
+}
+
+function pendingCatalogSteps(items) {
+  if (!items.length) return [pendingStep(AEGIS_AGENT_KEY)];
+  return items.map((item, index) => pendingStep(catalogStepKey(item, index), item.name));
+}
+
+function normalizeCheckName(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function checksMatch(a, b) {
+  const left = normalizeCheckName(a);
+  const right = normalizeCheckName(b);
+  if (!left || !right) return false;
+  return left === right || left.includes(right) || right.includes(left);
 }
 
 async function replaceAllSteps(runId, steps) {
@@ -146,7 +170,7 @@ async function markRemainingSkipped(runId, reason) {
   });
 }
 
-export async function createStepAlert({ companyId, runId, eventId, eventType, entityLabel, customerType, step }) {
+async function createStepAlert({ companyId, runId, eventId, eventType, entityLabel, customerType, step }) {
   if (step.verdict === 'pass' || step.verdict === 'running' || step.verdict === 'skipped') return null;
   const alertId = `alr_${randomUUID()}`;
   await GovernanceAlert.create({
@@ -242,6 +266,112 @@ function asStep({
   };
 }
 
+function attachRunMeta(steps, { toolsUsed, durationMs, tokens }) {
+  if (steps.length === 0) return steps;
+  return steps.map((step, index) => ({
+    ...step,
+    toolsUsed: index === 0 ? toolsUsed : [],
+    durationMs: index === 0 ? durationMs : 0,
+    tokens: index === 0 ? tokens : 0,
+  }));
+}
+
+function stepFromFinding(finding, { agentKey, agentName, entityLabel }) {
+  return asStep({
+    agentKey,
+    agentName,
+    verdict: finding.verdict,
+    responseExcerpt: finding.responseExcerpt || finding.detail,
+    message: finding.message,
+    detail: finding.detail,
+    policyViolated: finding.policyViolated,
+    suggestedAction: finding.suggestedAction,
+    relatedEntity: finding.relatedEntity || entityLabel,
+    severity: finding.severity,
+  });
+}
+
+function uniformCatalogSteps(items, fields) {
+  if (!items.length) {
+    return [asStep({
+      agentKey: AEGIS_AGENT_KEY,
+      agentName: getGovernanceAgentName(AEGIS_AGENT_KEY),
+      ...fields,
+    })];
+  }
+  return items.map((item, index) => asStep({
+    agentKey: catalogStepKey(item, index),
+    agentName: item.name,
+    ...fields,
+  }));
+}
+
+function mergeCatalogFindings({ items, findings, failure, excerpt, entityLabel }) {
+  const leftover = [...findings];
+  if (!items.length) {
+    if (leftover.length > 0) {
+      return leftover.map((finding) => stepFromFinding(finding, {
+        agentKey: finding.agentKey,
+        agentName: finding.check || getGovernanceAgentName(AEGIS_AGENT_KEY),
+        entityLabel,
+      }));
+    }
+    return uniformCatalogSteps(items, {
+      verdict: 'error',
+      responseExcerpt: excerpt || failure || 'Aegis did not return structured JSON.',
+      message: failure ? 'Aegis failed' : 'Aegis did not return findings',
+      detail: failure || excerpt || 'Empty Aegis response.',
+      suggestedAction: 'Re-run the pipeline or inspect agent logs.',
+      relatedEntity: entityLabel,
+      severity: 'info',
+    });
+  }
+
+  const steps = items.map((item, index) => {
+    const agentKey = catalogStepKey(item, index);
+    const matchIdx = leftover.findIndex((finding) => (
+      checksMatch(finding.check, item.name) || checksMatch(finding.policyViolated, item.name)
+    ));
+    if (matchIdx >= 0) {
+      const finding = leftover.splice(matchIdx, 1)[0];
+      return stepFromFinding(finding, { agentKey, agentName: item.name, entityLabel });
+    }
+    if (failure) {
+      return asStep({
+        agentKey,
+        agentName: item.name,
+        verdict: 'error',
+        responseExcerpt: excerpt || failure,
+        message: 'Aegis failed',
+        detail: failure,
+        suggestedAction: 'Re-run the pipeline or inspect agent logs.',
+        relatedEntity: entityLabel,
+        severity: 'info',
+      });
+    }
+    return asStep({
+      agentKey,
+      agentName: item.name,
+      verdict: 'error',
+      responseExcerpt: 'Aegis did not return a finding for this policy or rule.',
+      message: 'Not evaluated',
+      detail: 'Aegis did not return a finding for this catalog item.',
+      suggestedAction: 'Re-run the pipeline so Aegis evaluates every active policy and rule.',
+      relatedEntity: entityLabel,
+      severity: 'info',
+    });
+  });
+
+  for (const finding of leftover) {
+    steps.push(stepFromFinding(finding, {
+      agentKey: finding.agentKey,
+      agentName: finding.check || getGovernanceAgentName(AEGIS_AGENT_KEY),
+      entityLabel,
+    }));
+  }
+  return steps;
+}
+
 async function runAegisChecks({
   eventType,
   payload,
@@ -249,44 +379,36 @@ async function runAegisChecks({
   entityLabel,
   runId,
   snapshot,
-  allowStop = true,
+  catalog,
 }) {
-  const agentName = getGovernanceAgentName(AEGIS_AGENT_KEY);
+  const items = catalogCheckItems(catalog);
   const stepStart = Date.now();
   const agent = getGovernanceAgent(AEGIS_AGENT_KEY);
 
-  if (allowStop && stopRequested(runId)) {
-    return [asStep({
-      agentKey: AEGIS_AGENT_KEY,
-      agentName,
+  if (stopRequested(runId)) {
+    return uniformCatalogSteps(items, {
       verdict: 'skipped',
       responseExcerpt: 'Stopped before Aegis started.',
       message: 'Skipped',
       detail: 'Pipeline stop was requested.',
       relatedEntity: entityLabel,
-    })];
+    });
   }
 
   if (!agent) {
-    return [asStep({
-      agentKey: AEGIS_AGENT_KEY,
-      agentName,
+    return attachRunMeta(uniformCatalogSteps(items, {
       verdict: 'error',
       responseExcerpt: 'Aegis is not initialized.',
-      durationMs: Date.now() - stepStart,
       message: 'Missing Aegis agent',
       detail: 'The pipeline runner has no Aegis instance.',
       suggestedAction: 'Restart the agent server so governance agents initialize.',
       relatedEntity: entityLabel,
       severity: 'info',
-    })];
+    }), { toolsUsed: [], durationMs: Date.now() - stepStart, tokens: 0 });
   }
 
   try {
-    const [ragChunks, catalog] = await Promise.all([
-      retrieveAllGovernanceChunks(companyId, { maxChunks: 40, eventType }),
-      loadPolicyCatalog(companyId, eventType),
-    ]);
+    const ragChunks = await retrieveAllGovernanceChunks(companyId, { maxChunks: 40, eventType });
     const message = buildMasterMessage({
       eventType,
       payload,
@@ -307,60 +429,41 @@ async function runAegisChecks({
     const tokens = result.usage?.total_tokens || 0;
     const toolsUsed = mapToolsUsed(result.toolsUsed);
 
-    if (allowStop && stopRequested(runId)) {
-      return [asStep({
-        agentKey: AEGIS_AGENT_KEY,
-        agentName,
+    if (stopRequested(runId)) {
+      return attachRunMeta(uniformCatalogSteps(items, {
         verdict: 'skipped',
         responseExcerpt: 'Stopped while Aegis was running.',
-        toolsUsed,
-        durationMs,
-        tokens,
         message: 'Skipped',
         detail: 'Pipeline stop was requested.',
         relatedEntity: entityLabel,
-      })];
+      }), { toolsUsed, durationMs, tokens });
     }
 
-    const findings = parseGovernanceFindings(result.response, {
-      message: 'Aegis check',
+    const parsed = parseGovernanceFindings(result.response, {
       relatedEntity: entityLabel,
     });
+    const failure = parsed.ok
+      ? ''
+      : (parsed.excerpt || 'Aegis did not return structured JSON.');
 
-    return findings.map((finding, index) => asStep({
-      agentKey: finding.agentKey,
-      agentName: finding.check || agentName,
-      verdict: finding.verdict,
-      responseExcerpt: finding.responseExcerpt || finding.detail,
-      toolsUsed: index === 0 ? toolsUsed : [],
-      durationMs: index === 0 ? durationMs : 0,
-      tokens: index === 0 ? tokens : 0,
-      message: finding.message,
-      detail: finding.detail,
-      policyViolated: finding.policyViolated,
-      suggestedAction: finding.suggestedAction,
-      relatedEntity: finding.relatedEntity || entityLabel,
-      severity: finding.severity,
-    }));
+    return attachRunMeta(mergeCatalogFindings({
+      items,
+      findings: parsed.findings,
+      failure,
+      excerpt: parsed.excerpt,
+      entityLabel,
+    }), { toolsUsed, durationMs, tokens });
   } catch (error) {
     console.error('❌ [Aegis] pipeline failed:', error);
-    return [asStep({
-      agentKey: AEGIS_AGENT_KEY,
-      agentName,
-      verdict: 'error',
-      responseExcerpt: error.message || String(error),
-      durationMs: Date.now() - stepStart,
-      message: 'Aegis failed',
-      detail: error.message || String(error),
-      suggestedAction: 'Inspect agent logs and re-deliver the webhook if the entity exists.',
-      relatedEntity: entityLabel,
-      severity: 'info',
-    })];
+    const failure = error.message || String(error);
+    return attachRunMeta(mergeCatalogFindings({
+      items,
+      findings: [],
+      failure,
+      excerpt: failure,
+      entityLabel,
+    }), { toolsUsed: [], durationMs: Date.now() - stepStart, tokens: 0 });
   }
-}
-
-export async function evaluateAegisChecks(args) {
-  return runAegisChecks({ ...args, allowStop: false });
 }
 
 /**
@@ -410,17 +513,21 @@ export async function runPipeline(event) {
   });
 
   console.log(`🛡️  Pipeline ${runId} hydrating shared context for ${eventType}`);
-  const hydrated = await hydrateSharedContext({ eventType, payload });
+  const [hydrated, catalog] = await Promise.all([
+    hydrateSharedContext({ eventType, payload }),
+    loadPolicyCatalog(companyId, eventType),
+  ]);
   const workingPayload = hydrated.payload;
   const snapshot = hydrated.snapshot;
   const workingLabel = entityLabelFromPayload(workingPayload, eventType);
   const customerType = customerTypeFromPayload(workingPayload);
+  const catalogItems = catalogCheckItems(catalog);
   runDoc.payload = workingPayload;
   runDoc.entity_label = workingLabel;
   runDoc.execution_mode = 'single';
   runDoc.plan_reason = 'Aegis evaluates all active policies and rules';
   runDoc.pipeline = [AEGIS_AGENT_KEY];
-  runDoc.steps = [pendingStep(AEGIS_AGENT_KEY)];
+  runDoc.steps = pendingCatalogSteps(catalogItems);
   await runDoc.save();
   if (snapshot.notes.length > 0) {
     console.log(`🛡️  Shared context notes: ${snapshot.notes.join(' | ')}`);
@@ -438,6 +545,7 @@ export async function runPipeline(event) {
     entityLabel: workingLabel,
     runId,
     snapshot,
+    catalog,
   });
   await replaceAllSteps(runId, findingSteps);
 
@@ -474,13 +582,6 @@ export async function runPipeline(event) {
     target.status = 'stopped';
   } else {
     target.status = runStatusFromSteps(steps);
-  }
-  try {
-    target.payload_fingerprint = payloadFingerprint(workingPayload, snapshot);
-    target.catalog_fingerprint = await catalogFingerprint(companyId);
-    target.last_reconciled_at = new Date();
-  } catch (error) {
-    console.warn('🛡️  Could not store run fingerprints:', error.message || error);
   }
   await target.save();
   const status = target.status;
