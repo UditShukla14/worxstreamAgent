@@ -17,28 +17,19 @@ import {
   runConfirmAction,
   deleteConversationFull,
 } from '../agents/coworkerPipeline.js';
-import { getDefaultTenantIds } from '../config/index.js';
+import { requireWorxstreamAuth } from '../middleware/requireWorxstreamAuth.js';
+import { resolveAgentCredentials } from '../utils/worxstreamCredentials.js';
 
 const router = Router();
 
-/** Conversation scoping: optional body/query ids, else DEFAULT_COMPANY_ID / DEFAULT_USER_ID from .env */
+router.use(requireWorxstreamAuth);
+
+/** Conversation scoping from UI login (session) or per-request companyId/userId — no .env defaults. */
 function resolveConversationTenant(req) {
-  const body = req.body || {};
-  const query = req.query || {};
-  const fromRequest = {
-    companyId: body.companyId ?? body.company_id ?? query.companyId ?? query.company_id,
-    userId: body.userId ?? body.user_id ?? query.userId ?? query.user_id,
-  };
-  if (fromRequest.companyId != null && fromRequest.userId != null) {
-    return {
-      company_id: String(fromRequest.companyId),
-      user_id: String(fromRequest.userId),
-    };
-  }
-  const defaults = getDefaultTenantIds();
+  const { companyId, userId } = resolveAgentCredentials(req);
   return {
-    company_id: String(defaults.companyId),
-    user_id: String(defaults.userId),
+    company_id: String(companyId),
+    user_id: String(userId),
   };
 }
 

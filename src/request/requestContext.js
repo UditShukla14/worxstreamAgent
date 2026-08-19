@@ -75,11 +75,27 @@ export function extractApiTokenFromRequest(req) {
  * @param {import('express').Request} req
  * @returns {RequestContextStore}
  */
+function headerValue(req, name) {
+  const raw = req.headers[name];
+  if (typeof raw === 'string' && raw.trim()) return raw.trim();
+  return undefined;
+}
+
 export function requestContextFromReq(req) {
   const body = req.body || {};
   const query = req.query || {};
-  const companyId = body.companyId ?? body.company_id ?? query.companyId ?? query.company_id;
-  const userId = body.userId ?? body.user_id ?? query.userId ?? query.user_id;
+  const companyId =
+    body.companyId ??
+    body.company_id ??
+    query.companyId ??
+    query.company_id ??
+    headerValue(req, 'x-company-id');
+  const userId =
+    body.userId ??
+    body.user_id ??
+    query.userId ??
+    query.user_id ??
+    headerValue(req, 'x-user-id');
   const apiToken = body.apiToken ?? body.api_token ?? extractApiTokenFromRequest(req);
 
   return {

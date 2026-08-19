@@ -13,7 +13,7 @@ import { requestContextMiddleware } from './middleware/requestContext.js';
 import { getAvailableTools } from './mcp/server.js';
 import { connectDB } from './db/connection.js';
 import { initializeAgents, getAgentKeys } from './agents/index.js';
-import { initializeGovernanceAgents, getGovernanceAgentKeys } from './control/index.js';
+import { initializeGovernanceAgents, getGovernanceAgentKeys, reconcileOrphanedRuns } from './control/index.js';
 
 // Import tools to trigger registration (must happen before agent init)
 import './mcp/tools/index.js';
@@ -47,14 +47,30 @@ const corsOptions = {
       }
     : true,
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Worxstream-Webhook-Secret'],
+      allowedHeaders: [
+        'Content-Type',
+        'Authorization',
+        'X-Requested-With',
+        'X-Worxstream-Webhook-Secret',
+        'X-Worxstream-Signature',
+        'X-Worxstream-Token',
+        'X-Company-Id',
+        'X-User-Id',
+      ],
   credentials: true,
   exposedHeaders: ['Content-Length', 'X-Request-ID'],
 };
 
 // Middleware
 app.use(cors(corsOptions));
-app.use(express.json());
+app.use(express.json({
+  verify: (req, _res, buf) => {
+    const path = req.originalUrl || req.url || '';
+    if (path.startsWith('/api/webhooks')) {
+      req.rawBody = Buffer.from(buf);
+    }
+  },
+}));
 // Per-request tenant context (AsyncLocalStorage) — after express.json so body is parsed
 app.use(requestContextMiddleware);
 
@@ -77,6 +93,7 @@ async function startServer() {
     // Initialize multi-agent system (after MCP tools are registered)
     initializeAgents();
     initializeGovernanceAgents();
+    await reconcileOrphanedRuns();
 
     app.listen(config.server.port, '0.0.0.0', () => {
       const agentKeys = getAgentKeys();

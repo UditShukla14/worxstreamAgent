@@ -1,6 +1,6 @@
 /**
  * Control Tower APIs — policies, rules, pipeline runs, alerts, dashboard.
- * All routes are scoped by company_id (query or body).
+ * JWT is required; company_id is bound to the WorxStream session.
  */
 
 import { Router } from 'express';
@@ -23,35 +23,12 @@ import {
 import { callWorxstreamAPI } from '../services/httpClient.js';
 import { customerTypeFromPayload } from '../control/contextBuilder.js';
 import { eventTypesFromRule, parseRuleEventTypes, ruleChunkContent } from '../control/ruleEvents.js';
+import { requireControlAuth } from '../middleware/requireControlAuth.js';
+import { agentStatFromRuns } from '../control/dashboardStats.js';
 
 const router = Router();
 
-function companyIdFromReq(req) {
-  const raw = req.query.company_id
-    ?? req.query.companyId
-    ?? req.body?.company_id
-    ?? req.body?.companyId;
-  return raw != null && String(raw).trim() ? String(raw).trim() : '';
-}
-
-function userIdFromReq(req) {
-  const raw = req.query.user_id
-    ?? req.query.userId
-    ?? req.body?.user_id
-    ?? req.body?.userId;
-  return raw != null && String(raw).trim() ? String(raw).trim() : '';
-}
-
-function requireCompanyId(req, res, next) {
-  const companyId = companyIdFromReq(req);
-  if (!companyId) {
-    return res.status(400).json({ success: false, error: 'company_id is required' });
-  }
-  req.companyId = companyId;
-  next();
-}
-
-router.use(requireCompanyId);
+router.use(requireControlAuth);
 
 function policyToApi(doc) {
   return {
@@ -117,6 +94,7 @@ function runToApi(doc) {
 function alertToApi(doc, extras = {}) {
   return {
     alertId: doc.alert_id,
+    runId: extras.runId || doc.run_id || '',
     severity: doc.severity,
     message: doc.message,
     detail: doc.detail,
@@ -523,8 +501,7 @@ router.post('/runs/:runId/restart', async (req, res, next) => {
   try {
     const existing = await PipelineRun.findOne(activeRunQuery({ company_id: req.companyId, run_id: req.params.runId }));
     if (!existing) return res.status(404).json({ success: false, error: 'Run not found' });
-    const userId = req.body?.user_id ?? req.query.user_id ?? req.query.userId;
-    const result = await restartPipelineRun(req.companyId, req.params.runId, { userId });
+    const result = await restartPipelineRun(req.companyId, req.params.runId, { userId: req.userId });
     res.json({ success: true, data: result });
   } catch (error) {
     next(error);
@@ -550,7 +527,7 @@ router.post('/runs/delete', async (req, res, next) => {
 router.get('/deliveries', async (req, res, next) => {
   try {
     await migrateHiddenDeliveryFlags(req.companyId);
-    const userId = userIdFromReq(req);
+    const userId = req.userId;
     if (!userId) {
       return res.status(400).json({ success: false, error: 'user_id is required' });
     }
@@ -740,31 +717,12 @@ router.get('/dashboard', async (req, res, next) => {
     };
 
     const agentStats = agentKeys.map((key) => {
-      const todaySteps = [];
-      let lastRunAt = null;
-      for (const run of weekRuns) {
-        const step = (run.steps || []).find((s) => s.agentKey === key);
-        if (!step) continue;
-        const ts = run.timestamp ? new Date(run.timestamp).toISOString() : null;
-        if (ts && (!lastRunAt || ts > lastRunAt)) lastRunAt = ts;
-        const runDay = run.timestamp ? new Date(run.timestamp) : null;
-        if (runDay && runDay >= today) todaySteps.push(step);
-      }
-      const weekSteps = weekRuns.flatMap((run) => (run.steps || []).filter((s) => s.agentKey === key));
-      const weekPass = weekSteps.filter((s) => s.verdict === 'pass').length;
-      const avgDuration = weekSteps.length === 0
-        ? 0
-        : Math.round(weekSteps.reduce((sum, s) => sum + (s.durationMs || 0), 0) / weekSteps.length);
-
+      const derived = agentStatFromRuns(weekRuns, key, { today });
       return {
         key,
         name: getGovernanceAgentName(key),
         description: GOVERNANCE_AGENT_DEFINITIONS[key].description,
-        status: 'healthy',
-        runsToday: todaySteps.length,
-        avgDurationMs: avgDuration,
-        lastRunAt: lastRunAt || null,
-        passRate: weekSteps.length === 0 ? 0 : Math.round((weekPass / weekSteps.length) * 100),
+        ...derived,
       };
     });
 

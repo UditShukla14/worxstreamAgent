@@ -2,23 +2,18 @@
  * Worxstream webhooks — event-driven governance pipeline.
  *
  * POST /api/webhooks/worxstream
- * Verifies optional shared secret, normalizes the catalog payload, dedupes
+ * Verifies shared secret or HMAC, normalizes the catalog payload, dedupes
  * by event_id, responds 200, then runs the pipeline asynchronously.
+ * Production rejects requests when WORXSTREAM_WEBHOOK_SECRET is unset.
  */
 
 import { Router } from 'express';
 import { acceptGovernanceEvent } from '../control/ingestEvent.js';
 import { eventFromWorxstreamWebhook } from '../control/fromDelivery.js';
 import { recordInboundDelivery } from '../control/recordInboundDelivery.js';
+import { verifyWebhookRequest } from '../control/verifyWebhook.js';
 
 const router = Router();
-
-function verifyWebhook(req) {
-  const secret = (process.env.WORXSTREAM_WEBHOOK_SECRET || '').trim();
-  if (!secret) return true;
-  const header = req.headers['x-worxstream-webhook-secret'];
-  return header === secret;
-}
 
 /**
  * POST /api/webhooks/worxstream
@@ -27,8 +22,9 @@ function verifyWebhook(req) {
  */
 router.post('/worxstream', async (req, res) => {
   try {
-    if (!verifyWebhook(req)) {
-      return res.status(401).json({ success: false, error: 'Invalid webhook secret' });
+    const verified = verifyWebhookRequest(req);
+    if (!verified.ok) {
+      return res.status(verified.status || 401).json({ success: false, error: verified.error });
     }
 
     const event = eventFromWorxstreamWebhook(req.body || {}, {

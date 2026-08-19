@@ -2,22 +2,24 @@
  * Bind per-request Worxstream tenant context (AsyncLocalStorage) for agent/tool routes.
  */
 
-import {
-  enterRequestContext,
-  requestContextFromReq,
-} from '../request/requestContext.js';
+import { enterRequestContext } from '../request/requestContext.js';
+import { buildWorxstreamContext } from '../utils/worxstreamCredentials.js';
 
-const CONTEXT_PATH_PREFIXES = [
-  '/api/agents',
-  '/api/tools',
-  '/api/price-comparison',
-  '/api/webhooks',
-  '/api/control',
-];
+const AGENT_PATH_PREFIXES = ['/api/agents', '/api/price-comparison'];
+const SERVER_PATH_PREFIXES = ['/api/tools', '/api/webhooks', '/api/control'];
+const ENV_FALLBACK_PREFIXES = ['/api/tools', '/api/webhooks'];
+
+function matchesPrefix(path, prefixes) {
+  return prefixes.some((p) => path.startsWith(p));
+}
 
 function shouldApplyContext(req) {
   const path = req.path || '';
-  return CONTEXT_PATH_PREFIXES.some((p) => path.startsWith(p));
+  return matchesPrefix(path, AGENT_PATH_PREFIXES) || matchesPrefix(path, SERVER_PATH_PREFIXES);
+}
+
+function allowEnvFallbackForPath(path) {
+  return matchesPrefix(path, ENV_FALLBACK_PREFIXES);
 }
 
 /**
@@ -28,5 +30,11 @@ export function requestContextMiddleware(req, res, next) {
   if (!shouldApplyContext(req)) {
     return next();
   }
-  enterRequestContext(requestContextFromReq(req), () => next());
+
+  const ctx = buildWorxstreamContext(
+    { req },
+    { allowEnvFallback: allowEnvFallbackForPath(req.path || '') },
+  );
+
+  enterRequestContext(ctx, () => next());
 }

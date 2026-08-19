@@ -14,7 +14,7 @@ router.get('/', (req, res) => {
   res.json({
     success: true,
     active,
-    message: active ? 'Session active.' : 'No session; set via POST /session or use .env defaults.',
+    message: active ? 'Session active.' : 'No session; call POST /api/auth/session after UI login.',
   });
 });
 

@@ -5,8 +5,7 @@
 import dotenv from 'dotenv';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import * as worxstreamSession from '../session/worxstreamSession.js';
-import { getRequestContext } from '../request/requestContext.js';
+import { buildWorxstreamContext } from '../utils/worxstreamCredentials.js';
 
 const agentRoot = join(dirname(fileURLToPath(import.meta.url)), '../..');
 dotenv.config({ path: join(agentRoot, '.env') });
@@ -195,32 +194,32 @@ export const config = {
  * Worxstream API credentials, resolved per field with this precedence:
  *   1. Per-request context (AsyncLocalStorage, set by requestContextMiddleware
  *      from request body/headers) — safe under concurrent multi-tenant requests.
- *   2. In-memory session (POST /session) — single global session per process.
- *   3. .env fallbacks (DEFAULT_COMPANY_ID / DEFAULT_USER_ID / WORXSTREAM_API_TOKEN).
+ *   2. In-memory session (POST /api/auth/session) — single global session per process.
+ *   3. .env fallbacks (DEFAULT_COMPANY_ID / DEFAULT_USER_ID / WORXSTREAM_API_TOKEN)
+ *      — webhooks, control, and scripts only; agent routes must not rely on these.
  */
-function resolveWorxstreamCredentials() {
-  const req = getRequestContext() || {};
-  const s = worxstreamSession.getSession() || {};
+function resolveWorxstreamCredentials({ allowEnvFallback = true } = {}) {
+  const ctx = buildWorxstreamContext({}, { allowEnvFallback });
   return {
-    companyId: req.companyId || s.companyId || process.env.DEFAULT_COMPANY_ID || '1',
-    userId: req.userId || s.userId || process.env.DEFAULT_USER_ID || '1',
-    apiToken: req.apiToken || s.apiToken || process.env.WORXSTREAM_API_TOKEN || '',
+    companyId: ctx.companyId || (allowEnvFallback ? '1' : undefined),
+    userId: ctx.userId || (allowEnvFallback ? '1' : undefined),
+    apiToken: ctx.apiToken || '',
   };
 }
 
-/** API token for Worxstream HTTP client — session, then WORXSTREAM_API_TOKEN. */
+/** API token for Worxstream HTTP client — request/session, then optional env. */
 export function getWorxstreamApiToken() {
   const { apiToken } = resolveWorxstreamCredentials();
-  return apiToken || process.env.WORXSTREAM_API_TOKEN || '';
+  return apiToken || '';
 }
 
-/** companyId / userId for MCP tool calls — session, then DEFAULT_* env vars. */
+/** companyId / userId for MCP tool calls — request/session, then optional env. */
 export function getWorxstreamContext() {
   const { companyId, userId } = resolveWorxstreamCredentials();
   return { companyId, userId };
 }
 
-/** Default tenant for Mongo/Redis when the client omits companyId/userId. */
+/** Default tenant for Mongo/Redis when the client omits companyId/userId (non-agent paths). */
 export function getDefaultTenantIds() {
   return getWorxstreamContext();
 }
@@ -246,7 +245,14 @@ export function validateConfig() {
   }
 
   if (!process.env.WORXSTREAM_API_TOKEN) {
-    console.warn('⚠️  WORXSTREAM_API_TOKEN not set - set via .env or POST /session after login');
+    console.warn(
+      '⚠️  WORXSTREAM_API_TOKEN not set — agent routes require POST /api/auth/session or per-request credentials; webhooks/scripts may need env defaults.',
+    );
+  }
+  if (isProduction && !process.env.WORXSTREAM_WEBHOOK_SECRET) {
+    console.warn(
+      '⚠️  WORXSTREAM_WEBHOOK_SECRET is required in production — POST /api/webhooks/worxstream will return 401 until it is set.',
+    );
   }
   if (isProduction && !config.server.corsOrigins) {
     console.warn('⚠️  CORS_ORIGINS not set - set in .env for production (comma-separated origins)');
