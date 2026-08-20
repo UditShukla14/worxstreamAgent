@@ -26,6 +26,9 @@ export const ENTITY_LOOKUPS = {
   task: { tool: 'list_tasks', args: (q) => ({ filter: { search: q }, limit: 25 }) },
   estimate: { tool: 'list_estimates', args: (q) => ({ filter: { search: q }, limit: 25 }) },
   invoice: { tool: 'list_invoices', args: (q) => ({ filter: { search: q }, limit: 25 }) },
+  sales_order: { tool: 'list_sales_orders', args: (q) => ({ filter: { search: q }, limit: 25 }) },
+  warehouse: { tool: 'get_warehouses_dropdown', args: () => ({}) },
+  deal: { tool: 'list_deals', args: (q) => ({ search: q, take: 25 }) },
 };
 
 const ENTITY_TYPES = Object.keys(ENTITY_LOOKUPS);
@@ -85,7 +88,7 @@ export function registerLookupTools() {
     {
       title: 'Resolve Entity',
       description:
-        'Universal lookup: resolve a person/customer/contact/product/vendor/tax/department/branch/job/project/task referenced BY NAME into its internal record (with IDs). ' +
+        'Universal lookup: resolve a person/customer/contact/product/vendor/tax/department/branch/job/project/task/sales order/warehouse/deal referenced BY NAME into its internal record (with IDs). ' +
         'Use this FIRST whenever you need an ID the user only gave a name for, instead of asking the user. ' +
         `entity_type must be one of: ${ENTITY_TYPES.join(', ')}.`,
       capabilities: { domain: 'lookup', entity: 'any', action: 'list', safety: 'read' },

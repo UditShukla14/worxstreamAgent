@@ -63,6 +63,12 @@ Examples:
 - "list addresses" → ["address"]
 - "show tax configs" → ["finance"]
 - "show me app menus" → ["config"]
+- "list sales orders" / "create a sales order" → ["salesOrder"]
+- "warehouse stock" / "how many units of SKU X" → ["inventory"]
+- "list deals" / "move deal to closed won" → ["deal"]
+- "search everything for Acme" / "notes on this deal" → ["crm"]
+- "received payments" / "payment methods" → ["payments"]
+- "unread notifications" / "email this invoice" → ["communications"]
 
 Respond with ONLY a JSON array of agent keys. Nothing else.`;
 }

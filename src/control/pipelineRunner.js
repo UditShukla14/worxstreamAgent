@@ -1,9 +1,9 @@
 /**
  * Run Aegis against one Worxstream webhook event.
  *
- * Hydrate a shared entity snapshot, then Aegis evaluates every active
- * policy/rule. Findings are persisted as pipeline steps so Control Tower
- * can show each check.
+ * Hydrate a shared entity snapshot, then Aegis evaluates the persistent
+ * catalog context (active policies/rules, refreshed only when they change).
+ * Findings are persisted as pipeline steps so Control Tower can show each check.
  */
 
 import { randomUUID } from 'crypto';
@@ -12,12 +12,12 @@ import GovernanceAlert from '../models/GovernanceAlert.js';
 import { getPipelineForEvent } from './pipelineConfig.js';
 import { getGovernanceAgent } from './governanceRegistry.js';
 import { AEGIS_AGENT_KEY, getGovernanceAgentName } from './governanceAgents.js';
-import { retrieveAllGovernanceChunks } from './rag.js';
 import {
   buildMasterMessage,
   catalogCheckItems,
   customerTypeFromPayload,
   entityLabelFromPayload,
+  preparedByFromPayload,
   loadPolicyCatalog,
 } from './contextBuilder.js';
 import { findingKey, parseGovernanceFindings, runStatusFromSteps } from './parseVerdict.js';
@@ -170,7 +170,7 @@ async function markRemainingSkipped(runId, reason) {
   });
 }
 
-async function createStepAlert({ companyId, runId, eventId, eventType, entityLabel, customerType, step }) {
+async function createStepAlert({ companyId, runId, eventId, eventType, entityLabel, customerType, preparedBy, step }) {
   if (step.verdict === 'pass' || step.verdict === 'running' || step.verdict === 'skipped') return null;
   const alertId = `alr_${randomUUID()}`;
   await GovernanceAlert.create({
@@ -184,6 +184,7 @@ async function createStepAlert({ companyId, runId, eventId, eventType, entityLab
     triggered_by: step.agentName,
     related_entity: step.relatedEntity || entityLabel,
     customer_type: customerType || '',
+    prepared_by: preparedBy || '',
     event_type: eventType,
     policy_violated: step.policyViolated || (step.verdict === 'error' ? 'N/A — System Error' : ''),
     suggested_action: step.suggestedAction || '',
@@ -363,8 +364,8 @@ async function runAegisChecks({
   entityLabel,
   runId,
   snapshot,
-  catalog,
 }) {
+  const catalog = await loadPolicyCatalog(companyId, eventType);
   const items = catalogCheckItems(catalog);
   const stepStart = Date.now();
   const agent = getGovernanceAgent(AEGIS_AGENT_KEY);
@@ -405,12 +406,10 @@ async function runAegisChecks({
   }
 
   try {
-    const ragChunks = await retrieveAllGovernanceChunks(companyId, { maxChunks: 40, eventType });
     const message = buildMasterMessage({
       eventType,
       payload,
       companyId,
-      ragChunks,
       agentKey: AEGIS_AGENT_KEY,
       snapshot,
       catalog,
@@ -474,8 +473,8 @@ export async function evaluateGovernanceEvent({
   payload,
   preferLiveEntity = true,
 }) {
-  const catalog = await loadPolicyCatalog(companyId, eventType);
   const hydrated = await hydrateSharedContext({ eventType, payload, preferLiveEntity });
+  const catalog = await loadPolicyCatalog(companyId, eventType);
   const entityLabel = entityLabelFromPayload(hydrated.payload, eventType);
   const agent = getGovernanceAgent(AEGIS_AGENT_KEY);
   if (!agent) {
@@ -483,12 +482,10 @@ export async function evaluateGovernanceEvent({
   }
 
   try {
-    const ragChunks = await retrieveAllGovernanceChunks(companyId, { maxChunks: 40, eventType });
     const message = buildMasterMessage({
       eventType,
       payload: hydrated.payload,
       companyId,
-      ragChunks,
       agentKey: AEGIS_AGENT_KEY,
       snapshot: hydrated.snapshot,
       catalog,
@@ -553,19 +550,18 @@ export async function runPipeline(event) {
   });
 
   console.log(`🛡️  Pipeline ${runId} hydrating shared context for ${eventType}`);
-  const [hydrated, catalog] = await Promise.all([
-    hydrateSharedContext({ eventType, payload }),
-    loadPolicyCatalog(companyId, eventType),
-  ]);
+  const hydrated = await hydrateSharedContext({ eventType, payload });
+  const catalog = await loadPolicyCatalog(companyId, eventType);
   const workingPayload = hydrated.payload;
   const snapshot = hydrated.snapshot;
   const workingLabel = entityLabelFromPayload(workingPayload, eventType);
   const customerType = customerTypeFromPayload(workingPayload);
+  const preparedBy = preparedByFromPayload(workingPayload);
   const catalogItems = catalogCheckItems(catalog);
   runDoc.payload = workingPayload;
   runDoc.entity_label = workingLabel;
   runDoc.execution_mode = 'single';
-  runDoc.plan_reason = 'Aegis evaluates all active policies and rules';
+  runDoc.plan_reason = 'Aegis evaluates the live active catalog';
   runDoc.pipeline = [AEGIS_AGENT_KEY];
   runDoc.steps = pendingCatalogSteps(catalogItems);
   await runDoc.save();
@@ -585,7 +581,6 @@ export async function runPipeline(event) {
     entityLabel: workingLabel,
     runId,
     snapshot,
-    catalog,
   });
   await replaceAllSteps(runId, findingSteps);
 
@@ -598,6 +593,7 @@ export async function runPipeline(event) {
       eventType,
       entityLabel: workingLabel,
       customerType,
+      preparedBy,
       step,
     });
     if (alertId) alerts.push(alertId);

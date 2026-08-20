@@ -24,10 +24,15 @@ export {
 export { verifyWebhookRequest, verifyWebhookAuth } from './verifyWebhook.js';
 export { agentStatFromRuns, runBelongsToAgent } from './dashboardStats.js';
 export { eventFromWorxstreamWebhook, eventFromWorxstreamDelivery } from './fromDelivery.js';
+export { replayGovernanceDeliveries } from './replayDelivery.js';
 export {
-  retrieveRelevantChunks,
-  retrieveAllGovernanceChunks,
   reindexDocument,
   removeDocumentChunks,
   syncGovernanceDocumentChunks,
 } from './rag.js';
+export {
+  getCatalogContext,
+  invalidateCatalogContext,
+  refreshCatalogContext,
+  catalogForEvent,
+} from './catalogContext.js';

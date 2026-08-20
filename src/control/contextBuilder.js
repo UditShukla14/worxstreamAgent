@@ -1,11 +1,10 @@
 /**
- * Build the user message + RAG query for Aegis from a webhook event.
+ * Build the user message for Aegis from a webhook event.
  */
 
 import { getGovernanceAgentName } from './governanceAgents.js';
-import GovernancePolicy from '../models/GovernancePolicy.js';
-import GovernanceRule from '../models/GovernanceRule.js';
-import { eventTypesFromRule, ruleAppliesToEvent } from './ruleEvents.js';
+import { catalogForEvent, getCatalogContext } from './catalogContext.js';
+import { ruleAppliesToEvent } from './ruleEvents.js';
 import { normalizeEventType } from './pipelineConfig.js';
 
 function firstLabel(...values) {
@@ -111,60 +110,49 @@ export function customerTypeFromPayload(payload = {}) {
   return '';
 }
 
-export function buildRagQuery(eventType, agentKey, payload = {}) {
-  const agentName = getGovernanceAgentName(agentKey);
-  const p = payload && typeof payload === 'object' ? payload : {};
-  const bits = [
-    agentName,
-    agentKey,
-    eventType,
-    'policy',
-    'rule',
-    'margin',
-    'inventory',
-    'credit',
-    'stock',
-    'overdue',
-  ];
-  if (String(eventType).includes('estimate') || p.estimate_id != null) {
-    bits.push('estimate', 'fulfilment');
+function personLabel(value) {
+  if (value == null || value === '') return '';
+  if (typeof value === 'string' || typeof value === 'number') {
+    const label = String(value).trim();
+    if (!label || /^\d+$/.test(label)) return '';
+    return label;
   }
-  if (String(eventType).includes('invoice') || p.invoice_id != null) {
-    bits.push('invoice');
-  }
-  if (String(eventType).includes('customer') || p.customer_id != null) {
-    bits.push('customer', 'hold');
-  }
-  if (String(eventType).includes('product') || p.product_id != null) {
-    bits.push('product', 'reorder');
-  }
-  return bits.join(' ');
+  if (typeof value !== 'object' || Array.isArray(value)) return '';
+  const name = String(value.name || value.fullName || value.full_name || '').trim();
+  const email = String(value.email || '').trim();
+  const label = String(value.label || value.value || '').trim();
+  const combined = name || email || label;
+  if (!combined || /^\d+$/.test(combined)) return '';
+  return combined;
 }
 
+/** Document author from a WorxStream payload. Prefers preparedBy, then createdBy name. Skips raw IDs. */
+export function preparedByFromPayload(payload = {}) {
+  const p = payload && typeof payload === 'object' ? payload : {};
+  const candidates = [
+    p.preparedBy,
+    p.prepared_by,
+    p.preparedByDetails,
+    p.prepared_by_details,
+    p.createdBy,
+    p.created_by,
+    p.created_by_user_name,
+    p.createdByUserName,
+  ];
+  for (const candidate of candidates) {
+    const label = personLabel(candidate);
+    if (label) return label;
+  }
+  return '';
+}
+
+/**
+ * Active catalog for this run, from the persistent company context.
+ * Mongo is not queried unless the context is empty or was invalidated.
+ */
 export async function loadPolicyCatalog(companyId, eventType) {
-  const [policies, rules] = await Promise.all([
-    GovernancePolicy.find({ company_id: String(companyId), status: 'active' }).select('name type').lean(),
-    GovernanceRule.find({ company_id: String(companyId), active: true }).select('name event_type event_types').lean(),
-  ]);
-  const mappedRules = (rules || []).map((row) => {
-    const eventTypes = eventTypesFromRule(row);
-    return {
-      id: String(row._id),
-      name: row.name,
-      eventType: eventTypes[0] || row.event_type,
-      eventTypes,
-    };
-  });
-  return {
-    policies: (policies || []).map((row) => ({
-      id: String(row._id),
-      name: row.name,
-      type: row.type || 'policy',
-    })),
-    rules: eventType
-      ? mappedRules.filter((row) => ruleAppliesToEvent(row, eventType))
-      : mappedRules,
-  };
+  const snapshot = await getCatalogContext(companyId);
+  return catalogForEvent(snapshot, eventType);
 }
 
 /** One UI/pipeline step per active policy and applicable rule. */
@@ -189,13 +177,11 @@ export function buildMasterMessage({
   eventType,
   payload,
   companyId,
-  ragChunks,
   agentKey,
   snapshot,
   catalog,
 }) {
   const label = entityLabelFromPayload(payload, eventType);
-  const policyBlock = formatRagChunks(ragChunks);
   const catalogBlock = formatCatalog(catalog, eventType);
   const payloadBlock = [
     'WORXSTREAM EVENT PAYLOAD (source of truth — use these values exactly as the user sees them in the app):',
@@ -214,49 +200,70 @@ export function buildMasterMessage({
     `Company ID: ${companyId}`,
     `Entity: ${label}`,
     '',
+    'CATALOG CHECK (mandatory first step): the LIVE GOVERNANCE CATALOG below was loaded from Control Tower at the start of this run. It contains only active policies and active rules that apply to this event. Evaluate those items and nothing else.',
+    '',
     payloadBlock,
     '',
     snapshotBlock,
     '',
     catalogBlock,
     '',
-    policyBlock,
-    '',
     'Use grossProfitPercentage, subTotal, grandTotal, totalAppliedCost, sections, and customer from the event payload — do not recalculate margins or totals.',
     'Use the supplementary enrichment only for data missing from the payload (e.g. overdue invoice counts in enrichment.invoices, product stock_qty).',
     'Do not call list_estimates, list_invoices, get_estimate_details, get_invoice_details, get_product_details, get_customer_details, get_estimate_line_items, or invoke_agent to rediscover payload fields.',
     'Product stock may appear on payload line items (availableQty) or in enrichment.products[].stock_qty.',
     'Only call tools for a fact neither the payload nor snapshot provides.',
-    'Evaluate every catalog policy/rule that applies to this event. Do not add checks that are not in the catalog. Return the JSON output contract only.',
+    'Do not invent policies, rules, numeric defaults, or extra checks. If the live catalog is empty, return {"verdict":"pass","findings":[]}.',
+    'Evaluate every live-catalog item that applies to this event. Return the JSON output contract only.',
   ].join('\n');
+}
+
+function formatTimestamp(value) {
+  if (!value) return '';
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toISOString();
 }
 
 function formatCatalog(catalog, eventType) {
   const policies = Array.isArray(catalog?.policies) ? catalog.policies : [];
   const rules = Array.isArray(catalog?.rules) ? catalog.rules : [];
+  const header = 'LIVE GOVERNANCE CATALOG (loaded from Control Tower at the start of this run — the only legal set of checks):';
   if (policies.length === 0 && rules.length === 0) {
-    return 'Policy catalog:\n(none active — do not invent checks or default thresholds)';
+    return `${header}\n(none active — do not invent policies, rules, checks, or default thresholds. Return {"verdict":"pass","findings":[]})`;
   }
-  const policyLines = policies.map((row) => `- policy: ${row.name}`);
+
+  const policyLines = policies.map((row) => {
+    const updated = formatTimestamp(row.updatedAt || row.updated_at);
+    const stamp = updated ? ` updated ${updated}` : '';
+    const body = String(row.content || '').trim()
+      || '(no content — skip this policy; do not invent a rule for it)';
+    return `--- policy: ${row.name}${stamp} ---\n${body}`;
+  });
+
   const ruleLines = rules.map((row) => {
     const eventTypes = Array.isArray(row.eventTypes) && row.eventTypes.length
       ? row.eventTypes
       : (row.eventType ? [row.eventType] : []);
     const applies = ruleAppliesToEvent(row, eventType) ? ' [applies to this event]' : '';
     const eventsLabel = eventTypes.length > 0 ? eventTypes.join(', ') : 'any';
-    return `- rule: ${row.name} (${eventsLabel})${applies}`;
+    const updated = formatTimestamp(row.updatedAt || row.updated_at);
+    const stamp = updated ? ` updated ${updated}` : '';
+    const when = String(row.condition || '').trim()
+      || '(missing condition — skip this rule; do not invent one)';
+    const then = String(row.action || '').trim()
+      || '(missing action — skip this rule; do not invent one)';
+    return `--- rule: ${row.name} (${eventsLabel})${applies}${stamp} ---\nWhen: ${when}\nThen: ${then}`;
   });
-  return ['Active policy catalog (evaluate every item that applies):', ...policyLines, ...ruleLines].join('\n');
-}
 
-function formatRagChunks(chunks) {
-  if (!Array.isArray(chunks) || chunks.length === 0) {
-    return 'Policy/rule text:\n(none retrieved — evaluate only the catalog names above; do not apply default thresholds)';
-  }
-  const body = chunks.map((chunk, i) => {
-    const title = chunk.name || chunk.document_id || `chunk ${i + 1}`;
-    const kind = chunk.document_type || 'policy';
-    return `--- ${kind}: ${title} ---\n${chunk.text}`;
-  }).join('\n\n');
-  return `Policy/rule text:\n${body}`;
+  return [
+    header,
+    'Evaluate every item below that applies to this event_type. Do not add any other policy, rule, threshold, or check.',
+    '',
+    'Active policies:',
+    ...policyLines,
+    '',
+    'Active rules:',
+    ...ruleLines,
+  ].join('\n');
 }

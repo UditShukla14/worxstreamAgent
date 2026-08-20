@@ -2,7 +2,7 @@
  * Governance-only MCP tools.
  *
  * invoke_agent — master agents call child specialists in-process.
- * get_relevant_policies — optional mid-run retrieval (same RAG as the pipeline).
+ * get_relevant_policies — live Control Tower catalog (active policies/rules).
  *
  * Do not add these names to any child agent's extraTools.
  */
@@ -11,7 +11,7 @@ import { z } from 'zod';
 import { registerTool } from '../server.js';
 import { callAgent } from '../../agents/router.js';
 import { isChildAgentKey, getAgentKeys } from '../../agents/agentDefinitions.js';
-import { retrieveRelevantChunks } from '../../control/rag.js';
+import { loadPolicyCatalog } from '../../control/contextBuilder.js';
 import { getWorxstreamContext } from '../../config/index.js';
 
 export function registerGovernanceTools() {
@@ -75,29 +75,26 @@ export function registerGovernanceTools() {
   registerTool(
     'get_relevant_policies',
     {
-      title: 'Get Relevant Policies',
+      title: 'Get Live Governance Catalog',
       description:
-        'Retrieve the most relevant company policy/rule chunks for a short query. Use when the injected policy block is not enough.',
+        'Read the persistent Control Tower catalog for this company: active policies and active rules. The catalog stays loaded until a policy or rule is created, updated, or deleted. Pass event_type so only rules that apply to this event are returned. Do not invent policies from memory.',
       inputSchema: {
-        query: z.string().describe('Short retrieval query, e.g. "credit hold overdue invoices"'),
+        event_type: z.string().optional().describe('Webhook event type, e.g. estimate.created. When set, only matching active rules are returned.'),
       },
       capabilities: { domain: 'governance', action: 'get', safety: 'read' },
     },
-    async ({ query }) => {
+    async ({ event_type }) => {
       const { companyId } = getWorxstreamContext();
-      const chunks = await retrieveRelevantChunks(companyId, query, { topK: 5 });
+      const catalog = await loadPolicyCatalog(companyId, event_type);
       return {
         content: [{
           type: 'text',
           text: JSON.stringify({
             success: true,
-            count: chunks.length,
-            chunks: chunks.map((c) => ({
-              name: c.name,
-              type: c.document_type,
-              text: c.text,
-              score: c.score,
-            })),
+            source: catalog.loadedAt ? 'catalog_context' : 'live_catalog',
+            loadedAt: catalog.loadedAt || null,
+            policies: catalog.policies,
+            rules: catalog.rules,
           }, null, 2),
         }],
       };

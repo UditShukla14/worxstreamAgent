@@ -5,7 +5,8 @@ import { eventFromWorxstreamDelivery, eventFromWorxstreamWebhook } from '../../s
 import { isChildAgentKey } from '../../src/agents/agentDefinitions.js';
 import { isGovernanceAgentKey } from '../../src/control/governanceAgents.js';
 import { parseAgentVerdict, parseGovernanceFindings, runStatusFromSteps, stripJsonCodeFence } from '../../src/control/parseVerdict.js';
-import { entityLabelFromPayload, customerTypeFromPayload, buildRagQuery, buildMasterMessage } from '../../src/control/contextBuilder.js';
+import { entityLabelFromPayload, customerTypeFromPayload, preparedByFromPayload, buildMasterMessage } from '../../src/control/contextBuilder.js';
+import { GOVERNANCE_AGENT_DEFINITIONS } from '../../src/control/governanceAgents.js';
 import { eventTypesFromRule, parseRuleEventTypes, ruleAppliesToEvent } from '../../src/control/ruleEvents.js';
 import { tokenize, chunkText, scoreChunk } from '../../src/control/rag.js';
 
@@ -253,11 +254,22 @@ describe('context builder + rag scoring', () => {
     assert.equal(customerTypeFromPayload({}), '');
   });
 
-  it('builds a query that includes the agent and event', () => {
-    const q = buildRagQuery('estimate.created', 'aegis', { estimate_id: 1 });
-    assert.match(q, /aegis/);
-    assert.match(q, /estimate.created/);
-    assert.match(q, /policy/);
+  it('reads prepared by from string or nested person objects', () => {
+    assert.equal(preparedByFromPayload({
+      prepared_by: 'Robert Blanchard - robert@sunbeltroofs.com',
+    }), 'Robert Blanchard - robert@sunbeltroofs.com');
+    assert.equal(preparedByFromPayload({
+      preparedBy: { id: 800005749, name: 'Robert Blanchard', email: 'robert@sunbeltroofs.com' },
+    }), 'Robert Blanchard');
+    assert.equal(preparedByFromPayload({
+      preparedByDetails: { email: 'robert@sunbeltroofs.com' },
+    }), 'robert@sunbeltroofs.com');
+    assert.equal(preparedByFromPayload({
+      createdBy: { id: 10000000010, name: 'demo@yopmail.com', email: 'demo@yopmail.com' },
+    }), 'demo@yopmail.com');
+    assert.equal(preparedByFromPayload({ prepared_by: 800005749 }), '');
+    assert.equal(preparedByFromPayload({ createdBy: { id: 10000000010 } }), '');
+    assert.equal(preparedByFromPayload({}), '');
   });
 
   it('chunks long text and scores overlap', () => {
@@ -273,7 +285,6 @@ describe('context builder + rag scoring', () => {
       eventType: 'estimate.created',
       payload: { estimate_id: 1, grossProfitPercentage: '12.00', customNumber: '26-5107' },
       companyId: '1',
-      ragChunks: [],
       agentKey: 'aegis',
       snapshot: { ids: { estimate_id: 1, customer_id: 9 }, enrichment: {}, errors: [] },
     });
@@ -291,19 +302,20 @@ describe('context builder + rag scoring', () => {
       eventType: 'estimate.updated',
       payload: { estimate_id: 1 },
       companyId: '1',
-      ragChunks: [],
       agentKey: 'aegis',
       catalog: {
         policies: [],
         rules: [
-          { name: 'Low margin', eventTypes: ['estimate.created', 'estimate.updated'] },
-          { name: 'Invoice only', eventType: 'invoice.created' },
+          { name: 'Low margin', eventTypes: ['estimate.created', 'estimate.updated'], condition: 'Margin < 20%', action: 'Flag' },
+          { name: 'Invoice only', eventType: 'invoice.created', condition: 'Always', action: 'Skip' },
         ],
       },
     });
     assert.match(message, /Low margin \(estimate\.created, estimate\.updated\) \[applies to this event\]/);
     assert.match(message, /Invoice only \(invoice\.created\)/);
     assert.doesNotMatch(message, /Invoice only \(invoice\.created\) \[applies to this event\]/);
+    assert.match(message, /When: Margin < 20%/);
+    assert.match(message, /Then: Flag/);
   });
 
   it('does not tell Aegis to use default thresholds when the catalog is empty', () => {
@@ -311,12 +323,54 @@ describe('context builder + rag scoring', () => {
       eventType: 'invoice.created',
       payload: { invoice_id: 1, grossProfitPercentage: '15.00' },
       companyId: '1',
-      ragChunks: [],
       agentKey: 'aegis',
       catalog: { policies: [], rules: [] },
     });
-    assert.match(message, /none active — do not invent checks/);
+    assert.match(message, /none active — do not invent policies, rules, checks, or default thresholds/);
+    assert.match(message, /Return \{"verdict":"pass","findings":\[\]\}/);
     assert.doesNotMatch(message, /use default thresholds/);
+  });
+
+  it('injects live catalog content and ignores leftover RAG policy names', () => {
+    const message = buildMasterMessage({
+      eventType: 'invoice.created',
+      payload: { invoice_id: 1 },
+      companyId: '1',
+      ragChunks: [{
+        name: 'Gross Margin — Default Threshold',
+        document_type: 'policy',
+        text: 'Flag invoices below 20% even if no catalog item exists.',
+      }],
+      agentKey: 'aegis',
+      catalog: {
+        policies: [{
+          name: 'Credit Hold Policy',
+          content: 'Hold when the customer has 3 or more overdue invoices.',
+          updatedAt: '2026-08-20T10:00:00.000Z',
+        }],
+        rules: [],
+      },
+    });
+    assert.match(message, /LIVE GOVERNANCE CATALOG/);
+    assert.match(message, /CATALOG CHECK \(mandatory first step\)/);
+    assert.match(message, /--- policy: Credit Hold Policy updated 2026-08-20T10:00:00.000Z ---/);
+    assert.match(message, /Hold when the customer has 3 or more overdue invoices/);
+    assert.doesNotMatch(message, /Gross Margin — Default Threshold/);
+    assert.doesNotMatch(message, /Flag invoices below 20% even if no catalog item exists/);
+  });
+});
+
+describe('Aegis and Vigil system prompts', () => {
+  it('forbid inventing policies and require the live catalog', () => {
+    const aegis = GOVERNANCE_AGENT_DEFINITIONS.aegis.systemPrompt;
+    const vigil = GOVERNANCE_AGENT_DEFINITIONS.vigil.systemPrompt;
+    assert.match(aegis, /BEFORE YOU EVALUATE/);
+    assert.match(aegis, /LIVE GOVERNANCE CATALOG/);
+    assert.match(aegis, /You have NO built-in policies/);
+    assert.match(aegis, /Do NOT invent policies/);
+    assert.match(aegis, /no 20% margin/);
+    assert.match(vigil, /CURRENT catalog/);
+    assert.match(vigil, /Do not invent policies/);
   });
 });
 

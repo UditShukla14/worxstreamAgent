@@ -51,6 +51,17 @@ describe('agent tool domains', () => {
     }
   });
 
+  it('new web-api domains land in their agent buckets', () => {
+    assert.ok(bucketNames('sales_order').includes('list_sales_orders'));
+    assert.ok(bucketNames('inventory').includes('list_warehouses'));
+    assert.ok(bucketNames('deal').includes('list_deals'));
+    assert.ok(bucketNames('deal').includes('list_pipelines'));
+    assert.ok(bucketNames('crm').includes('global_search'));
+    assert.ok(bucketNames('payments').includes('list_received_payments'));
+    assert.ok(bucketNames('communications').includes('send_object_email'));
+    assert.ok(bucketNames('vendor').includes('list_vendor_accounts'));
+  });
+
   it('organization contacts belong to company, not the CRM contact bucket', () => {
     assert.ok(!bucketNames('contact').includes('list_organization_contacts'));
     assert.ok(bucketNames('company').includes('list_organization_contacts'));

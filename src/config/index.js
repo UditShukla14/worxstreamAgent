@@ -251,7 +251,7 @@ export function validateConfig() {
   }
   if (isProduction && !process.env.WORXSTREAM_WEBHOOK_SECRET) {
     console.warn(
-      '⚠️  WORXSTREAM_WEBHOOK_SECRET is required in production — POST /api/webhooks/worxstream will return 401 until it is set.',
+      '⚠️  WORXSTREAM_WEBHOOK_SECRET is unset — POST /api/webhooks/worxstream will accept unsigned deliveries.',
     );
   }
   if (isProduction && !config.server.corsOrigins) {

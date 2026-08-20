@@ -66,6 +66,54 @@ export function registerVendorTools() {
   );
 
   registerTool(
+    'list_vendor_accounts',
+    {
+      title: 'List Vendor Accounts',
+      description: 'List vendor accounts (Motili and similar supplier accounts).',
+      inputSchema: {
+        search: z.string().optional().describe('Search account name or number'),
+        page: z.number().optional().describe('Page number (default: 1)'),
+        take: z.number().optional().describe('Results per page (default: 25)'),
+      },
+    },
+    async ({ search, page = 1, take = 25 } = {}) => {
+      const { companyId, userId } = getWorxstreamContext();
+      const data = { companyId, userId, page: page ?? 1, take: take ?? 25 };
+      if (search?.trim()) data.search = search.trim();
+      const result = await callWorxstreamAPI({
+        method: 'GET',
+        endpoint: '/vendor-accounts/list',
+        data,
+      });
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+      };
+    }
+  );
+
+  registerTool(
+    'get_vendor_accounts_dropdown',
+    {
+      title: 'Get Vendor Accounts Dropdown',
+      description: 'Active vendor accounts dropdown.',
+      inputSchema: {
+        account_type: z.string().optional().describe('Account type filter (default: motili)'),
+      },
+    },
+    async ({ account_type = 'motili' } = {}) => {
+      const { companyId, userId } = getWorxstreamContext();
+      const result = await callWorxstreamAPI({
+        method: 'GET',
+        endpoint: '/vendor-accounts/dropdown',
+        data: { companyId, userId, is_active: 1, account_type: account_type || 'motili' },
+      });
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+      };
+    }
+  );
+
+  registerTool(
     'update_vendor',
     {
       title: 'Update Vendor',

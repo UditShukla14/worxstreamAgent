@@ -1,17 +1,11 @@
 /**
- * Company-scoped policy/rule retrieval for governance agents.
- *
- * v1 uses lexical overlap (not a hosted vector DB). Chunks are re-indexed
- * whenever a policy or rule is created/updated/deleted. Swap the scorer for
- * embeddings later without changing retrieveRelevantChunks's callers.
+ * Optional lexical index of policy/rule text. Aegis evaluation does not
+ * retrieve these chunks — it uses the persistent catalog context. Indexing
+ * still runs on save so leftover inactive text can be dropped.
  */
 
 import GovernanceChunk from '../models/GovernanceChunk.js';
-import GovernancePolicy from '../models/GovernancePolicy.js';
-import GovernanceRule from '../models/GovernanceRule.js';
-import { ruleAppliesToEvent } from './ruleEvents.js';
 
-const DEFAULT_TOP_K = 5;
 const MAX_CHUNK_CHARS = 900;
 
 const STOP = new Set([
@@ -113,63 +107,4 @@ export async function syncGovernanceDocumentChunks({
     return 0;
   }
   return reindexDocument({ companyId, documentId, documentType, name, content });
-}
-
-async function activeGovernanceDocumentIds(companyId, { eventType } = {}) {
-  const company_id = String(companyId);
-  const [policies, rules] = await Promise.all([
-    GovernancePolicy.find({ company_id, status: 'active' }).select('_id').lean(),
-    GovernanceRule.find({ company_id, active: true }).select('_id event_type event_types').lean(),
-  ]);
-  const matchingRules = eventType
-    ? (rules || []).filter((rule) => ruleAppliesToEvent(rule, eventType))
-    : (rules || []);
-  return [
-    ...(policies || []).map((row) => String(row._id)),
-    ...matchingRules.map((row) => String(row._id)),
-  ];
-}
-
-function chunksForActiveDocuments(companyId, documentIds) {
-  return GovernanceChunk.find({
-    company_id: String(companyId),
-    document_id: { $in: documentIds },
-  });
-}
-
-/**
- * @param {string} companyId
- * @param {string} query
- * @param {{ topK?: number, eventType?: string }} [opts]
- */
-export async function retrieveRelevantChunks(companyId, query, opts = {}) {
-  const topK = Number.isFinite(opts.topK) ? opts.topK : DEFAULT_TOP_K;
-  const queryTokens = tokenize(query);
-  const documentIds = await activeGovernanceDocumentIds(companyId, { eventType: opts.eventType });
-  if (documentIds.length === 0) return [];
-  const chunks = await chunksForActiveDocuments(companyId, documentIds).lean();
-
-  const scored = chunks.map((chunk) => {
-    let s = scoreChunk(queryTokens, `${chunk.name} ${chunk.text}`);
-    if (opts.eventType && String(chunk.text).includes(opts.eventType)) {
-      s += 0.15;
-    }
-    return { ...chunk, score: s };
-  });
-
-  scored.sort((a, b) => b.score - a.score);
-  return scored.filter((c) => c.score > 0).slice(0, topK);
-}
-
-/**
- * Load indexed chunks for active policies and active rules only.
- * Pass eventType so rules that do not match this event are omitted.
- */
-export async function retrieveAllGovernanceChunks(companyId, { maxChunks = 40, eventType } = {}) {
-  const documentIds = await activeGovernanceDocumentIds(companyId, { eventType });
-  if (documentIds.length === 0) return [];
-  return chunksForActiveDocuments(companyId, documentIds)
-    .sort({ document_type: 1, name: 1 })
-    .limit(maxChunks)
-    .lean();
 }

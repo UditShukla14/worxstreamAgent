@@ -6,6 +6,7 @@
 import GovernancePolicy from '../models/GovernancePolicy.js';
 import GovernanceRule from '../models/GovernanceRule.js';
 import { syncGovernanceDocumentChunks } from './rag.js';
+import { refreshCatalogContext } from './catalogContext.js';
 import { SEED_POLICIES, SEED_RULES } from './seedData.js';
 import { ruleChunkContent } from './ruleEvents.js';
 
@@ -88,5 +89,6 @@ export async function seedGovernanceForCompany(companyId) {
     });
   }
 
+  await refreshCatalogContext(company_id);
   return result;
 }

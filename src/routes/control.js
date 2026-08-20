@@ -20,6 +20,7 @@ import {
   syncGovernanceDocumentChunks,
   stopPipelineRun,
   restartPipelineRun,
+  replayGovernanceDeliveries,
   runAlertSweep,
   deleteAlertsPermanently,
   resolveAlertsById,
@@ -27,7 +28,7 @@ import {
   LEGACY_RESOLVE_REASON,
 } from '../control/index.js';
 import { callWorxstreamAPI } from '../services/httpClient.js';
-import { customerTypeFromPayload, entityLabelFromPayload } from '../control/contextBuilder.js';
+import { customerTypeFromPayload, entityLabelFromPayload, preparedByFromPayload } from '../control/contextBuilder.js';
 import { eventTypesFromRule, parseRuleEventTypes, ruleChunkContent } from '../control/ruleEvents.js';
 import { requireControlAuth } from '../middleware/requireControlAuth.js';
 import { agentStatFromRuns } from '../control/dashboardStats.js';
@@ -107,6 +108,7 @@ function alertToApi(doc, extras = {}) {
     triggeredBy: doc.triggered_by,
     relatedEntity: doc.related_entity,
     customerType: extras.customerType || doc.customer_type || '',
+    preparedBy: extras.preparedBy || doc.prepared_by || '',
     eventType: doc.event_type,
     policyViolated: doc.policy_violated,
     suggestedAction: doc.suggested_action,
@@ -121,10 +123,10 @@ function alertToApi(doc, extras = {}) {
   };
 }
 
-async function customerTypeByRunId(companyId, rows) {
+async function alertPayloadExtrasByRunId(companyId, rows) {
   const runIds = [...new Set(
     rows
-      .filter((row) => !row.customer_type && row.run_id)
+      .filter((row) => (!row.customer_type || !row.prepared_by) && row.run_id)
       .map((row) => String(row.run_id)),
   )];
   if (runIds.length === 0) return new Map();
@@ -134,10 +136,20 @@ async function customerTypeByRunId(companyId, rows) {
   }).select('run_id payload').lean();
   const mapped = new Map();
   for (const run of runs) {
-    const label = customerTypeFromPayload(run.payload);
-    if (label) mapped.set(String(run.run_id), label);
+    mapped.set(String(run.run_id), {
+      customerType: customerTypeFromPayload(run.payload),
+      preparedBy: preparedByFromPayload(run.payload),
+    });
   }
   return mapped;
+}
+
+function extrasForAlert(row, extrasByRun) {
+  const fromRun = extrasByRun.get(String(row.run_id)) || {};
+  return {
+    customerType: row.customer_type || fromRun.customerType || '',
+    preparedBy: row.prepared_by || fromRun.preparedBy || '',
+  };
 }
 
 function activeRunQuery(filter) {
@@ -622,6 +634,26 @@ router.post('/deliveries/delete', async (req, res, next) => {
   }
 });
 
+router.post('/deliveries/redeliver', async (req, res, next) => {
+  try {
+    const rows = Array.isArray(req.body?.deliveries) ? req.body.deliveries : [];
+    if (rows.length === 0) {
+      return res.status(400).json({ success: false, error: 'deliveries is required' });
+    }
+    const result = await replayGovernanceDeliveries(rows, {
+      companyId: req.companyId,
+      userId: req.userId,
+    });
+    if (result.started.length === 0) {
+      const first = result.errors[0]?.error || 'Pipeline could not be started.';
+      return res.status(400).json({ success: false, error: first, data: result });
+    }
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ── Alerts ───────────────────────────────────────────────────────────
 
 router.get('/alerts', async (req, res, next) => {
@@ -641,12 +673,10 @@ router.get('/alerts', async (req, res, next) => {
       .sort({ timestamp: -1 })
       .skip(sliced.skip)
       .limit(perPage);
-    const typeByRun = await customerTypeByRunId(req.companyId, rows);
+    const extrasByRun = await alertPayloadExtrasByRunId(req.companyId, rows);
     res.json({
       success: true,
-      data: rows.map((row) => alertToApi(row, {
-        customerType: row.customer_type || typeByRun.get(String(row.run_id)) || '',
-      })),
+      data: rows.map((row) => alertToApi(row, extrasForAlert(row, extrasByRun))),
       pagination: sliced.pagination,
     });
   } catch (error) {
@@ -764,12 +794,8 @@ router.patch('/alerts/:alertId', async (req, res, next) => {
       { new: true },
     );
     if (!doc) return res.status(404).json({ success: false, error: 'Alert not found' });
-    let customerType = doc.customer_type || '';
-    if (!customerType && doc.run_id) {
-      const typeByRun = await customerTypeByRunId(req.companyId, [doc]);
-      customerType = typeByRun.get(String(doc.run_id)) || '';
-    }
-    res.json({ success: true, data: alertToApi(doc, { customerType }) });
+    const extrasByRun = await alertPayloadExtrasByRunId(req.companyId, [doc]);
+    res.json({ success: true, data: alertToApi(doc, extrasForAlert(doc, extrasByRun)) });
   } catch (error) {
     next(error);
   }

@@ -27,6 +27,12 @@ import { registerPriceComparisonTools } from './priceComparison.js';
 import { registerReportTools } from './reports.js';
 import { registerLookupTools } from './lookup.js';
 import { registerGovernanceTools } from './invokeAgent.js';
+import { registerSalesOrderTools } from './salesOrders.js';
+import { registerInventoryTools } from './inventory.js';
+import { registerDealTools } from './deals.js';
+import { registerCrmTools } from './crm.js';
+import { registerPaymentTools } from './payments.js';
+import { registerCommunicationsTools } from './communications.js';
 
 /**
  * Register all tools
@@ -108,6 +114,24 @@ export function registerAllTools() {
 
   registerGovernanceTools();
   console.log('  ✓ Governance tools registered (invoke_agent, get_relevant_policies)');
+
+  registerSalesOrderTools();
+  console.log('  ✓ Sales order tools registered');
+
+  registerInventoryTools();
+  console.log('  ✓ Inventory tools registered');
+
+  registerDealTools();
+  console.log('  ✓ Deal tools registered');
+
+  registerCrmTools();
+  console.log('  ✓ CRM tools registered');
+
+  registerPaymentTools();
+  console.log('  ✓ Payment tools registered');
+
+  registerCommunicationsTools();
+  console.log('  ✓ Communications tools registered');
 
   console.log('✅ All MCP tools registered');
 }

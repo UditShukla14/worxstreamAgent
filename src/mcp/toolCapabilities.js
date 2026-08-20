@@ -51,9 +51,33 @@ const DOMAIN_RULES = [
   ['organization_contact', 'company'],
   ['credit_memo', 'credit_memo'],
   ['purchase_order', 'purchase_order'],
+  ['sales_order', 'sales_order'],
   ['system_finder', 'system_finder'],
   ['price_comparison', 'price_comparison'],
   ['compare_stock_prices', 'price_comparison'],
+  // Inventory (inventory.js): warehouses, stock, serials, transfers — before generic product
+  ['packing_list', 'inventory'],
+  ['sku_ledger', 'inventory'],
+  ['serial_number', 'inventory'],
+  ['internal_transfer', 'inventory'],
+  ['warehouse', 'inventory'],
+  ['inventory', 'inventory'],
+  // CRM deals / pipelines (deals.js) — pipeline_stage before pipeline; reports *_report stays above
+  ['pipeline_stage', 'deal'],
+  ['pipeline', 'deal'],
+  ['deal', 'deal'],
+  // CRM modules (crm.js)
+  ['global_search', 'crm'],
+  ['calendar_event', 'crm'],
+  ['event_board', 'crm'],
+  ['diar', 'crm'],
+  ['activit', 'crm'],
+  ['list_calls', 'crm'],
+  ['note', 'crm'],
+  // Communications (communications.js)
+  ['object_email', 'communications'],
+  ['email_outbox', 'communications'],
+  ['notification', 'communications'],
   // HR (hr.js): departments, teams, team members
   ['department', 'hr'],
   ['team', 'hr'],
@@ -81,6 +105,9 @@ const DOMAIN_RULES = [
   ['branch', 'company'],
   ['signature', 'company'],
   ['payment_instruction', 'company'],
+  ['received_payment', 'payments'],
+  ['payment_method', 'payments'],
+  ['deposit', 'payments'],
   ['custom_number_range', 'company'],
   ['subscription', 'company'],
   ['database', 'company'],
@@ -177,6 +204,10 @@ export function inferCapabilitiesFromToolName(toolName) {
   if (caps.domain === 'credit_memo') idFields.push('credit_memo_id', 'id');
   if (caps.domain === 'purchase_order') idFields.push('purchase_order_id', 'id');
   if (caps.domain === 'bill') idFields.push('bill_id', 'id');
+  if (caps.domain === 'sales_order') idFields.push('sales_order_id', 'id');
+  if (caps.domain === 'deal') idFields.push('deal_id', 'id');
+  if (caps.domain === 'inventory') idFields.push('warehouse_id', 'product_id', 'id');
+  if (caps.domain === 'payments') idFields.push('received_payment_id', 'id');
   if (idFields.length > 0) caps.idFields = idFields;
  
   return caps;

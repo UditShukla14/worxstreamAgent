@@ -4,7 +4,7 @@
  * POST /api/webhooks/worxstream
  * Verifies shared secret or HMAC, normalizes the catalog payload, dedupes
  * by event_id, responds 200, then runs the pipeline asynchronously.
- * Production rejects requests when WORXSTREAM_WEBHOOK_SECRET is unset.
+ * Signing secret is optional; verification runs only when WORXSTREAM_WEBHOOK_SECRET is set.
  */
 
 import { Router } from 'express';

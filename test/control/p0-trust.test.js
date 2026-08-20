@@ -9,14 +9,8 @@ describe('verifyWebhookAuth', () => {
   const secret = 'tower-secret';
   const body = Buffer.from('{"event":"estimate_updated"}');
 
-  it('fails closed in production when the secret is unset', () => {
-    const result = verifyWebhookAuth({ secret: '', isProduction: true, secretHeader: 'x' });
-    assert.equal(result.ok, false);
-    assert.equal(result.status, 401);
-  });
-
-  it('allows unsigned traffic in non-production when the secret is unset', () => {
-    const result = verifyWebhookAuth({ secret: '', isProduction: false });
+  it('allows unsigned traffic when the secret is unset', () => {
+    const result = verifyWebhookAuth({ secret: '', secretHeader: 'x' });
     assert.equal(result.ok, true);
     assert.equal(result.mode, 'open');
   });
@@ -24,7 +18,6 @@ describe('verifyWebhookAuth', () => {
   it('accepts the shared-secret header with a constant-time compare', () => {
     const result = verifyWebhookAuth({
       secret,
-      isProduction: true,
       secretHeader: secret,
     });
     assert.equal(result.ok, true);
@@ -34,7 +27,6 @@ describe('verifyWebhookAuth', () => {
   it('rejects a wrong shared secret', () => {
     const result = verifyWebhookAuth({
       secret,
-      isProduction: true,
       secretHeader: 'nope',
     });
     assert.equal(result.ok, false);
@@ -44,7 +36,6 @@ describe('verifyWebhookAuth', () => {
     const signature = `sha256=${hmacSha256Hex(secret, body)}`;
     const result = verifyWebhookAuth({
       secret,
-      isProduction: true,
       signatureHeader: signature,
       rawBody: body,
     });
@@ -55,7 +46,6 @@ describe('verifyWebhookAuth', () => {
   it('rejects a tampered HMAC', () => {
     const result = verifyWebhookAuth({
       secret,
-      isProduction: true,
       signatureHeader: `sha256=${hmacSha256Hex(secret, body)}ff`,
       rawBody: body,
     });
