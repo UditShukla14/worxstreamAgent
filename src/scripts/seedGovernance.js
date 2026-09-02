@@ -4,6 +4,10 @@
  * Usage (from agent/):
  *   node src/scripts/seedGovernance.js
  *   SEED_COMPANY_ID=123 node src/scripts/seedGovernance.js
+ *
+ * By default, rows that already exist for a seed_key are skipped (Control Tower
+ * is source of truth). To reset seeded rows to seedData.js defaults:
+ *   SEED_FORCE_UPDATE=1 node src/scripts/seedGovernance.js
  */
 
 import mongoose from 'mongoose';
@@ -44,14 +48,18 @@ async function main() {
   }
 
   const companyId = resolveCompanyId(conversationIds.map(String));
-  console.log(`🌱 Seeding ${SEED_POLICIES.length} policies and ${SEED_RULES.length} rules for company_id=${companyId}`);
-
-  const result = await seedGovernanceForCompany(companyId);
+  const forceUpdate = process.env.SEED_FORCE_UPDATE === '1';
   console.log(
-    `✅ Policies: ${result.policies.inserted} inserted, ${result.policies.updated} updated`,
+    `🌱 Seeding ${SEED_POLICIES.length} policies and ${SEED_RULES.length} rules for company_id=${companyId}`
+    + (forceUpdate ? ' (force update enabled)' : ' (insert-only — existing seed rows skipped)'),
+  );
+
+  const result = await seedGovernanceForCompany(companyId, { forceUpdate });
+  console.log(
+    `✅ Policies: ${result.policies.inserted} inserted, ${result.policies.updated} updated, ${result.policies.skipped} skipped`,
   );
   console.log(
-    `✅ Rules: ${result.rules.inserted} inserted, ${result.rules.updated} updated`,
+    `✅ Rules: ${result.rules.inserted} inserted, ${result.rules.updated} updated, ${result.rules.skipped} skipped`,
   );
   console.log('✅ RAG chunks re-indexed');
 

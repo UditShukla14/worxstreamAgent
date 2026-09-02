@@ -32,6 +32,8 @@ import { customerTypeFromPayload, entityLabelFromPayload, preparedByFromPayload 
 import { eventTypesFromRule, parseRuleEventTypes, ruleChunkContent } from '../control/ruleEvents.js';
 import { requireControlAuth } from '../middleware/requireControlAuth.js';
 import { agentStatFromRuns } from '../control/dashboardStats.js';
+import { createReportRouter } from '../control/reportRoutes.js';
+import { SCRIBE_AGENT_DEFINITION, SCRIBE_AGENT_KEY } from '../control/reportingAgents.js';
 
 const router = Router();
 
@@ -281,6 +283,11 @@ router.get('/agents', (_req, res) => {
     name: getGovernanceAgentName(key),
     description: def.description,
   }));
+  agents.push({
+    key: SCRIBE_AGENT_KEY,
+    name: SCRIBE_AGENT_DEFINITION.name.replace(/_agent$/, '').replace(/^./, (c) => c.toUpperCase()),
+    description: SCRIBE_AGENT_DEFINITION.description,
+  });
   res.json({ success: true, data: agents });
 });
 
@@ -869,5 +876,7 @@ router.get('/dashboard', async (req, res, next) => {
     next(error);
   }
 });
+
+router.use(createReportRouter());
 
 export default router;

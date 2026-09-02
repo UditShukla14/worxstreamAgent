@@ -15,7 +15,20 @@ const ruleSchema = new mongoose.Schema({
 });
 
 ruleSchema.index({ company_id: 1, event_type: 1, active: 1 });
-ruleSchema.index({ company_id: 1, seed_key: 1 }, { unique: true, sparse: true });
+ruleSchema.index(
+  { company_id: 1, seed_key: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { seed_key: { $type: 'string' } },
+  },
+);
+
+ruleSchema.pre('save', function stripNullSeedKey() {
+  if (this.seed_key == null || this.seed_key === '') {
+    this.seed_key = undefined;
+    this.markModified('seed_key');
+  }
+});
 
 const GovernanceRule = mongoose.model('GovernanceRule', ruleSchema);
 

@@ -12,7 +12,20 @@ const policySchema = new mongoose.Schema({
 });
 
 policySchema.index({ company_id: 1, updated_at: -1 });
-policySchema.index({ company_id: 1, seed_key: 1 }, { unique: true, sparse: true });
+policySchema.index(
+  { company_id: 1, seed_key: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { seed_key: { $type: 'string' } },
+  },
+);
+
+policySchema.pre('save', function stripNullSeedKey() {
+  if (this.seed_key == null || this.seed_key === '') {
+    this.seed_key = undefined;
+    this.markModified('seed_key');
+  }
+});
 
 const GovernancePolicy = mongoose.model('GovernancePolicy', policySchema);
 

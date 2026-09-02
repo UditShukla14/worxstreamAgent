@@ -68,6 +68,8 @@ router.get('/', (req, res) => {
         runs: 'GET /api/control/runs',
         alerts: 'GET /api/control/alerts',
         dashboard: 'GET /api/control/dashboard',
+        reportDefinitions: 'GET|POST /api/control/report-definitions',
+        reportRuns: 'GET /api/control/report-runs',
       },
       webhooks: {
         worxstream: 'POST /api/webhooks/worxstream',

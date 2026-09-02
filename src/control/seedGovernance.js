@@ -1,6 +1,8 @@
 /**
  * Seed governance policies and rules for a company, then re-index RAG chunks.
- * Idempotent: upserts on (company_id, seed_key).
+ * Insert-only by default: existing rows matched by (company_id, seed_key) are left
+ * alone so Control Tower edits are not overwritten. Set SEED_FORCE_UPDATE=1 to
+ * reset seeded rows to seedData.js defaults (dev only).
  */
 
 import GovernancePolicy from '../models/GovernancePolicy.js';
@@ -12,19 +14,25 @@ import { ruleChunkContent } from './ruleEvents.js';
 
 /**
  * @param {string} companyId
- * @returns {Promise<{ policies: { inserted: number, updated: number }, rules: { inserted: number, updated: number } }>}
+ * @param {{ forceUpdate?: boolean }} [options]
+ * @returns {Promise<{ policies: { inserted: number, updated: number, skipped: number }, rules: { inserted: number, updated: number, skipped: number } }>}
  */
-export async function seedGovernanceForCompany(companyId) {
+export async function seedGovernanceForCompany(companyId, options = {}) {
+  const forceUpdate = options.forceUpdate ?? process.env.SEED_FORCE_UPDATE === '1';
   const company_id = String(companyId);
   const result = {
-    policies: { inserted: 0, updated: 0 },
-    rules: { inserted: 0, updated: 0 },
+    policies: { inserted: 0, updated: 0, skipped: 0 },
+    rules: { inserted: 0, updated: 0, skipped: 0 },
   };
 
   for (const seed of SEED_POLICIES) {
     const existing = await GovernancePolicy.findOne({ company_id, seed_key: seed.seed_key });
     let doc;
     if (existing) {
+      if (!forceUpdate) {
+        result.policies.skipped += 1;
+        continue;
+      }
       existing.name = seed.name;
       existing.type = seed.type;
       existing.status = seed.status;
@@ -56,6 +64,10 @@ export async function seedGovernanceForCompany(companyId) {
     const existing = await GovernanceRule.findOne({ company_id, seed_key: seed.seed_key });
     let doc;
     if (existing) {
+      if (!forceUpdate) {
+        result.rules.skipped += 1;
+        continue;
+      }
       existing.name = seed.name;
       existing.event_type = seed.event_type;
       existing.event_types = [seed.event_type];

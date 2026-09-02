@@ -4,6 +4,7 @@
 
 import mongoose from 'mongoose';
 import { config } from '../config/index.js';
+import { ensureGovernanceSeedKeyIndexes } from './governanceIndexes.js';
 
 let isConnected = false;
 
@@ -31,6 +32,8 @@ export async function connectDB() {
 
     isConnected = true;
     console.log('✅ MongoDB connected successfully');
+
+    await ensureGovernanceSeedKeyIndexes();
     
     // Handle connection events
     mongoose.connection.on('error', (err) => {
