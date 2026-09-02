@@ -3,12 +3,11 @@
  */
 
 import { Router } from 'express';
-import { extractApiTokenFromRequest } from '../request/requestContext.js';
 import ReportDefinition from '../models/ReportDefinition.js';
 import ReportRun from '../models/ReportRun.js';
 import {
   computeNextRunAt,
-  executeReportDefinition,
+  queueReportDefinition,
 } from './reportEngine.js';
 
 function activeQuery(filter) {
@@ -23,6 +22,7 @@ function activeQuery(filter) {
 function definitionToApi(doc) {
   return {
     id: String(doc._id),
+    companyId: String(doc.company_id),
     name: doc.name,
     description: doc.description || '',
     entityTypes: doc.entity_types || [],
@@ -37,9 +37,24 @@ function definitionToApi(doc) {
   };
 }
 
+function progressToApi(doc) {
+  const progress = doc.progress || { phase: 'starting', steps: [] };
+  return {
+    phase: progress.phase || 'starting',
+    steps: (progress.steps || []).map((step) => ({
+      key: step.key,
+      label: step.label,
+      status: step.status,
+      detail: step.detail || '',
+      at: step.at ? new Date(step.at).toISOString() : new Date().toISOString(),
+    })),
+  };
+}
+
 function runToApi(doc) {
   return {
     id: String(doc._id),
+    companyId: String(doc.company_id),
     definitionId: String(doc.definition_id),
     definitionName: doc.definition_name || '',
     periodStart: new Date(doc.period_start).toISOString(),
@@ -49,6 +64,8 @@ function runToApi(doc) {
     rowCount: Array.isArray(doc.rows) ? doc.rows.length : 0,
     errorMessage: doc.error_message || '',
     generatedAt: (doc.generated_at || doc.created_at || new Date()).toISOString(),
+    trigger: doc.trigger === 'scheduled' ? 'scheduled' : 'manual',
+    progress: progressToApi(doc),
   };
 }
 
@@ -210,12 +227,12 @@ export function createReportRouter() {
     try {
       const doc = await ReportDefinition.findOne(activeQuery({ _id: req.params.id, company_id: req.companyId }));
       if (!doc) return res.status(404).json({ success: false, error: 'Report schedule not found' });
-      const run = await executeReportDefinition(doc, {
-        trigger: 'manual',
-        apiToken: extractApiTokenFromRequest(req),
+      const run = await queueReportDefinition(doc, {
+        companyId: req.companyId,
         userId: req.userId,
+        trigger: 'manual',
       });
-      res.status(201).json({ success: true, data: runDetailToApi(run) });
+      res.status(202).json({ success: true, data: runDetailToApi(run) });
     } catch (error) {
       next(error);
     }
@@ -223,9 +240,17 @@ export function createReportRouter() {
 
   router.get('/report-runs', async (req, res, next) => {
     try {
-      const base = { company_id: req.companyId };
+      const base = { company_id: String(req.companyId) };
       if (req.query.definition_id) {
-        base.definition_id = req.query.definition_id;
+        const definitionId = String(req.query.definition_id);
+        const owned = await ReportDefinition.findOne(activeQuery({
+          _id: definitionId,
+          company_id: req.companyId,
+        }));
+        if (!owned) {
+          return res.status(404).json({ success: false, error: 'Report schedule not found' });
+        }
+        base.definition_id = owned._id;
       }
       const filter = activeQuery(base);
       const { page, perPage } = parseListPage(req);
@@ -243,9 +268,53 @@ export function createReportRouter() {
 
   router.get('/report-runs/:id', async (req, res, next) => {
     try {
-      const doc = await ReportRun.findOne(activeQuery({ _id: req.params.id, company_id: req.companyId }));
+      const doc = await ReportRun.findOne(activeQuery({
+        _id: req.params.id,
+        company_id: String(req.companyId),
+      }));
       if (!doc) return res.status(404).json({ success: false, error: 'Report not found' });
       res.json({ success: true, data: runDetailToApi(doc) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.delete('/report-runs/:id', async (req, res, next) => {
+    try {
+      const doc = await ReportRun.findOne({
+        _id: req.params.id,
+        company_id: String(req.companyId),
+      });
+      if (!doc) return res.status(404).json({ success: false, error: 'Report not found' });
+      doc.deleted_at = new Date();
+      await doc.save();
+      res.json({ success: true, data: { id: String(doc._id) } });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/report-runs/delete', async (req, res, next) => {
+    try {
+      const raw = req.body?.runIds ?? req.body?.run_ids ?? req.body?.ids;
+      const runIds = Array.isArray(raw)
+        ? raw.map((item) => String(item).trim()).filter(Boolean)
+        : [];
+      if (runIds.length === 0) {
+        return res.status(400).json({ success: false, error: 'runIds is required' });
+      }
+      const result = await ReportRun.updateMany(
+        {
+          _id: { $in: runIds },
+          company_id: String(req.companyId),
+          $or: [{ deleted_at: { $exists: false } }, { deleted_at: null }],
+        },
+        { $set: { deleted_at: new Date() } },
+      );
+      res.json({
+        success: true,
+        data: { deleted: result.modifiedCount ?? 0 },
+      });
     } catch (error) {
       next(error);
     }

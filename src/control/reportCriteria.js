@@ -25,6 +25,19 @@ export function readField(record, fieldName) {
   return undefined;
 }
 
+/** @param {unknown} value */
+export function isEmptyFieldValue(value) {
+  return isEmpty(value);
+}
+
+/** True when the list row cannot confirm criteria fields (absent or empty) — fetch detail before flagging. */
+export function needsCriteriaDetailEnrichment(record, criteriaFields = []) {
+  const fields = criteriaFields.length > 0
+    ? criteriaFields
+    : ['trackingNo', 'trackingUrl', 'trackingCompany'];
+  return fields.some((field) => isEmpty(readField(record, field)));
+}
+
 /**
  * @param {Record<string, unknown>} record
  * @param {'missing_fields' | 'negative_profit'} criteriaType

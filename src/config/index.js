@@ -191,12 +191,8 @@ export const config = {
 };
 
 /**
- * Worxstream API credentials, resolved per field with this precedence:
- *   1. Per-request context (AsyncLocalStorage, set by requestContextMiddleware
- *      from request body/headers) — safe under concurrent multi-tenant requests.
- *   2. In-memory session (POST /api/auth/session) — single global session per process.
- *   3. .env fallbacks (DEFAULT_COMPANY_ID / DEFAULT_USER_ID / WORXSTREAM_API_TOKEN)
- *      — webhooks, control, and scripts only; agent routes must not rely on these.
+ * Worxstream API credentials. When .env has token + company + user, those are always used.
+ * Otherwise: per-request ALS, session, then optional env fallbacks.
  */
 function resolveWorxstreamCredentials({ allowEnvFallback = true } = {}) {
   const ctx = buildWorxstreamContext({}, { allowEnvFallback });
