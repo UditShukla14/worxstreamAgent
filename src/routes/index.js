@@ -12,6 +12,7 @@ import rexRoutes from '../nova/routes/rex.js';
 import webhookRoutes from '../governance/routes/webhooks.js';
 import controlRoutes from '../governance/routes/control.js';
 import mcpRoutes from './mcp.js';
+import adminAnalyticsRoutes from '../analytics/routes/admin.js';
 
 const router = Router();
 
@@ -25,6 +26,7 @@ router.use('/api/rex', rexRoutes);
 router.use('/api/price-comparison', priceComparisonRoutes);
 router.use('/api/webhooks', webhookRoutes);
 router.use('/api/control', controlRoutes);
+router.use('/api/admin', adminAnalyticsRoutes);
 router.use('/mcp', mcpRoutes); // MCP Streamable HTTP endpoint (external MCP clients)
 
 // Rex UI route - handled by frontend routing
@@ -70,6 +72,12 @@ router.get('/', (req, res) => {
         dashboard: 'GET /api/control/dashboard',
         reportDefinitions: 'GET|POST /api/control/report-definitions',
         reportRuns: 'GET /api/control/report-runs',
+      },
+      admin: {
+        overview: 'GET /api/admin/analytics/overview',
+        companies: 'GET /api/admin/analytics/companies',
+        company: 'GET /api/admin/analytics/companies/:companyId',
+        user: 'GET /api/admin/analytics/companies/:companyId/users/:userId',
       },
       webhooks: {
         worxstream: 'POST /api/webhooks/worxstream',

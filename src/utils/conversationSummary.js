@@ -2,11 +2,9 @@
  * Rolling LLM-compressed conversation summary stored on Mongo Conversation docs.
  */
 
-import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config/index.js';
+import { createMessage } from '../llm/anthropicClient.js';
 import { normalizeStoredMessages, messageContentToString } from './conversationHistory.js';
-
-const client = new Anthropic({ apiKey: config.anthropic.apiKey });
 
 /**
  * @param {object} params
@@ -14,6 +12,7 @@ const client = new Anthropic({ apiKey: config.anthropic.apiKey });
  * @param {string} [params.existingSummary]
  * @param {number} [params.summaryThroughTurn]
  * @param {number} [params.everyN]
+ * @param {object} [params.usageMeta]
  * @returns {Promise<{ summary: string, throughTurn: number }|null>}
  */
 export async function maybeRefreshSummary({
@@ -21,6 +20,7 @@ export async function maybeRefreshSummary({
   existingSummary = '',
   summaryThroughTurn = 0,
   everyN = config.coworker?.summaryEveryN ?? 10,
+  usageMeta = {},
 }) {
   const normalized = normalizeStoredMessages(priorMessages);
   const total = normalized.length;
@@ -34,7 +34,7 @@ export async function maybeRefreshSummary({
     .map((m) => `${m.role}: ${messageContentToString(m.content).slice(0, 800)}`)
     .join('\n');
 
-  const response = await client.messages.create({
+  const response = await createMessage({
     model: config.anthropic.model,
     max_tokens: 512,
     system: 'Compress this Worxstream assistant conversation into at most 400 tokens. Preserve: numeric IDs (especially 300-series customer_id), open tasks, failures, and user goals. Use bullet points.',
@@ -46,7 +46,7 @@ export async function maybeRefreshSummary({
           : `Transcript:\n${transcript}`,
       },
     ],
-  });
+  }, { ...usageMeta, phase: 'summary' });
 
   const summary = response.content?.find((b) => b.type === 'text')?.text?.trim() || '';
   if (!summary) return null;

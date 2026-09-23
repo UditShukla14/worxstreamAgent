@@ -5,8 +5,9 @@
  * no write-confirm, no list pagination policies, no coworker working-memory notes.
  */
 
-import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../../config/index.js';
+import { createMessage } from '../../llm/anthropicClient.js';
+import { usageMetaFromContext } from '../../analytics/usageMeta.js';
 import { getAnthropicTools, executeMcpTool } from '../../mcp/server.js';
 import { getToolIndex } from '../../mcp/toolIndex.js';
 
@@ -29,7 +30,14 @@ export class GovernanceAgent {
       : null;
     this.extraTools = Array.isArray(definition.extraTools) ? definition.extraTools : [];
     this.systemPrompt = String(definition.systemPrompt || '');
-    this.anthropic = new Anthropic({ apiKey: config.anthropic.apiKey });
+  }
+
+  /** @param {object} context */
+  _usageMeta(context = {}) {
+    return usageMetaFromContext(context, {
+      phase: 'governance',
+      agentKey: this.agentKey,
+    });
   }
 
   getTools() {
@@ -95,7 +103,7 @@ export class GovernanceAgent {
         params.tool_choice = { type: 'auto' };
       }
 
-      response = await this.anthropic.messages.create(params);
+      response = await createMessage(params, this._usageMeta(context));
 
       if (response.usage) {
         totalInputTokens += response.usage.input_tokens || 0;

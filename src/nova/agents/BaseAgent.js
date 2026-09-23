@@ -7,8 +7,9 @@
  * stays completely unchanged.
  */
 
-import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../../config/index.js';
+import { createMessage } from '../../llm/anthropicClient.js';
+import { usageMetaFromContext } from '../../analytics/usageMeta.js';
 import { getAnthropicTools, getAnthropicToolsForToolSearch, executeMcpTool } from '../../mcp/server.js';
 import { rex } from './AgentTracker.js';
 import { getSoulSystemPrompt } from './soul.js';
@@ -67,7 +68,14 @@ export class BaseAgent {
     this.systemPrompt = this.orchestrator
       ? base + resumeNote + lookupNote
       : appendPlaybookToPrompt(base + resumeNote + lookupNote, definition.domain);
-    this.anthropic = new Anthropic({ apiKey: config.anthropic.apiKey });
+  }
+
+  /** @param {object} context */
+  _usageMeta(context = {}) {
+    return usageMetaFromContext(context, {
+      phase: context._usagePhase || 'agent',
+      agentKey: this.agentKey,
+    });
   }
 
   /**
@@ -171,7 +179,7 @@ export class BaseAgent {
         params.tool_choice = { type: 'auto' };
       }
 
-      response = await this.anthropic.messages.create(params);
+      response = await createMessage(params, this._usageMeta(context));
 
       if (response.usage) {
         totalInputTokens += response.usage.input_tokens || 0;
@@ -270,7 +278,7 @@ export class BaseAgent {
         params.tool_choice = { type: 'auto' };
       }
 
-      const response = await this.anthropic.messages.create(params);
+      const response = await createMessage(params, this._usageMeta(context));
 
       if (response.usage) {
         totalInputTokens += response.usage.input_tokens || 0;

@@ -2,9 +2,9 @@
  * Unified coworker turn pipeline — stream and JSON entry points share this spine.
  */
 
-import Anthropic from '@anthropic-ai/sdk';
 import { randomUUID } from 'crypto';
 import { config } from '../../config/index.js';
+import { createMessage, streamMessage } from '../../llm/anthropicClient.js';
 import Conversation from '../models/Conversation.js';
 import {
   AGENT_DEFINITIONS,
@@ -43,7 +43,6 @@ import { clearPendingConfirm, getPendingConfirm } from './pendingConfirm.js';
 import UserPreferences from '../models/UserPreferences.js';
 
 const GENERAL_CHAT_SYSTEM = 'You are a helpful assistant for Worxstream, a business management platform. Be concise and helpful.';
-const anthropic = new Anthropic({ apiKey: config.anthropic.apiKey });
 
 function stripJsonCodeFence(text) {
   const t = String(text || '').trim();
@@ -86,6 +85,7 @@ async function persistConversation({
   toolsUsed,
   conversation_summary,
   summary_through_turn,
+  requestId,
 }) {
   const toolActivity = compactToolActivity(toolsUsed);
   const messagesArr = [...priorMessages];
@@ -105,6 +105,12 @@ async function persistConversation({
       priorMessages: messagesArr,
       existingSummary: conversation_summary,
       summaryThroughTurn: summary_through_turn,
+      usageMeta: {
+        companyId: company_id,
+        userId: user_id,
+        conversationId: conversation_id,
+        requestId,
+      },
     });
     if (refreshed) {
       summary = refreshed.summary;
@@ -134,13 +140,13 @@ async function persistConversation({
 /** Cap raw output sent to the self-check — checking completeness doesn't need full payloads. */
 const SELF_CHECK_MAX_CHARS = 4000;
 
-async function selfCheckCompletion(userMessage, rawText) {
-  const response = await anthropic.messages.create({
+async function selfCheckCompletion(userMessage, rawText, usageMeta = {}) {
+  const response = await createMessage({
     model: config.anthropic.model,
     max_tokens: 192,
     system: `You are a strict completion checker.\nReturn ONLY strict JSON: {"done": boolean, "next_instruction": string|null}.`,
     messages: [{ role: 'user', content: `User request:\n${userMessage}\n\nAgent raw output:\n${String(rawText || '').slice(0, SELF_CHECK_MAX_CHARS)}` }],
-  });
+  }, { ...usageMeta, phase: 'self_check' });
   const text = response.content?.find((b) => b.type === 'text')?.text?.trim() || '';
   try {
     const parsed = JSON.parse(text);
@@ -153,7 +159,7 @@ async function selfCheckCompletion(userMessage, rawText) {
   }
 }
 
-export async function getNovaPlan(message, conversationContext, routing, priorMessages = []) {
+export async function getNovaPlan(message, conversationContext, routing, priorMessages = [], usageMeta = {}) {
   try {
     const suggestedKeys = routing.agentKeys || [];
     const lines = [];
@@ -183,12 +189,12 @@ export async function getNovaPlan(message, conversationContext, routing, priorMe
     });
     logContextUsage('Nova context', novaMessages, novaSystem);
 
-    const response = await anthropic.messages.create({
+    const response = await createMessage({
       model: config.anthropic.model,
       max_tokens: config.anthropic.maxTokens?.nova ?? 256,
       system: novaSystem,
       messages: novaMessages,
-    });
+    }, { ...usageMeta, phase: 'nova_plan' });
 
     const text = response.content[0]?.text?.trim() || '';
     const plan = JSON.parse(stripJsonCodeFence(text));
@@ -207,6 +213,7 @@ async function runGeneralChat({
   priorMessages,
   sse,
   stream,
+  usageMeta = {},
 }) {
   const generalPrompt = contextPrompt ? `${contextPrompt}\n\nUser message: ${message}` : message;
   const generalMessages = buildOrchestratorMessages({
@@ -217,28 +224,25 @@ async function runGeneralChat({
   logContextUsage('General chat context', generalMessages, GENERAL_CHAT_SYSTEM);
 
   if (stream) {
-    const streamResp = await anthropic.messages.stream({
-      model: config.anthropic.model,
-      max_tokens: config.anthropic.maxTokens?.conversation ?? 4096,
-      system: GENERAL_CHAT_SYSTEM,
-      messages: generalMessages,
-    });
-    let fullText = '';
-    for await (const event of streamResp) {
-      if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-        fullText += event.delta.text;
-        sse({ type: 'text', content: event.delta.text });
-      }
-    }
-    return fullText;
+    const { text } = await streamMessage(
+      {
+        model: config.anthropic.model,
+        max_tokens: config.anthropic.maxTokens?.conversation ?? 4096,
+        system: GENERAL_CHAT_SYSTEM,
+        messages: generalMessages,
+      },
+      { ...usageMeta, phase: 'general_chat' },
+      (delta) => sse({ type: 'text', content: delta }),
+    );
+    return text;
   }
 
-  const response = await anthropic.messages.create({
+  const response = await createMessage({
     model: config.anthropic.model,
     max_tokens: config.anthropic.maxTokens?.conversation ?? 4096,
     system: GENERAL_CHAT_SYSTEM,
     messages: generalMessages,
-  });
+  }, { ...usageMeta, phase: 'general_chat' });
   return response.content[0]?.text || '';
 }
 
@@ -264,6 +268,17 @@ export async function runCoworkerTurn({
   const convId = conversation_id || randomUUID();
   const ctxRef = { company_id, user_id, conversation_id: convId };
   const planRef = ctxRef;
+  const usageMeta = {
+    companyId: company_id,
+    userId: user_id,
+    conversationId: convId,
+    requestId,
+  };
+  const tenantRunFields = {
+    _companyId: company_id,
+    _userId: user_id,
+    _conversationId: convId,
+  };
 
   sse({ type: 'conversation_id', conversation_id: convId });
   sse({ type: 'status', label: STATUS_LABEL_THINKING });
@@ -343,6 +358,7 @@ export async function runCoworkerTurn({
       _planRef: planRef,
       _approvedConfirmations: options.approvedConfirmations || [],
       _skipWriteConfirm: options.skipWriteConfirm,
+      ...tenantRunFields,
     };
 
     sse({ type: 'agent_selected', agent: 'nova' });
@@ -402,10 +418,15 @@ export async function runCoworkerTurn({
       sse({ type: 'status', label: STATUS_LABEL_FORMATTING });
       if (options.streamFormatter && options.sseStreamRes) {
         const fmtStart = Date.now();
-        formattedForUi = await formatOutputStreaming(message, combinedRawText, options.sseStreamRes);
+        formattedForUi = await formatOutputStreaming(
+          message,
+          combinedRawText,
+          options.sseStreamRes,
+          usageMeta,
+        );
         if (requestId) rex.formatterFinished(requestId, Date.now() - fmtStart);
       } else {
-        formattedForUi = await formatOutput(message, combinedRawText);
+        formattedForUi = await formatOutput(message, combinedRawText, usageMeta);
       }
     } else if (options.streamFormatter) {
       if (combinedRawText) sse({ type: 'text', content: combinedRawText });
@@ -432,6 +453,7 @@ export async function runCoworkerTurn({
       toolsUsed: allToolsUsed,
       conversation_summary: convState.conversation_summary,
       summary_through_turn: convState.summary_through_turn,
+      requestId,
     });
 
     await updateContext(ctxRef, 'nova', allToolsUsed, [], {
@@ -468,6 +490,7 @@ export async function runCoworkerTurn({
     _planRef: planRef,
     _approvedConfirmations: options.approvedConfirmations || [],
     _skipWriteConfirm: options.skipWriteConfirm,
+    ...tenantRunFields,
   };
 
   let routing;
@@ -479,7 +502,7 @@ export async function runCoworkerTurn({
     };
   } else {
     const routerStart = Date.now();
-    routing = await resolveAgentKeys(message, contextPrompt, priorMessages);
+    routing = await resolveAgentKeys(message, contextPrompt, priorMessages, usageMeta);
     if (requestId) rex.routerResolved?.(requestId, routing.agentKeys?.[0] || 'general', Date.now() - routerStart, routing.routerUsage);
   }
 
@@ -490,6 +513,7 @@ export async function runCoworkerTurn({
       priorMessages,
       sse,
       stream: Boolean(options.streamFormatter),
+      usageMeta,
     });
     sse({ type: 'done', agent: 'general', toolsUsed: [] });
     await persistConversation({
@@ -501,6 +525,7 @@ export async function runCoworkerTurn({
       assistantContent: text,
       conversation_summary: convState.conversation_summary,
       summary_through_turn: convState.summary_through_turn,
+      requestId,
     });
     await updateContext(ctxRef, 'general', [], [], { message, assistantSummary: text });
     return {
@@ -519,7 +544,7 @@ export async function runCoworkerTurn({
     ? { mode: options.mode, agents: options.agentKeys || routing.agentKeys }
     : routing.type === 'single'
       ? { mode: 'single', agents: routing.agentKeys }
-      : await getNovaPlan(message, contextPrompt, routing, priorMessages);
+      : await getNovaPlan(message, contextPrompt, routing, priorMessages, usageMeta);
 
   const fallbackMode = routing.type === 'single' ? 'single' : 'sequential';
   const mode = novaPlan?.mode || options.mode || fallbackMode;
@@ -537,6 +562,7 @@ export async function runCoworkerTurn({
       priorMessages,
       sse,
       stream: Boolean(options.streamFormatter),
+      usageMeta,
     });
     sse({ type: 'done', agent: 'general', toolsUsed: [] });
     await persistConversation({
@@ -548,6 +574,7 @@ export async function runCoworkerTurn({
       assistantContent: text,
       conversation_summary: convState.conversation_summary,
       summary_through_turn: convState.summary_through_turn,
+      requestId,
     });
     return {
       conversation_id: convId,
@@ -663,7 +690,7 @@ export async function runCoworkerTurn({
   let combinedRawText = runResult.combinedRawText || '';
   let attempts = planState.attempts || 0;
   for (let i = 0; i < Math.max(0, maxSelfCheckLoops); i++) {
-    const check = await selfCheckCompletion(message, combinedRawText);
+    const check = await selfCheckCompletion(message, combinedRawText, usageMeta);
     if (check.done || !check.next_instruction) break;
     attempts += 1;
     await setPlanState(planRef, { attempts });
@@ -679,10 +706,15 @@ export async function runCoworkerTurn({
   let formattedForUi = combinedRawText;
   if (options.streamFormatter && options.sseStreamRes) {
     const fmtStart = Date.now();
-    formattedForUi = await formatOutputStreaming(message, combinedRawText, options.sseStreamRes);
+    formattedForUi = await formatOutputStreaming(
+      message,
+      combinedRawText,
+      options.sseStreamRes,
+      usageMeta,
+    );
     if (requestId) rex.formatterFinished(requestId, Date.now() - fmtStart);
   } else if (options.formatOutput !== false) {
-    formattedForUi = await formatOutput(message, combinedRawText);
+    formattedForUi = await formatOutput(message, combinedRawText, usageMeta);
   }
 
   // Deterministic <workflow> embedding: the React Flow tree renders from this
@@ -708,6 +740,7 @@ export async function runCoworkerTurn({
     toolsUsed: allToolsUsed,
     conversation_summary: convState.conversation_summary,
     summary_through_turn: convState.summary_through_turn,
+    requestId,
   });
 
   await updateContext(ctxRef, primaryKey, allToolsUsed, [], {

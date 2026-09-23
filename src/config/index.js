@@ -119,6 +119,20 @@ export const config = {
       /** For conversation-only (non-stream) replies. */
       conversationShort: parseInt(process.env.ANTHROPIC_MAX_TOKENS_CONVERSATION_SHORT || '1024', 10),
     },
+    /**
+     * USD per 1M tokens — defaults match Claude Sonnet list prices.
+     * Override when WorxStream markup / new model pricing is decided.
+     */
+    pricing: {
+      inputPerMillion: parseFloat(process.env.ANTHROPIC_PRICE_INPUT_PER_MTOK || '3'),
+      outputPerMillion: parseFloat(process.env.ANTHROPIC_PRICE_OUTPUT_PER_MTOK || '15'),
+      cacheWritePerMillion: parseFloat(process.env.ANTHROPIC_PRICE_CACHE_WRITE_PER_MTOK || '3.75'),
+      cacheReadPerMillion: parseFloat(process.env.ANTHROPIC_PRICE_CACHE_READ_PER_MTOK || '0.30'),
+    },
+  },
+  /** Platform-ops key for /api/admin/* (token usage billing). */
+  admin: {
+    apiKey: (process.env.ADMIN_API_KEY || '').trim(),
   },
   worxstream: {
     baseUrl: process.env.WORXSTREAM_BASE_URL || '',
@@ -268,6 +282,11 @@ export function validateConfig() {
   }
   if (isProduction && !(process.env.BACKEND_URL || process.env.PUBLIC_URL)) {
     console.warn('⚠️  BACKEND_URL or PUBLIC_URL not set - set in .env for production');
+  }
+  if (!config.admin.apiKey) {
+    console.warn(
+      '⚠️  ADMIN_API_KEY not set — /api/admin/analytics will reject all requests until it is configured.',
+    );
   }
   if (config.redis.url) {
     const ttl = config.redis.contextTtlSeconds;

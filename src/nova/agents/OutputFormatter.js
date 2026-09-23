@@ -6,10 +6,8 @@
  * or force summaries. Claude already chose what to say; this only structures it.
  */
 
-import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../../config/index.js';
-
-const anthropic = new Anthropic({ apiKey: config.anthropic.apiKey });
+import { createMessage, streamMessage } from '../../llm/anthropicClient.js';
 
 /** Remove a markdown code fence wrapper if the model disobeys the no-fence rule. */
 function stripCodeFence(text) {
@@ -107,10 +105,11 @@ Chart colors: blue, green, purple, yellow, red, cyan
  *
  * @param {string} userMessage  - The original user query (for context on format choice)
  * @param {string} rawOutput    - Raw text from the agent
+ * @param {object} [usageMeta]  - Tenant attribution for billing
  * @returns {Promise<string>}   - Formatted text with XML tags
  */
-export async function formatOutput(userMessage, rawOutput) {
-  const response = await anthropic.messages.create({
+export async function formatOutput(userMessage, rawOutput, usageMeta = {}) {
+  const response = await createMessage({
     model: config.anthropic.model,
     max_tokens: config.anthropic.maxTokens?.formatter ?? 4096,
     system: FORMATTER_PROMPT,
@@ -120,7 +119,7 @@ export async function formatOutput(userMessage, rawOutput) {
         content: `User's question: ${userMessage}\n\nRaw agent output:\n${rawOutput}`,
       },
     ],
-  });
+  }, { ...usageMeta, phase: 'formatter' });
 
   const textBlocks = response.content.filter(b => b.type === 'text');
   return stripCodeFence(textBlocks.map(b => b.text).join('\n'));
@@ -133,30 +132,27 @@ export async function formatOutput(userMessage, rawOutput) {
  * @param {string} userMessage
  * @param {string} rawOutput
  * @param {import('express').Response} res - Express response (SSE headers already set)
+ * @param {object} [usageMeta]
  * @returns {Promise<string>} Complete formatted XML/markdown string
  */
-export async function formatOutputStreaming(userMessage, rawOutput, res) {
+export async function formatOutputStreaming(userMessage, rawOutput, res, usageMeta = {}) {
   const sse = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
-  let formatted = '';
 
-  const stream = await anthropic.messages.stream({
-    model: config.anthropic.model,
-    max_tokens: config.anthropic.maxTokens?.formatter ?? 4096,
-    system: FORMATTER_PROMPT,
-    messages: [
-      {
-        role: 'user',
-        content: `User's question: ${userMessage}\n\nRaw agent output:\n${rawOutput}`,
-      },
-    ],
-  });
+  const { text } = await streamMessage(
+    {
+      model: config.anthropic.model,
+      max_tokens: config.anthropic.maxTokens?.formatter ?? 4096,
+      system: FORMATTER_PROMPT,
+      messages: [
+        {
+          role: 'user',
+          content: `User's question: ${userMessage}\n\nRaw agent output:\n${rawOutput}`,
+        },
+      ],
+    },
+    { ...usageMeta, phase: 'formatter' },
+    (delta) => sse({ type: 'text', content: delta }),
+  );
 
-  for await (const event of stream) {
-    if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-      formatted += event.delta.text;
-      sse({ type: 'text', content: event.delta.text });
-    }
-  }
-
-  return stripCodeFence(formatted);
+  return stripCodeFence(text);
 }

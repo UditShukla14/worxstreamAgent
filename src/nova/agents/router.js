@@ -6,8 +6,8 @@
  *  2. callAgent(key, message)   — Caller specifies one agent directly
  */
 
-import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../../config/index.js';
+import { createMessage } from '../../llm/anthropicClient.js';
 import { BaseAgent } from './BaseAgent.js';
 import { AGENT_DEFINITIONS, getAgentKeys, getAgentDescriptionsForRouter } from './agentDefinitions.js';
 import { buildOrchestratorMessages, logContextUsage } from '../../utils/conversationHistory.js';
@@ -47,8 +47,6 @@ Decide from meaning and context (not keyword lists):
 
 // ── Route-only (resolve agent keys without running them) ─────────────
 
-const routerClient = new Anthropic({ apiKey: config.anthropic.apiKey });
-
 /** Recent turns to include when classifying — enough for follow-up references. */
 const ROUTER_HISTORY_MESSAGES = 6;
 
@@ -67,9 +65,10 @@ function stripJsonCodeFence(text) {
  * @param {string} message
  * @param {string} [conversationContext] - Optional context string from ConversationContext
  * @param {Array<{ role: string, content: string }>} [priorMessages] - Prior turns from MongoDB
+ * @param {object} [usageMeta] - Tenant + request attribution for billing
  * @returns {Promise<{ type: string, agentKeys: string[], routerUsage: object }>}
  */
-export async function resolveAgentKeys(message, conversationContext = '', priorMessages = []) {
+export async function resolveAgentKeys(message, conversationContext = '', priorMessages = [], usageMeta = {}) {
   console.log(`\n🔀 Router analyzing: "${message.substring(0, 100)}${message.length > 100 ? '...' : ''}"`);
 
   const userContent = conversationContext
@@ -86,12 +85,12 @@ export async function resolveAgentKeys(message, conversationContext = '', priorM
   });
   logContextUsage('Router context', messages, system);
 
-  const routeResponse = await routerClient.messages.create({
+  const routeResponse = await createMessage({
     model: config.anthropic.model,
     max_tokens: config.anthropic.maxTokens?.router ?? 100,
     system,
     messages,
-  });
+  }, { ...usageMeta, phase: 'router' });
 
   const routeText = stripJsonCodeFence(routeResponse.content[0]?.text?.trim());
   let agentKeys;

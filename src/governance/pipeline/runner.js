@@ -381,6 +381,7 @@ async function runAegisChecks({
   eventType,
   payload,
   companyId,
+  userId = '',
   entityLabel,
   runId,
   snapshot,
@@ -445,6 +446,8 @@ async function runAegisChecks({
       fromAgent: 'control-tower',
       reason: `governance pipeline ${eventType}`,
       skipClarification: true,
+      _companyId: companyId,
+      _userId: userId || 'governance',
     });
 
     const durationMs = Date.now() - stepStart;
@@ -532,6 +535,8 @@ export async function evaluateGovernanceEvent({
       fromAgent: 'vigil',
       reason: 'alert sweep re-check',
       skipClarification: true,
+      _companyId: companyId,
+      _userId: 'vigil',
     });
     const parsed = parseGovernanceFindings(result.response, { relatedEntity: entityLabel });
     const structuredFindings = runStructuredCatalogChecks({
@@ -622,6 +627,7 @@ export async function runPipeline(event) {
     eventType,
     payload: workingPayload,
     companyId,
+    userId: event.user_id != null ? String(event.user_id) : '',
     entityLabel: workingLabel,
     runId,
     snapshot,
