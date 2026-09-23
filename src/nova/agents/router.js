@@ -19,7 +19,7 @@ export function initializeAgentInstances() {
   for (const [key, def] of Object.entries(AGENT_DEFINITIONS)) {
     agentInstances.set(key, new BaseAgent(key, def));
   }
-  console.log(`🤖 Initialized ${agentInstances.size} specialist agents`);
+  console.log(`🤖 Initialized ${agentInstances.size} coworker agents (Nova + specialists)`);
 }
 
 export function getAgentInstance(key) {
@@ -42,6 +42,8 @@ Rules:
 - Single-domain → one key. Cross-domain → minimum set (e.g. ["customer","estimate"]).
 - "customer" → customer (NOT contact). "contact" or "lead" → contact (NOT customer).
 - Prefer the agent whose description best matches; do not invent keys.
+- Counts / "how many" / simple status filters on one entity → that entity agent (invoice, estimate, …), NOT reports.
+- Route to "reports" only when the user asks for a report, analytics, charts, trends, overview, or dashboard.
 
 Ambiguous cases (follow these):
 - "create an estimate for customer X" → ["customer","estimate"]
@@ -49,6 +51,8 @@ Ambiguous cases (follow these):
 - "search everything for Acme" / notes on a deal → ["crm"]
 - "email this invoice" / unread notifications → ["communications"]
 - "warehouse stock" / SKU qty → ["inventory"]
+- "how many invoices got paid since last week" → ["invoice"] (not reports)
+- "invoice analytics report with charts for last quarter" → ["reports"]
 
 Respond with ONLY a JSON array of agent keys. Nothing else.`;
 }

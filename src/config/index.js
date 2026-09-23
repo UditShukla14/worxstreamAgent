@@ -187,6 +187,14 @@ export const config = {
     workingMemoryLlmEveryN: parseInt(process.env.WORKING_MEMORY_LLM_EVERY_N || '0', 10),
     specialistMessagesActive: parseInt(process.env.SPECIALIST_CONTEXT_MESSAGES_ACTIVE || '12', 10),
     pendingConfirmTtlSeconds: parseInt(process.env.COWORKER_PENDING_CONFIRM_TTL || '300', 10),
+    /**
+     * Chat turn mode:
+     * - orchestrator (default): one Nova agent + tool search (Claude/OpenAI-style). Skips router/Nova-plan fan-out.
+     * - specialists: legacy router → specialist(s) → formatter path.
+     */
+    mode: (process.env.COWORKER_MODE || 'orchestrator').toLowerCase() === 'specialists'
+      ? 'specialists'
+      : 'orchestrator',
   },
 };
 

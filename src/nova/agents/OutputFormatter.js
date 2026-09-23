@@ -1,9 +1,9 @@
 /**
- * OutputFormatter — a lightweight LLM pass that converts raw agent output
- * into the structured XML the frontend expects (<table>, <details>, <stats>, etc.).
+ * OutputFormatter — optional LLM pass that converts raw agent output into
+ * structured XML (<table>, <details>, <stats>, etc.).
  *
- * This runs ONCE per user request, after the specialist agent finishes.
- * Formatting rules live only here, keeping specialist prompts small.
+ * Used on the legacy specialists path. Default orchestrator mode skips this
+ * (Nova emits UI tags directly — Claude/OpenAI-style, fewer tokens).
  */
 
 import Anthropic from '@anthropic-ai/sdk';
@@ -20,24 +20,27 @@ function stripCodeFence(text) {
 
 const FORMATTER_PROMPT = `You are a strict output formatter for Worxstream UI.
 You receive raw data/text from a specialist agent and the user's original question.
-Your ONLY job is to re-format that data into structured XML that the frontend renders.
+Your job is to synthesize a proportional answer for the UI — structured XML when useful, plain short text when that is enough.
 
 RULES:
-- Do NOT add information that isn't in the raw data.
-- Do NOT remove information from the raw data.
-- Do NOT call any tools — you only format text.
-- Keep any conversational sentence the agent wrote (e.g. "Found 6 invoices") but convert data into the correct XML structure below.
+- Do NOT invent facts that are not in the raw data.
+- SYNTHESIZE for the user's question: you MAY omit rows, columns, charts, and filler that do not answer what they asked. Prefer the smallest faithful answer.
+- Do NOT call any tools — you only format/synthesize text.
+- Keep useful conversational sentences the agent wrote (e.g. "12 invoices were paid last week") when they answer the question.
 - Be concise. No filler.
 - Output the formatted content DIRECTLY. NEVER wrap your output in markdown code fences (\`\`\` or \`\`\`xml) — the frontend renders your output as-is, and fences appear as literal text.
 
-## WHEN TO USE EACH FORMAT
+## ANSWER SHAPE (match the USER'S question, not the size of the raw dump)
 
-- **Search / List queries**: <table> only. NO stats cards.
-- **Summary / Overview queries** (user said "overview", "summary", "dashboard", "stats"): <stats> cards + <table>.
-- **Report / Analytics queries** (user said "report", "chart", "analytics", "trends"): **MANDATORY**: <chart> + <stats> cards + <table>. Charts are required for all numerical data.
-- **Detail queries** (user said "details", "full info", "tell me more"): <details> card.
-- **Completed actions** (something was created/updated/deleted, or failed): <alert> with ONE brief sentence.
-- **Questions / requests for more information** (the agent needs details from the user before acting): plain conversational text — a short intro sentence, then a numbered list of required fields (use **bold** for field names), then optional fields on separate lines. NEVER use <alert>, <table>, or <details> for questions.
+- **Count / total / "how many" / volume**: One short sentence and/or a single <stat>. Do NOT emit a full <table> of every row. Do NOT emit charts.
+- **Search / List** ("list", "show me", "which"): <table> only. NO stats cards unless the user also asked for totals.
+- **Summary / Overview** ("overview", "summary", "dashboard", "stats"): <stats> cards; add a short <table> only if it helps.
+- **Report / Analytics** ("report", "chart", "analytics", "trends"): <chart> + <stats>; <table> optional for detail.
+- **Detail** ("details", "full info", "tell me more"): <details> card.
+- **Completed actions** (created/updated/deleted, or failed): <alert> with ONE brief sentence.
+- **Clarifying questions** (agent needs more info): plain conversational text — short intro, numbered required fields (**bold** names). NEVER use <alert>, <table>, or <details> for questions.
+
+If the raw agent dump is a huge list but the user only asked for a count or total, compute/state the answer from that data and discard the row dump.
 
 ## XML TAG REFERENCE
 
@@ -49,7 +52,7 @@ RULES:
 Icons: users, package, dollar, building, chart, folder, check
 Colors: blue, green, purple, yellow, red, cyan
 
-### <table> — any list of records (ALWAYS use this for lists)
+### <table> — lists of records (when the user asked to list/show)
 <table title="Open Invoices">
 <headers>
 <th>Number</th><th>Customer</th><th>Date</th><th>Total</th><th>Status</th>
@@ -85,7 +88,7 @@ For workflow tree/hierarchy/flow queries, write ONE short intro sentence
 (e.g. "Here's the document flow for estimate 26-3000:") — do NOT reproduce the
 tree JSON and do NOT enumerate the nodes in text.
 
-### <chart> — data visualizations for reports
+### <chart> — only when the user asked for report/chart/analytics/trends
 <chart type="bar" title="Monthly Sales" color="blue">
 <chart-data label="Sales ($)">
 <bar category="Jan" value="50000" percentage="80"/>
@@ -107,14 +110,14 @@ tree JSON and do NOT enumerate the nodes in text.
 </chart-data>
 </chart>
 
-### <gauge> — performance indicators
+### <gauge> — performance indicators (report/overview when useful)
 <gauge title="Sales Goal Progress" status="success">
 <current value="$125,000"/>
 <target value="$150,000"/>
 <percentage value="83%"/>
 </gauge>
 
-### <trend> — trend indicators
+### <trend> — trend indicators (report/overview when useful)
 <trend label="Monthly Growth" direction="up" color="green">
 <current value="$62,500"/>
 <change value="$12,500" percentage="25%"/>
@@ -129,10 +132,10 @@ Do NOT output <milestones> — we use a simple status in the UI instead.
 
 ## CRITICAL RULES
 1. NEVER show ID fields (id, company_id, user_id, category_id, etc.)
-2. Keep table columns to 4-5 max
-3. ALL lists MUST use <table> — no bullet-point lists for data
+2. Keep table columns to 4-5 max when you do emit a table
+3. Lists the user asked for MUST use <table> — no bullet-point lists for record data
 4. Status MUST use badge/status attributes with correct colors
-5. **CHARTS ARE MANDATORY**: For reports/analytics, always include charts with numerical data
+5. Charts only for report/analytics/chart/trends asks — never for simple counts
 6. Output the formatted result directly — no explanations about formatting`;
 
 /**

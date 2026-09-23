@@ -316,6 +316,147 @@ export async function runCoworkerTurn({
     };
   }
 
+  const useOrchestrator =
+    config.coworker?.mode !== 'specialists'
+    && !(options.agentKeys?.length)
+    && options.mode !== 'specialists';
+
+  // ── Single Nova orchestrator (default): one LLM + tools, Claude/OpenAI-style ──
+  // Skips router, Nova-plan, specialist fan-out, self-check, and formatter LLM
+  // (token savings). Nova owns answer shape via shared proportionality rules.
+  if (useOrchestrator) {
+    const nova = getAgentInstance('nova');
+    if (!nova) throw new Error('Nova orchestrator is not initialized');
+
+    // Managed conversation window (same pattern as ChatGPT/Claude tool chat).
+    const orchestratorHistory = buildOrchestratorMessages({
+      priorMessages,
+      currentUserContent: '',
+      systemPrompt: nova.systemPrompt || '',
+    });
+    if (priorMessages.length > 0) {
+      logContextUsage('Orchestrator context', orchestratorHistory, nova.systemPrompt);
+    }
+
+    const orchRunContext = {
+      _conversationHistory: orchestratorHistory,
+      _planRef: planRef,
+      _approvedConfirmations: options.approvedConfirmations || [],
+      _skipWriteConfirm: options.skipWriteConfirm,
+    };
+
+    sse({ type: 'agent_selected', agent: 'nova' });
+    sse({ type: 'status', label: getStatusLabelForAgent('nova') || STATUS_LABEL_THINKING });
+
+    const allToolsUsed = [];
+    let workflowTree = null;
+    const agentStart = Date.now();
+    const result = await nova.runWithEvents(
+      message,
+      {
+        _rexRequestId: requestId,
+        _conversationContext: contextPrompt,
+        ...orchRunContext,
+      },
+      sse,
+    );
+    if (requestId) rex.agentFinished(requestId, nova.name, Date.now() - agentStart, result.usage ?? null);
+
+    if (result.needsConfirmation) {
+      sse({
+        type: 'done',
+        agent: 'nova',
+        toolsUsed: [],
+        pending_confirmation: true,
+        confirmationId: result.confirmationId,
+      });
+      return {
+        conversation_id: convId,
+        type: 'pending_confirmation',
+        confirmationId: result.confirmationId,
+        toolsUsed: [],
+      };
+    }
+
+    allToolsUsed.push(...(result.toolsUsed || []));
+    (result.toolsUsed || []).forEach((t, i) => {
+      if (t.name === 'get_workflow_object_tree' && t.success !== false) {
+        const payload = result.toolResultPayloads?.[i];
+        const tree = payload?.data?.data ?? payload?.data ?? null;
+        if (tree && (Array.isArray(tree) ? tree.length > 0 : typeof tree === 'object')) {
+          workflowTree = tree;
+        }
+      }
+    });
+
+    await updateContext(ctxRef, 'nova', result.toolsUsed, result.toolResultPayloads, {
+      message,
+      assistantSummary: result.rawText?.slice(0, 300),
+    });
+
+    let combinedRawText = result.rawText || '';
+    // Optional escape hatch: second LLM formatter (costs tokens; off by default).
+    let formattedForUi = combinedRawText;
+    const wantFormatter = options.forceFormatter === true;
+    if (wantFormatter) {
+      sse({ type: 'status', label: STATUS_LABEL_FORMATTING });
+      if (options.streamFormatter && options.sseStreamRes) {
+        const fmtStart = Date.now();
+        formattedForUi = await formatOutputStreaming(message, combinedRawText, options.sseStreamRes);
+        if (requestId) rex.formatterFinished(requestId, Date.now() - fmtStart);
+      } else {
+        formattedForUi = await formatOutput(message, combinedRawText);
+      }
+    } else if (options.streamFormatter) {
+      // Stream Nova's answer directly (no second model call).
+      if (combinedRawText) sse({ type: 'text', content: combinedRawText });
+    }
+
+    if (workflowTree && !/<workflow[\s>]/i.test(formattedForUi || '')) {
+      const treeJson = JSON.stringify(workflowTree);
+      if (treeJson.length <= 60000) {
+        const workflowXml = `\n\n<workflow>${treeJson}</workflow>`;
+        formattedForUi = `${formattedForUi || ''}${workflowXml}`;
+        if (options.streamFormatter) {
+          sse({ type: 'text', content: workflowXml });
+        }
+      }
+    }
+
+    await persistConversation({
+      company_id,
+      user_id,
+      conversation_id: convId,
+      priorMessages,
+      message,
+      assistantContent: formattedForUi || combinedRawText,
+      toolsUsed: allToolsUsed,
+      conversation_summary: convState.conversation_summary,
+      summary_through_turn: convState.summary_through_turn,
+    });
+
+    await updateContext(ctxRef, 'nova', allToolsUsed, [], {
+      message,
+      assistantSummary: (formattedForUi || '').slice(0, 500),
+    });
+
+    sse({
+      type: 'done',
+      agent: 'nova',
+      toolsUsed: allToolsUsed.map((t) => t.name),
+    });
+
+    return {
+      conversation_id: convId,
+      type: 'orchestrator',
+      response: combinedRawText,
+      formattedText: formattedForUi || combinedRawText,
+      agents: ['nova'],
+      toolsUsed: allToolsUsed,
+    };
+  }
+
+  // ── Legacy specialists path (COWORKER_MODE=specialists or options.agentKeys) ──
   const specialistHistory = buildSpecialistHistory(priorMessages, {
     workingSet: redisCtx.workingSet,
   });

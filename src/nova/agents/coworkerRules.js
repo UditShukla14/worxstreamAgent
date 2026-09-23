@@ -9,6 +9,14 @@ SHARED TOOL RULES (all specialists):
 - STATUS FILTERING: Never put status labels (draft, paid, approved, open, …) in filter.search. Search is for text only. Call list/get with date/text filters only; filter by status when presenting results (runtime may also filter).
 - INTER-AGENT: When prior agent context already has customer_id or other IDs, reuse them. Do not repeat equivalent lookups (e.g. get_customer_dropdown) for data already in context.
 - Be concise. Never expose raw internal IDs as the only identifier the user sees.
+
+ANSWER PROPORTIONALITY (LLM-controlled — apply to every kind of question and phrasing; do not hardcode phrase lists):
+- Match response length and structure to what the user asked. Prefer the minimum tools and the minimum output that fully answers.
+- Counts / totals / "how many" / volume questions → short answer (one sentence and/or a single <stat>). Do NOT dump every matching row or build a full report unless they asked to list or report.
+- List / show / which questions → table (or short list) of the relevant rows.
+- Detail questions → one record's details.
+- Report / analytics / chart / trends / overview / dashboard → richer visuals only then.
+- Tools return facts; you own the narrative. Never paste raw tool JSON. Never expand a simple question into a full analytics pack by default.
 `.trim();
 
 /**
@@ -24,6 +32,7 @@ export function stripDuplicatedSharedRules(prompt) {
     /\n?DATE AWARENESS:[^\n]*(?:\n(?![A-Z][A-Z_ ]+:)[^\n]*)*/g,
     /\n?STATUS FILTERING:[^\n]*(?:\n(?![A-Z][A-Z_ ]+:)[^\n]*)*/g,
     /\n?INTER-AGENT:[^\n]*(?:\n(?![A-Z][A-Z_ ]+:)[^\n]*)*/g,
+    /\n?ANSWER PROPORTIONALITY:[^\n]*(?:\n(?![A-Z][A-Z_ ]+:)[^\n]*)*/g,
   ];
   for (const re of patterns) {
     text = text.replace(re, '');

@@ -52,6 +52,8 @@ export class BaseAgent {
       : null;
     /** Cross-domain helper tools (e.g. dropdown lookups) this agent may call. */
     this.extraTools = Array.isArray(definition.extraTools) ? definition.extraTools : [];
+    /** When true, getTools() exposes all non-governance product tools (Claude/OpenAI-style). */
+    this.orchestrator = definition.orchestrator === true;
     /** Opt-in wider tool discovery; falls back to global config.anthropic.useToolSearch. */
     this.useToolSearch = definition.useToolSearch === true
       ? true
@@ -60,29 +62,51 @@ export class BaseAgent {
         : null;
     const soul = getSoulSystemPrompt();
     const specialistPrompt = stripDuplicatedSharedRules(definition.systemPrompt || '');
-    const withShared = this.agentKey === 'nova'
-      ? specialistPrompt
-      : `${specialistPrompt}\n\n${COWORKER_SHARED_RULES}`;
+    // Orchestrator Nova also gets shared rules (proportionality, dates, IDs).
+    const withShared = `${specialistPrompt}\n\n${COWORKER_SHARED_RULES}`;
     const base = soul
       ? `${soul}\n\n${withShared}`
       : withShared;
     const resumeNote = '\n\nIf [Session focus] shows a failed last action, attempt recovery (correct IDs/parameters) before asking the user to repeat.';
     const lookupNote = '\n\nID RESOLUTION: NEVER ask the user for an internal ID (user, customer, contact, product, vendor, tax, job, project...). When the user gives a name, call the resolve_entity tool (entity_type + the name) — or a domain lookup tool you have — to get the ID yourself. Only ask the user when the lookup finds nothing or returns multiple ambiguous matches (then show the matching names, never raw IDs).';
-    this.systemPrompt = appendPlaybookToPrompt(base + resumeNote + lookupNote, definition.domain);
+    // Domain playbooks only for specialists; orchestrator discovers via tools + shared rules.
+    this.systemPrompt = this.orchestrator
+      ? base + resumeNote + lookupNote
+      : appendPlaybookToPrompt(base + resumeNote + lookupNote, definition.domain);
     this.anthropic = new Anthropic({ apiKey: config.anthropic.apiKey });
   }
 
   /**
-   * Returns ONLY this agent's tools from the shared MCP registry.
+   * Returns this agent's tools from the shared MCP registry.
+   * Orchestrator Nova: all product tools (excludes governance) with tool-search when enabled.
    */
   getTools() {
-    // Nova never calls tools.
-    if (this.agentKey === 'nova') return [];
-
     const index = getToolIndex();
+    const toolSearchOn = this.useToolSearch !== null
+      ? this.useToolSearch
+      : config.anthropic.useToolSearch;
 
-    // Union of the agent's domain buckets (definition.domains beats definition.domain).
-    // 'lookup' (resolve_entity) is universal: every agent can resolve names → IDs.
+    if (this.orchestrator) {
+      const allowList = index.tools
+        .filter((t) => {
+          const domain = t?.capabilities?.domain;
+          if (domain === 'governance') return false;
+          const name = t.name;
+          if (name === 'invoke_agent' || name === 'get_relevant_policies') return false;
+          return true;
+        })
+        .map((t) => t.name);
+      if (allowList.length === 0) {
+        console.error(`❌ [${this.name}] orchestrator has no product tools registered`);
+        return [];
+      }
+      // Always prefer tool-search for wide catalogs (token-efficient, Claude/OpenAI-style).
+      if (toolSearchOn || allowList.length > 40) {
+        return getAnthropicToolsForToolSearch(allowList);
+      }
+      return getAnthropicTools(allowList);
+    }
+
     const domainKeys = (this.domains || [this.domain || this.agentKey])
       .map(d => String(d || '').toLowerCase())
       .concat('lookup');
@@ -94,9 +118,6 @@ export class BaseAgent {
       for (const t of bucket) allowSet.add(t.name);
     }
 
-    // Cross-domain helper tools (resolve assignees, customers, products, taxes
-    // referenced by name) so single-domain agents don't have to ask the user
-    // for IDs that another domain's lookup tool can provide.
     const registered = new Set(index.tools.map((t) => t.name));
     for (const name of this.extraTools) {
       if (registered.has(name)) {
@@ -106,8 +127,6 @@ export class BaseAgent {
       }
     }
 
-    // Never fall back to ALL tools: an empty bucket is a domain-mapping bug
-    // (see src/mcp/toolCapabilities.js), not a reason to expose ~193 tools.
     if (allowSet.size === 0) {
       console.error(`❌ [${this.name}] no tools in domain bucket(s) [${domainKeys.join(', ')}] — check DOMAIN_RULES in src/mcp/toolCapabilities.js; running with NO tools`);
       return [];
@@ -115,16 +134,10 @@ export class BaseAgent {
 
     const allowList = [...allowSet];
 
-    const toolSearchOn = this.useToolSearch !== null
-      ? this.useToolSearch
-      : config.anthropic.useToolSearch;
-
-    // Prefer tool-search mode when enabled, scoped to allowed tools.
     if (toolSearchOn) {
       return getAnthropicToolsForToolSearch(allowList);
     }
 
-    // Otherwise, pass domain-filtered tools to Anthropic.
     return getAnthropicTools(allowList);
   }
 
