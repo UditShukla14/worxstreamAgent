@@ -8,7 +8,7 @@ import ReportRun from '../models/ReportRun.js';
 import {
   computeNextRunAt,
   queueReportDefinition,
-} from './reportEngine.js';
+} from './engine.js';
 
 function activeQuery(filter) {
   return {

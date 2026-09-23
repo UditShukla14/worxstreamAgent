@@ -1,8 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { decideAlertAction, actionFromReview, alertNeedsResolveReason, reasonForResolvedReview, LEGACY_RESOLVE_REASON } from '../../src/control/alertSweep.js';
-import { isGovernanceAgentKey, pipelineGovernanceAgentKeys, VIGIL_AGENT_KEY } from '../../src/control/governanceAgents.js';
-import { isChildAgentKey } from '../../src/agents/agentDefinitions.js';
+import { decideAlertAction, actionFromReview, alertNeedsResolveReason, reasonForResolvedReview, LEGACY_RESOLVE_REASON } from '../../src/governance/vigil/alertSweep.js';
+import { isGovernanceAgentKey, pipelineGovernanceAgentKeys, VIGIL_AGENT_KEY } from '../../src/governance/agents/definitions.js';
+import { isChildAgentKey } from '../../src/nova/agents/agentDefinitions.js';
 
 const catalog = {
   policies: [

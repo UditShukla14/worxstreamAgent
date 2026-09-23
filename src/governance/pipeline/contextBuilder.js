@@ -2,7 +2,7 @@
  * Build the user message for Aegis from a webhook event.
  */
 
-import { getGovernanceAgentName } from './governanceAgents.js';
+import { getGovernanceAgentName } from '../agents/definitions.js';
 import { catalogForEvent, getCatalogContext } from './catalogContext.js';
 import { ruleAppliesToEvent } from './ruleEvents.js';
 import { normalizeEventType } from './pipelineConfig.js';
@@ -210,7 +210,7 @@ export function buildMasterMessage({
     '',
     'Use grossProfitPercentage, subTotal, grandTotal, totalAppliedCost, sections, and customer from the event payload — do not recalculate margins or totals.',
     'Use the supplementary enrichment only for data missing from the payload (e.g. overdue invoice counts in enrichment.invoices, product stock_qty).',
-    'Do not call list_estimates, list_invoices, get_estimate_details, get_invoice_details, get_product_details, get_customer_details, get_estimate_line_items, or invoke_agent to rediscover payload fields.',
+    'Do not call list_estimates, list_invoices, get_estimate_details, get_invoice_details, get_product_details, get_customer_details, or get_estimate_line_items to rediscover payload fields.',
     'Product stock may appear on payload line items (availableQty) or in enrichment.products[].stock_qty.',
     'Only call tools for a fact neither the payload nor snapshot provides.',
     'Do not invent policies, rules, numeric defaults, or extra checks. If the live catalog is empty, return {"verdict":"pass","findings":[]}.',

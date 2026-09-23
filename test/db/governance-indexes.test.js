@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { indexNeedsRebuild } from '../../src/db/governanceIndexes.js';
+import { indexNeedsRebuild } from '../../src/governance/db/governanceIndexes.js';
 
 describe('governance seed_key index migration', () => {
   it('rebuilds legacy non-partial unique indexes', () => {

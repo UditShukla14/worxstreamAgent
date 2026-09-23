@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { isWriteTool, shouldConfirmWrites } from '../../src/agents/pendingConfirm.js';
+import { isWriteTool, shouldConfirmWrites } from '../../src/nova/agents/pendingConfirm.js';
 
 describe('write confirmation', () => {
   it('identifies write tools by name', () => {

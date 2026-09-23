@@ -3,10 +3,10 @@
  */
 
 import { randomUUID } from 'crypto';
-import { config } from '../config/index.js';
-import { redisDel, redisGet, redisSet } from '../services/redisClient.js';
-import { getToolRegistrySnapshot } from '../mcp/server.js';
-import { inferCapabilitiesFromToolName } from '../mcp/toolCapabilities.js';
+import { config } from '../../config/index.js';
+import { redisDel, redisGet, redisSet } from '../../services/redisClient.js';
+import { getToolRegistrySnapshot } from '../../mcp/server.js';
+import { inferCapabilitiesFromToolName } from '../../mcp/toolCapabilities.js';
 
 function confirmKey(ref) {
   const companyId = String(ref.companyId || ref.company_id || '');

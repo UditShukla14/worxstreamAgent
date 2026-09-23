@@ -7,7 +7,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { config } from '../config/index.js';
+import { config } from '../../config/index.js';
 
 const anthropic = new Anthropic({ apiKey: config.anthropic.apiKey });
 

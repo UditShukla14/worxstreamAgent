@@ -12,9 +12,9 @@ import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import { requestContextMiddleware } from './middleware/requestContext.js';
 import { getAvailableTools } from './mcp/server.js';
 import { connectDB } from './db/connection.js';
-import { initializeAgents, getAgentKeys } from './agents/index.js';
-import { initializeGovernanceAgents, getGovernanceAgentKeys, reconcileOrphanedRuns } from './control/index.js';
-import { startReportScheduler } from './control/reportScheduler.js';
+import { initializeAgents, getAgentKeys } from './nova/agents/index.js';
+import { initializeGovernanceAgents, getGovernanceAgentKeys, reconcileOrphanedRuns } from './governance/index.js';
+import { startReportScheduler } from './governance/reports/scheduler.js';
 
 // Import tools to trigger registration (must happen before agent init)
 import './mcp/tools/index.js';
@@ -111,8 +111,8 @@ async function startServer() {
       }
       console.log(`🤖 Using model: ${config.anthropic.model}`);
       console.log(`🔧 Available MCP tools: ${getAvailableTools().length}`);
-      console.log(`🤖 Specialist agents: ${agentKeys.length} (${agentKeys.join(', ')})`);
-      console.log(`🛡️  Governance agents: ${governanceKeys.length} (${governanceKeys.join(', ')})`);
+      console.log(`🤖 Nova coworker agents: ${agentKeys.length} (${agentKeys.join(', ')})`);
+      console.log(`🛡️  Control Tower governance: ${governanceKeys.length} (${governanceKeys.join(', ')})`);
       console.log(`📦 MongoDB connected`);
       console.log('='.repeat(60));
       console.log('\nEndpoints:');

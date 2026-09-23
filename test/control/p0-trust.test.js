@@ -1,9 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { hmacSha256Hex, verifyWebhookAuth } from '../../src/control/verifyWebhook.js';
+import { hmacSha256Hex, verifyWebhookAuth } from '../../src/governance/pipeline/verifyWebhook.js';
 import { bindCompanyId, bindUserId, parseUserInfoPayload } from '../../src/utils/worxstreamIdentity.js';
-import { agentStatFromRuns, runBelongsToAgent, stepBelongsToAgent } from '../../src/control/dashboardStats.js';
-import { interruptOrphanedRun, ORPHAN_RUN_DETAIL } from '../../src/control/reconcileOrphanedRuns.js';
+import { agentStatFromRuns, runBelongsToAgent, stepBelongsToAgent } from '../../src/governance/pipeline/dashboardStats.js';
+import { interruptOrphanedRun, ORPHAN_RUN_DETAIL } from '../../src/governance/pipeline/reconcileOrphanedRuns.js';
 
 describe('verifyWebhookAuth', () => {
   const secret = 'tower-secret';
@@ -141,7 +141,7 @@ describe('orphan run interrupt', () => {
 
 describe('catalog findings merge', () => {
   it('drops invented default-threshold findings that are not in the catalog', async () => {
-    const { mergeCatalogFindings } = await import('../../src/control/pipelineRunner.js');
+    const { mergeCatalogFindings } = await import('../../src/governance/pipeline/runner.js');
     const steps = mergeCatalogFindings({
       items: [
         { kind: 'policy', id: '1', name: 'Credit Hold Policy' },
@@ -168,7 +168,7 @@ describe('catalog findings merge', () => {
   });
 
   it('does not turn leftover findings into steps when the catalog is empty', async () => {
-    const { mergeCatalogFindings } = await import('../../src/control/pipelineRunner.js');
+    const { mergeCatalogFindings } = await import('../../src/governance/pipeline/runner.js');
     const steps = mergeCatalogFindings({
       items: [],
       findings: [{

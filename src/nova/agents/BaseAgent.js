@@ -8,11 +8,11 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { config } from '../config/index.js';
-import { getAnthropicTools, getAnthropicToolsForToolSearch, executeMcpTool } from '../mcp/server.js';
+import { config } from '../../config/index.js';
+import { getAnthropicTools, getAnthropicToolsForToolSearch, executeMcpTool } from '../../mcp/server.js';
 import { rex } from './AgentTracker.js';
 import { getSoulSystemPrompt } from './soul.js';
-import { getToolIndex } from '../mcp/toolIndex.js';
+import { getToolIndex } from '../../mcp/toolIndex.js';
 import {
   shouldFetchAllPages,
   inferDesiredStatus,
@@ -25,6 +25,7 @@ import {
   shouldConfirmWrites,
   storePendingConfirm,
 } from './pendingConfirm.js';
+import { COWORKER_SHARED_RULES, stripDuplicatedSharedRules } from './coworkerRules.js';
 
 const MAX_TOOL_ITERATIONS = Number.isFinite(config.agentRuntime?.maxToolIterations)
   ? config.agentRuntime.maxToolIterations
@@ -51,10 +52,20 @@ export class BaseAgent {
       : null;
     /** Cross-domain helper tools (e.g. dropdown lookups) this agent may call. */
     this.extraTools = Array.isArray(definition.extraTools) ? definition.extraTools : [];
+    /** Opt-in wider tool discovery; falls back to global config.anthropic.useToolSearch. */
+    this.useToolSearch = definition.useToolSearch === true
+      ? true
+      : definition.useToolSearch === false
+        ? false
+        : null;
     const soul = getSoulSystemPrompt();
+    const specialistPrompt = stripDuplicatedSharedRules(definition.systemPrompt || '');
+    const withShared = this.agentKey === 'nova'
+      ? specialistPrompt
+      : `${specialistPrompt}\n\n${COWORKER_SHARED_RULES}`;
     const base = soul
-      ? `${soul}\n\n${definition.systemPrompt}`
-      : definition.systemPrompt;
+      ? `${soul}\n\n${withShared}`
+      : withShared;
     const resumeNote = '\n\nIf [Session focus] shows a failed last action, attempt recovery (correct IDs/parameters) before asking the user to repeat.';
     const lookupNote = '\n\nID RESOLUTION: NEVER ask the user for an internal ID (user, customer, contact, product, vendor, tax, job, project...). When the user gives a name, call the resolve_entity tool (entity_type + the name) — or a domain lookup tool you have — to get the ID yourself. Only ask the user when the lookup finds nothing or returns multiple ambiguous matches (then show the matching names, never raw IDs).';
     this.systemPrompt = appendPlaybookToPrompt(base + resumeNote + lookupNote, definition.domain);
@@ -104,8 +115,12 @@ export class BaseAgent {
 
     const allowList = [...allowSet];
 
+    const toolSearchOn = this.useToolSearch !== null
+      ? this.useToolSearch
+      : config.anthropic.useToolSearch;
+
     // Prefer tool-search mode when enabled, scoped to allowed tools.
-    if (config.anthropic.useToolSearch) {
+    if (toolSearchOn) {
       return getAnthropicToolsForToolSearch(allowList);
     }
 

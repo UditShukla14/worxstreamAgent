@@ -26,14 +26,14 @@ import {
   resolveAlertsById,
   backfillMissingResolveReasons,
   LEGACY_RESOLVE_REASON,
-} from '../control/index.js';
-import { callWorxstreamAPI } from '../services/httpClient.js';
-import { customerTypeFromPayload, entityLabelFromPayload, preparedByFromPayload } from '../control/contextBuilder.js';
-import { eventTypesFromRule, parseRuleEventTypes, ruleChunkContent } from '../control/ruleEvents.js';
-import { requireControlAuth } from '../middleware/requireControlAuth.js';
-import { agentStatFromRuns } from '../control/dashboardStats.js';
-import { createReportRouter } from '../control/reportRoutes.js';
-import { SCRIBE_AGENT_DEFINITION, SCRIBE_AGENT_KEY } from '../control/reportingAgents.js';
+} from '../index.js';
+import { callWorxstreamAPI } from '../../services/httpClient.js';
+import { customerTypeFromPayload, entityLabelFromPayload, preparedByFromPayload } from '../pipeline/contextBuilder.js';
+import { eventTypesFromRule, parseRuleEventTypes, ruleChunkContent } from '../pipeline/ruleEvents.js';
+import { requireControlAuth } from '../../middleware/requireControlAuth.js';
+import { agentStatFromRuns } from '../pipeline/dashboardStats.js';
+import { createReportRouter } from '../reports/routes.js';
+import { SCRIBE_AGENT_DEFINITION, SCRIBE_AGENT_KEY } from '../agents/reporting.js';
 
 const router = Router();
 

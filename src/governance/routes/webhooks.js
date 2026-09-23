@@ -8,10 +8,10 @@
  */
 
 import { Router } from 'express';
-import { acceptGovernanceEvent } from '../control/ingestEvent.js';
-import { eventFromWorxstreamWebhook } from '../control/fromDelivery.js';
-import { recordInboundDelivery } from '../control/recordInboundDelivery.js';
-import { verifyWebhookRequest } from '../control/verifyWebhook.js';
+import { acceptGovernanceEvent } from '../pipeline/ingest.js';
+import { eventFromWorxstreamWebhook } from '../pipeline/fromDelivery.js';
+import { recordInboundDelivery } from '../pipeline/recordInboundDelivery.js';
+import { verifyWebhookRequest } from '../pipeline/verifyWebhook.js';
 
 const router = Router();
 

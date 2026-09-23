@@ -34,7 +34,7 @@ const ACTIONS = /** @type {const} */ ({
 /**
  * Ordered domain rules: first matching substring wins, so the most specific
  * patterns MUST come first. Every rule maps to one of the agent domains in
- * src/agents/agentDefinitions.js (plus 'reports', handled separately).
+ * src/nova/agents/agentDefinitions.js (plus 'reports', handled separately).
  *
  * Ordering traps encoded here:
  * - 'organization_contact' (company.js) before 'contact' (CRM)
@@ -46,7 +46,6 @@ const ACTIONS = /** @type {const} */ ({
  */
 const DOMAIN_RULES = [
   // Governance-only tools (must precede any generic match; not in chat router)
-  ['invoke_agent', 'governance'],
   ['relevant_policies', 'governance'],
   ['organization_contact', 'company'],
   ['credit_memo', 'credit_memo'],

@@ -10,8 +10,8 @@ import GovernanceAlert from '../models/GovernanceAlert.js';
 import GovernancePolicy from '../models/GovernancePolicy.js';
 import GovernanceRule from '../models/GovernanceRule.js';
 import PipelineRun from '../models/PipelineRun.js';
-import { eventTypesFromRule, ruleAppliesToEvent } from './ruleEvents.js';
-import { evaluateGovernanceEvent } from './pipelineRunner.js';
+import { eventTypesFromRule, ruleAppliesToEvent } from '../pipeline/ruleEvents.js';
+import { evaluateGovernanceEvent } from '../pipeline/runner.js';
 
 const runningCompanies = new Set();
 const FLUSH_EVERY = 20;

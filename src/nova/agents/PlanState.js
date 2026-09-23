@@ -5,8 +5,8 @@
  * brittle regex heuristics. Stored in Redis (best-effort, no hard dependency).
  */
  
-import { redisDel, redisGet, redisSet } from '../services/redisClient.js';
-import { config, getWorxstreamContext } from '../config/index.js';
+import { redisDel, redisGet, redisSet } from '../../services/redisClient.js';
+import { config, getWorxstreamContext } from '../../config/index.js';
  
 function normalizeRef(ref) {
   if (typeof ref === 'string') {

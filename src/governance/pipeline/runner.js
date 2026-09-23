@@ -10,8 +10,8 @@ import { randomUUID } from 'crypto';
 import PipelineRun from '../models/PipelineRun.js';
 import GovernanceAlert from '../models/GovernanceAlert.js';
 import { getPipelineForEvent } from './pipelineConfig.js';
-import { getGovernanceAgent } from './governanceRegistry.js';
-import { AEGIS_AGENT_KEY, getGovernanceAgentName } from './governanceAgents.js';
+import { getGovernanceAgent } from '../agents/registry.js';
+import { AEGIS_AGENT_KEY, getGovernanceAgentName } from '../agents/definitions.js';
 import {
   buildMasterMessage,
   catalogCheckItems,
@@ -21,9 +21,13 @@ import {
   loadPolicyCatalog,
 } from './contextBuilder.js';
 import { findingKey, parseGovernanceFindings, runStatusFromSteps } from './parseVerdict.js';
-import { hydrateSharedContext } from './hydrateSharedContext.js';
-import { getDefaultTenantIds } from '../config/index.js';
-import { runWithRequestContext } from '../request/requestContext.js';
+import { hydrateSharedContext } from './hydrate.js';
+import { getDefaultTenantIds } from '../../config/index.js';
+import { runWithRequestContext } from '../../request/requestContext.js';
+import {
+  mergeStructuredOverLlm,
+  runStructuredCatalogChecks,
+} from './structuredChecks.js';
 
 /** Cooperative cancel: stop is honored between master-agent steps, not mid-LLM call. */
 const cancelRequested = new Set();
@@ -357,6 +361,22 @@ export function mergeCatalogFindings({ items, findings, failure, excerpt, entity
   });
 }
 
+function catalogRowsForStructured(catalog) {
+  const policies = Array.isArray(catalog?.policies) ? catalog.policies : [];
+  const rules = Array.isArray(catalog?.rules) ? catalog.rules : [];
+  return [
+    ...policies.map((row) => ({
+      name: String(row.name || '').trim(),
+      content: row.content,
+    })),
+    ...rules.map((row) => ({
+      name: String(row.name || '').trim(),
+      condition: row.condition,
+      action: row.action,
+    })),
+  ].filter((row) => row.name);
+}
+
 async function runAegisChecks({
   eventType,
   payload,
@@ -405,6 +425,12 @@ async function runAegisChecks({
     }), { toolsUsed: [], durationMs: Date.now() - stepStart, tokens: 0 });
   }
 
+  const structuredFindings = runStructuredCatalogChecks({
+    catalogItems: catalogRowsForStructured(catalog),
+    payload,
+    enrichment: snapshot,
+  });
+
   try {
     const message = buildMasterMessage({
       eventType,
@@ -442,16 +468,28 @@ async function runAegisChecks({
       ? ''
       : (parsed.excerpt || 'Aegis did not return structured JSON.');
 
+    const findings = mergeStructuredOverLlm(parsed.findings, structuredFindings);
+
     return attachRunMeta(mergeCatalogFindings({
       items,
-      findings: parsed.findings,
-      failure,
+      findings,
+      failure: structuredFindings.length && !parsed.ok ? '' : failure,
       excerpt: parsed.excerpt,
       entityLabel,
     }), { toolsUsed, durationMs, tokens });
   } catch (error) {
     console.error('❌ [Aegis] pipeline failed:', error);
     const failure = error.message || String(error);
+    // If structured checks produced findings, still surface them when LLM fails.
+    if (structuredFindings.length) {
+      return attachRunMeta(mergeCatalogFindings({
+        items,
+        findings: structuredFindings,
+        failure: '',
+        excerpt: failure,
+        entityLabel,
+      }), { toolsUsed: [], durationMs: Date.now() - stepStart, tokens: 0 });
+    }
     return attachRunMeta(mergeCatalogFindings({
       items,
       findings: [],
@@ -496,7 +534,13 @@ export async function evaluateGovernanceEvent({
       skipClarification: true,
     });
     const parsed = parseGovernanceFindings(result.response, { relatedEntity: entityLabel });
-    return { ok: parsed.ok, findings: parsed.findings, entityLabel };
+    const structuredFindings = runStructuredCatalogChecks({
+      catalogItems: catalogRowsForStructured(catalog),
+      payload: hydrated.payload,
+      enrichment: hydrated.snapshot,
+    });
+    const findings = mergeStructuredOverLlm(parsed.findings, structuredFindings);
+    return { ok: parsed.ok || structuredFindings.length > 0, findings, entityLabel };
   } catch (error) {
     console.error('❌ [Vigil] catalog re-check failed:', error);
     return { ok: false, findings: [], entityLabel };

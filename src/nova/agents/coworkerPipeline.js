@@ -4,7 +4,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { randomUUID } from 'crypto';
-import { config } from '../config/index.js';
+import { config } from '../../config/index.js';
 import Conversation from '../models/Conversation.js';
 import {
   AGENT_DEFINITIONS,
@@ -26,19 +26,19 @@ import {
 } from './ConversationContext.js';
 import { mergeWorkingSet } from './workingMemory.js';
 import { clearPlanState, getPlanState, setPlanState } from './PlanState.js';
-import { getCurrentDateTimeContext } from '../utils/dateContext.js';
+import { getCurrentDateTimeContext } from '../../utils/dateContext.js';
 import {
   buildOrchestratorMessages,
   buildSpecialistHistory,
   logContextUsage,
   messageContentToString,
-} from '../utils/conversationHistory.js';
+} from '../../utils/conversationHistory.js';
 import {
   maybeRefreshSummary,
   formatSummaryForPrompt,
-} from '../utils/conversationSummary.js';
+} from '../../utils/conversationSummary.js';
 import { detectClarificationNeeded } from './workingMemory.js';
-import { executeMcpTool } from '../mcp/server.js';
+import { executeMcpTool } from '../../mcp/server.js';
 import { clearPendingConfirm, getPendingConfirm } from './pendingConfirm.js';
 import UserPreferences from '../models/UserPreferences.js';
 

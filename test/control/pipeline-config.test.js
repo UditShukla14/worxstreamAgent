@@ -1,14 +1,14 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { getPipelineForEvent, listPipelines } from '../../src/control/pipelineConfig.js';
-import { eventFromWorxstreamDelivery, eventFromWorxstreamWebhook } from '../../src/control/fromDelivery.js';
-import { isChildAgentKey } from '../../src/agents/agentDefinitions.js';
-import { isGovernanceAgentKey } from '../../src/control/governanceAgents.js';
-import { parseAgentVerdict, parseGovernanceFindings, runStatusFromSteps, stripJsonCodeFence } from '../../src/control/parseVerdict.js';
-import { entityLabelFromPayload, customerTypeFromPayload, preparedByFromPayload, buildMasterMessage } from '../../src/control/contextBuilder.js';
-import { GOVERNANCE_AGENT_DEFINITIONS } from '../../src/control/governanceAgents.js';
-import { eventTypesFromRule, parseRuleEventTypes, ruleAppliesToEvent } from '../../src/control/ruleEvents.js';
-import { tokenize, chunkText, scoreChunk } from '../../src/control/rag.js';
+import { getPipelineForEvent, listPipelines } from '../../src/governance/pipeline/pipelineConfig.js';
+import { eventFromWorxstreamDelivery, eventFromWorxstreamWebhook } from '../../src/governance/pipeline/fromDelivery.js';
+import { isChildAgentKey } from '../../src/nova/agents/agentDefinitions.js';
+import { isGovernanceAgentKey } from '../../src/governance/agents/definitions.js';
+import { parseAgentVerdict, parseGovernanceFindings, runStatusFromSteps, stripJsonCodeFence } from '../../src/governance/pipeline/parseVerdict.js';
+import { entityLabelFromPayload, customerTypeFromPayload, preparedByFromPayload, buildMasterMessage } from '../../src/governance/pipeline/contextBuilder.js';
+import { GOVERNANCE_AGENT_DEFINITIONS } from '../../src/governance/agents/definitions.js';
+import { eventTypesFromRule, parseRuleEventTypes, ruleAppliesToEvent } from '../../src/governance/pipeline/ruleEvents.js';
+import { tokenize, chunkText, scoreChunk } from '../../src/governance/pipeline/rag.js';
 
 describe('pipeline config', () => {
   it('maps governed events to Aegis', () => {
@@ -391,7 +391,7 @@ describe('rule event types', () => {
 
 describe('shared governance context', () => {
   it('extracts ids and maps product qty to stock_qty', async () => {
-    const { extractEntityIds, pickStockQty, compactProduct } = await import('../../src/control/hydrateSharedContext.js');
+    const { extractEntityIds, pickStockQty, compactProduct } = await import('../../src/governance/pipeline/hydrate.js');
     assert.equal(extractEntityIds({ estimate_id: 1, customer_id: 2 }, 'estimate.created').customer_id, 2);
     assert.deepEqual(pickStockQty({ qty: 12 }), { stock_qty: 12, stock_field: 'qty' });
     assert.equal(pickStockQty({}).stock_qty, null);
@@ -401,7 +401,7 @@ describe('shared governance context', () => {
   });
 
   it('returns full line items from payload sections without field stripping', async () => {
-    const { lineItemsFromRecord } = await import('../../src/control/hydrateSharedContext.js');
+    const { lineItemsFromRecord } = await import('../../src/governance/pipeline/hydrate.js');
     const items = lineItemsFromRecord({
       sections: [
         {
@@ -429,7 +429,7 @@ describe('shared governance context', () => {
       payloadIsSubstantive,
       productIdsFromPayload,
       payloadLinesNeedStockLookup,
-    } = await import('../../src/control/hydrateSharedContext.js');
+    } = await import('../../src/governance/pipeline/hydrate.js');
     const payload = {
       id: 80000019668,
       customNumber: '26-5107',

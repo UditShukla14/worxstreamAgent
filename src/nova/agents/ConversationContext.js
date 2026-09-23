@@ -9,8 +9,8 @@
  * Globally accessible by all agents: router, specialist, formatter.
  */
 
-import { config, getWorxstreamContext } from '../config/index.js';
-import { redisDel, redisGet, redisSet } from '../services/redisClient.js';
+import { config, getWorxstreamContext } from '../../config/index.js';
+import { redisDel, redisGet, redisSet } from '../../services/redisClient.js';
 import {
   deriveWorkingSetDelta,
   formatWorkingSetForPrompt,

@@ -5,7 +5,7 @@
  * Kept intentionally minimal + backward-compatible.
  */
  
-import { normalizeListInput } from '../agents/policies/listPolicies.js';
+import { normalizeListInput } from '../nova/agents/policies/listPolicies.js';
  
 const LATEST_HINTS = [
   /\blatest\b/i,

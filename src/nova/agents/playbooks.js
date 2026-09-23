@@ -7,7 +7,8 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PLAYBOOK_DIR = join(__dirname, '../../docs/playbooks');
+// src/nova/agents → repo docs/playbooks
+const PLAYBOOK_DIR = join(__dirname, '../../../docs/playbooks');
 
 const cache = new Map();
 
@@ -18,6 +19,18 @@ const DOMAIN_FILES = {
   workflow: 'workflow.md',
   reports: 'reports.md',
 };
+
+/** Extra markdown fragments loaded after the domain playbook (e.g. chart XML). */
+const DOMAIN_EXTRAS = {
+  reports: ['reports-charts.md'],
+};
+
+/**
+ * @returns {string[]}
+ */
+export function listPlaybookDomains() {
+  return Object.keys(DOMAIN_FILES);
+}
 
 /**
  * @param {string|null|undefined} domain
@@ -33,7 +46,13 @@ export function getPlaybookForDomain(domain) {
     cache.set(key, '');
     return '';
   }
-  const text = readFileSync(path, 'utf8').trim();
+  let text = readFileSync(path, 'utf8').trim();
+  for (const extra of DOMAIN_EXTRAS[key] || []) {
+    const extraPath = join(PLAYBOOK_DIR, extra);
+    if (existsSync(extraPath)) {
+      text = `${text}\n\n${readFileSync(extraPath, 'utf8').trim()}`;
+    }
+  }
   cache.set(key, text);
   return text;
 }

@@ -7,10 +7,10 @@
 
 import GovernancePolicy from '../models/GovernancePolicy.js';
 import GovernanceRule from '../models/GovernanceRule.js';
-import { syncGovernanceDocumentChunks } from './rag.js';
-import { refreshCatalogContext } from './catalogContext.js';
+import { syncGovernanceDocumentChunks } from '../pipeline/rag.js';
+import { refreshCatalogContext } from '../pipeline/catalogContext.js';
 import { SEED_POLICIES, SEED_RULES } from './seedData.js';
-import { ruleChunkContent } from './ruleEvents.js';
+import { ruleChunkContent } from '../pipeline/ruleEvents.js';
 
 /**
  * @param {string} companyId

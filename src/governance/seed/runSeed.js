@@ -11,11 +11,11 @@
  */
 
 import mongoose from 'mongoose';
-import { config } from '../config/index.js';
-import { connectDB, disconnectDB } from '../db/connection.js';
-import Conversation from '../models/Conversation.js';
-import { seedGovernanceForCompany } from '../control/seedGovernance.js';
-import { SEED_POLICIES, SEED_RULES } from '../control/seedData.js';
+import { config } from '../../config/index.js';
+import { connectDB, disconnectDB } from '../../db/connection.js';
+import Conversation from '../../nova/models/Conversation.js';
+import { seedGovernanceForCompany } from './seedGovernance.js';
+import { SEED_POLICIES, SEED_RULES } from './seedData.js';
 
 function resolveCompanyId(conversationIds) {
   const fromEnv = (process.env.SEED_COMPANY_ID || process.env.DEFAULT_COMPANY_ID || '').trim();

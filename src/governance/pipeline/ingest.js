@@ -5,9 +5,9 @@
 import { randomUUID } from 'crypto';
 import ProcessedEvent from '../models/ProcessedEvent.js';
 import PipelineRun from '../models/PipelineRun.js';
-import { startPipelineInBackground } from './pipelineRunner.js';
+import { startPipelineInBackground } from './runner.js';
 import { getPipelineForEvent, normalizeEventType } from './pipelineConfig.js';
-import { getDefaultTenantIds } from '../config/index.js';
+import { getDefaultTenantIds } from '../../config/index.js';
 
 /**
  * @param {object} input

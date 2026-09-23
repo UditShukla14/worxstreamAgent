@@ -3,16 +3,16 @@
  * then evaluate configured criteria (missing fields, negative profit).
  */
 
-import { callWorxstreamAPI } from '../services/httpClient.js';
-import { getWorxstreamContext } from '../config/index.js';
-import { runWithRequestContext } from '../request/requestContext.js';
-import { requireEnvWorxstreamCredentials } from '../utils/worxstreamCredentials.js';
+import { callWorxstreamAPI } from '../../services/httpClient.js';
+import { getWorxstreamContext } from '../../config/index.js';
+import { runWithRequestContext } from '../../request/requestContext.js';
+import { requireEnvWorxstreamCredentials } from '../../utils/worxstreamCredentials.js';
 import ReportRun from '../models/ReportRun.js';
 import {
   buildRowSnapshot,
   evaluateReportCriteria,
   readField,
-} from './reportCriteria.js';
+} from './criteria.js';
 
 const MAX_PAGES = 10;
 const PAGE_LIMIT = 50;

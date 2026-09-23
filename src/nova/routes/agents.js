@@ -10,15 +10,15 @@ import {
   AGENT_DEFINITIONS,
   getAgentKeys,
 } from '../agents/agentDefinitions.js';
-import { getToolIndex } from '../mcp/toolIndex.js';
+import { getToolIndex } from '../../mcp/toolIndex.js';
 import { rex } from '../agents/AgentTracker.js';
 import {
   runCoworkerTurn,
   runConfirmAction,
   deleteConversationFull,
 } from '../agents/coworkerPipeline.js';
-import { requireWorxstreamAuth } from '../middleware/requireWorxstreamAuth.js';
-import { resolveConversationTenantIds } from '../utils/worxstreamCredentials.js';
+import { requireWorxstreamAuth } from '../../middleware/requireWorxstreamAuth.js';
+import { resolveConversationTenantIds } from '../../utils/worxstreamCredentials.js';
 
 const router = Router();
 

@@ -9,6 +9,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { normalizeToolCapabilities } from './toolCapabilities.js';
 import { afterToolCall, beforeToolCall, onToolError } from './toolPolicyPipeline.js';
+import { isPublicMcpTool, registerCoworkerMcpSurface } from '../nova/mcpSurface.js';
 
 // Tool registry - tracks all registered tools
 const toolRegistry = new Map();
@@ -36,9 +37,9 @@ export function registerTool(name, options, callback) {
 }
 
 /**
- * Create a fresh SDK McpServer with every registered tool.
- * Each instance can only connect to one transport, so the stateless
- * Streamable HTTP route calls this per request.
+ * Create a fresh SDK McpServer for external MCP clients (POST /mcp).
+ * Omits governance-only tools; registers coworker resources + prompts.
+ * In-process agents still use the full toolRegistry via executeMcpTool.
  */
 export function createMcpServer() {
   const server = new McpServer({
@@ -47,6 +48,7 @@ export function createMcpServer() {
   });
 
   for (const [name, tool] of toolRegistry) {
+    if (!isPublicMcpTool(name, tool.capabilities)) continue;
     server.registerTool(
       name,
       {
@@ -57,6 +59,8 @@ export function createMcpServer() {
       tool.callback
     );
   }
+
+  registerCoworkerMcpSurface(server);
 
   return server;
 }

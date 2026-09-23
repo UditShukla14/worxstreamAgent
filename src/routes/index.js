@@ -4,13 +4,13 @@
 
 import { Router } from 'express';
 import healthRoutes from './health.js';
-import sessionRoutes from './session.js';
+import sessionRoutes from '../nova/routes/session.js';
 import toolsRoutes from './tools.js';
 import priceComparisonRoutes from './priceComparison.js';
-import agentRoutes from './agents.js';
-import rexRoutes from './rex.js';
-import webhookRoutes from './webhooks.js';
-import controlRoutes from './control.js';
+import agentRoutes from '../nova/routes/agents.js';
+import rexRoutes from '../nova/routes/rex.js';
+import webhookRoutes from '../governance/routes/webhooks.js';
+import controlRoutes from '../governance/routes/control.js';
 import mcpRoutes from './mcp.js';
 
 const router = Router();

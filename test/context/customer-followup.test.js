@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   detectClarificationNeeded,
   resolveClarificationPick,
-} from '../../src/agents/workingMemory.js';
+} from '../../src/nova/agents/workingMemory.js';
 
 describe('customer follow-up / clarification', () => {
   const ctx = {

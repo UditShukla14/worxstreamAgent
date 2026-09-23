@@ -6,8 +6,8 @@ import {
   invalidateCatalogContext,
   peekCatalogContext,
   primeCatalogContext,
-} from '../../src/control/catalogContext.js';
-import { loadPolicyCatalog } from '../../src/control/contextBuilder.js';
+} from '../../src/governance/pipeline/catalogContext.js';
+import { loadPolicyCatalog } from '../../src/governance/pipeline/contextBuilder.js';
 
 const snapshot = {
   policies: [

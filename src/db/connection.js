@@ -4,7 +4,7 @@
 
 import mongoose from 'mongoose';
 import { config } from '../config/index.js';
-import { ensureGovernanceSeedKeyIndexes } from './governanceIndexes.js';
+import { ensureGovernanceSeedKeyIndexes } from '../governance/db/governanceIndexes.js';
 
 let isConnected = false;
 

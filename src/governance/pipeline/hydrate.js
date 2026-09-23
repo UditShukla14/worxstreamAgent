@@ -9,8 +9,8 @@
  * When the payload is substantive, no entity/line-item fields are copied or remapped.
  */
 
-import { callWorxstreamAPI } from '../services/httpClient.js';
-import { getWorxstreamContext } from '../config/index.js';
+import { callWorxstreamAPI } from '../../services/httpClient.js';
+import { getWorxstreamContext } from '../../config/index.js';
 
 const STOCK_FIELDS = [
   'quantity_on_hand',

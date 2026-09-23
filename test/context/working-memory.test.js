@@ -4,7 +4,7 @@ import {
   deriveWorkingSetDelta,
   formatWorkingSetForPrompt,
   mergeWorkingSet,
-} from '../../src/agents/workingMemory.js';
+} from '../../src/nova/agents/workingMemory.js';
 
 describe('working memory', () => {
   it('records failed create_* in lastOutcome', () => {

@@ -8,8 +8,8 @@ process.env.WORXSTREAM_BASE_URL ||= 'http://localhost';
 
 await import('../../src/mcp/tools/index.js'); // side effect: registers all tools
 const { getToolIndex } = await import('../../src/mcp/toolIndex.js');
-const { AGENT_DEFINITIONS } = await import('../../src/agents/agentDefinitions.js');
-const { GOVERNANCE_AGENT_DEFINITIONS } = await import('../../src/control/governanceAgents.js');
+const { AGENT_DEFINITIONS } = await import('../../src/nova/agents/agentDefinitions.js');
+const { GOVERNANCE_AGENT_DEFINITIONS } = await import('../../src/governance/agents/definitions.js');
 const { ENTITY_LOOKUPS } = await import('../../src/mcp/tools/lookup.js');
 
 const index = getToolIndex();
@@ -87,9 +87,16 @@ describe('agent tool domains', () => {
   });
 
   it('governance tools are isolated from chat agent domains', () => {
-    assert.ok(bucketNames('governance').includes('invoke_agent'));
     assert.ok(bucketNames('governance').includes('get_relevant_policies'));
+    assert.ok(
+      !bucketNames('governance').includes('invoke_agent'),
+      'invoke_agent bridge must stay removed',
+    );
     for (const domain of AGENT_DOMAINS) {
+      assert.ok(
+        !bucketNames(domain).includes('get_relevant_policies'),
+        `chat domain "${domain}" must not include get_relevant_policies`,
+      );
       assert.ok(
         !bucketNames(domain).includes('invoke_agent'),
         `chat domain "${domain}" must not include invoke_agent`,

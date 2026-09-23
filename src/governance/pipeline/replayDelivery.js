@@ -5,7 +5,7 @@
 
 import { randomUUID } from 'crypto';
 import { eventFromWorxstreamWebhook } from './fromDelivery.js';
-import { acceptGovernanceEvent } from './ingestEvent.js';
+import { acceptGovernanceEvent } from './ingest.js';
 
 function asRows(value) {
   if (!Array.isArray(value)) return [];

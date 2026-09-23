@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { eventFromWorxstreamWebhook } from '../../src/control/fromDelivery.js';
-import { replayGovernanceDeliveries } from '../../src/control/replayDelivery.js';
+import { eventFromWorxstreamWebhook } from '../../src/governance/pipeline/fromDelivery.js';
+import { replayGovernanceDeliveries } from '../../src/governance/pipeline/replayDelivery.js';
 
 describe('failed delivery requestPayload', () => {
   it('runs from the stored WorxStream envelope without a new webhook', () => {

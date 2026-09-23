@@ -7,10 +7,10 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { config } from '../config/index.js';
+import { config } from '../../config/index.js';
 import { BaseAgent } from './BaseAgent.js';
 import { AGENT_DEFINITIONS, getAgentKeys, getAgentDescriptionsForRouter } from './agentDefinitions.js';
-import { buildOrchestratorMessages, logContextUsage } from '../utils/conversationHistory.js';
+import { buildOrchestratorMessages, logContextUsage } from '../../utils/conversationHistory.js';
 
 // ── Singleton agent instances ────────────────────────────────────────
 const agentInstances = new Map();
@@ -38,37 +38,17 @@ Available agents:
 ${getAgentDescriptionsForRouter()}
 
 Rules:
-- For simple greetings, "thanks", or general questions, return: ["none"]
-- For single-domain queries, return one agent key: e.g. ["estimate"]
-- For cross-domain queries that need data from multiple domains, return multiple: e.g. ["customer", "estimate"]
-- When the user says "customer", route to "customer" (NOT "contact").
-- When the user says "contact" or "lead", route to "contact" (NOT "customer").
-- Always return the MINIMUM set of agents needed.
+- Greetings / thanks / general chit-chat → ["none"]
+- Single-domain → one key. Cross-domain → minimum set (e.g. ["customer","estimate"]).
+- "customer" → customer (NOT contact). "contact" or "lead" → contact (NOT customer).
+- Prefer the agent whose description best matches; do not invent keys.
 
-Examples:
-- "hi" or "hello" or "thanks" → ["none"]
-- "list all estimates" → ["estimate"]
-- "show me invoices for customer Acme" → ["invoice"]
-- "list credit memos" / "create credit memo" → ["creditMemo"]
-- "show purchase orders" / "create a PO" → ["purchaseOrder"]
-- "list bills" / "create a bill" → ["bill"]
-- "create a job" → ["job"]
-- "show departments" → ["hr"]
-- "find product ABC" → ["product"]
-- "compare prices in these files" → ["priceComparison"]
-- "create an estimate for customer X" → ["customer", "estimate"]
+Ambiguous cases (follow these):
+- "create an estimate for customer X" → ["customer","estimate"]
 - "convert estimate to invoice" → ["workflow"]
-- "what HVAC systems are available" → ["systemFinder"]
-- "show company details" → ["company"]
-- "list addresses" → ["address"]
-- "show tax configs" → ["finance"]
-- "show me app menus" → ["config"]
-- "list sales orders" / "create a sales order" → ["salesOrder"]
-- "warehouse stock" / "how many units of SKU X" → ["inventory"]
-- "list deals" / "move deal to closed won" → ["deal"]
-- "search everything for Acme" / "notes on this deal" → ["crm"]
-- "received payments" / "payment methods" → ["payments"]
-- "unread notifications" / "email this invoice" → ["communications"]
+- "search everything for Acme" / notes on a deal → ["crm"]
+- "email this invoice" / unread notifications → ["communications"]
+- "warehouse stock" / SKU qty → ["inventory"]
 
 Respond with ONLY a JSON array of agent keys. Nothing else.`;
 }

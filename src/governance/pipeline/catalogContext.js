@@ -9,7 +9,7 @@
 
 import GovernancePolicy from '../models/GovernancePolicy.js';
 import GovernanceRule from '../models/GovernanceRule.js';
-import { redisDel, redisGet, redisSet, redisStatus } from '../services/redisClient.js';
+import { redisDel, redisGet, redisSet, redisStatus } from '../../services/redisClient.js';
 import { eventTypesFromRule, ruleAppliesToEvent } from './ruleEvents.js';
 
 const memory = new Map();

@@ -4,7 +4,7 @@
  */
 
 import { Router } from 'express';
-import * as worxstreamSession from '../session/worxstreamSession.js';
+import * as worxstreamSession from '../../session/worxstreamSession.js';
 
 const router = Router();
 

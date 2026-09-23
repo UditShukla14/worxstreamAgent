@@ -3,7 +3,7 @@
  * non-empty event still runs Aegis so subscribed webhooks are governed.
  */
 
-import { AEGIS_AGENT_KEY } from './governanceAgents.js';
+import { AEGIS_AGENT_KEY } from '../agents/definitions.js';
 
 const AEGIS_PIPELINE = [AEGIS_AGENT_KEY];
 

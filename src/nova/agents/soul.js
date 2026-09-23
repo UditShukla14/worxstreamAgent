@@ -10,7 +10,8 @@ function loadSoulFromDisk() {
   try {
     const __filename = fileURLToPath(import.meta.url);
     const __dirname = path.dirname(__filename);
-    const soulPath = path.resolve(__dirname, '..', '..', 'SOUL.md');
+    // src/nova/agents → repo root
+    const soulPath = path.resolve(__dirname, '..', '..', '..', 'SOUL.md');
     const text = fs.readFileSync(soulPath, 'utf8');
     // Keep it as plain text; callers can prepend it to system prompts.
     cachedSoul = text.trim();
