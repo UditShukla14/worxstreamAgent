@@ -46,7 +46,7 @@ export async function maybeRefreshSummary({
           : `Transcript:\n${transcript}`,
       },
     ],
-  }, { ...usageMeta, phase: 'summary' });
+  }, { ...usageMeta, phase: 'summary', agentKey: 'summary' });
 
   const summary = response.content?.find((b) => b.type === 'text')?.text?.trim() || '';
   if (!summary) return null;

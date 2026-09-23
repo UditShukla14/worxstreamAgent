@@ -119,7 +119,7 @@ export async function formatOutput(userMessage, rawOutput, usageMeta = {}) {
         content: `User's question: ${userMessage}\n\nRaw agent output:\n${rawOutput}`,
       },
     ],
-  }, { ...usageMeta, phase: 'formatter' });
+  }, { ...usageMeta, phase: 'formatter', agentKey: 'formatter' });
 
   const textBlocks = response.content.filter(b => b.type === 'text');
   return stripCodeFence(textBlocks.map(b => b.text).join('\n'));
@@ -150,7 +150,7 @@ export async function formatOutputStreaming(userMessage, rawOutput, res, usageMe
         },
       ],
     },
-    { ...usageMeta, phase: 'formatter' },
+    { ...usageMeta, phase: 'formatter', agentKey: 'formatter' },
     (delta) => sse({ type: 'text', content: delta }),
   );
 

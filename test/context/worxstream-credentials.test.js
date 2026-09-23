@@ -172,4 +172,36 @@ describe('worxstreamCredentials', () => {
       worxstreamSession.clearSession();
     }
   });
+
+  it('conversation tenant prefers session over ALS DEFAULT_* when env credentials are set', async () => {
+    const prev = {
+      company: process.env.DEFAULT_COMPANY_ID,
+      user: process.env.DEFAULT_USER_ID,
+      token: process.env.WORXSTREAM_API_TOKEN,
+    };
+    process.env.DEFAULT_COMPANY_ID = '999';
+    process.env.DEFAULT_USER_ID = '888';
+    process.env.WORXSTREAM_API_TOKEN = 'env-token';
+    worxstreamSession.setSession({
+      companyId: '30000000021',
+      userId: '10000000048',
+      apiToken: 'session-token',
+    });
+
+    try {
+      await runWithRequestContext(
+        { companyId: '999', userId: '888', apiToken: 'env-token' },
+        async () => {
+          const ids = resolveConversationTenantIds({ body: {}, query: {}, headers: {} });
+          assert.equal(ids.companyId, '30000000021');
+          assert.equal(ids.userId, '10000000048');
+        },
+      );
+    } finally {
+      worxstreamSession.clearSession();
+      process.env.DEFAULT_COMPANY_ID = prev.company;
+      process.env.DEFAULT_USER_ID = prev.user;
+      process.env.WORXSTREAM_API_TOKEN = prev.token;
+    }
+  });
 });

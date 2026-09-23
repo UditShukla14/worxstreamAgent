@@ -5,6 +5,7 @@
 import mongoose from 'mongoose';
 import { config } from '../config/index.js';
 import { ensureGovernanceSeedKeyIndexes } from '../governance/db/governanceIndexes.js';
+import { ensureAnalyticsIndexes } from '../analytics/ensureIndexes.js';
 
 let isConnected = false;
 
@@ -34,6 +35,7 @@ export async function connectDB() {
     console.log('✅ MongoDB connected successfully');
 
     await ensureGovernanceSeedKeyIndexes();
+    await ensureAnalyticsIndexes();
     
     // Handle connection events
     mongoose.connection.on('error', (err) => {

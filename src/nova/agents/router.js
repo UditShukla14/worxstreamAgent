@@ -90,7 +90,7 @@ export async function resolveAgentKeys(message, conversationContext = '', priorM
     max_tokens: config.anthropic.maxTokens?.router ?? 100,
     system,
     messages,
-  }, { ...usageMeta, phase: 'router' });
+  }, { ...usageMeta, phase: 'router', agentKey: 'router' });
 
   const routeText = stripJsonCodeFence(routeResponse.content[0]?.text?.trim());
   let agentKeys;

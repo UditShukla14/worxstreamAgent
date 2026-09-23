@@ -72,3 +72,12 @@ describe('normalizeUsageWithCost', () => {
     assert.ok(Math.abs(billed.cost_usd - (2000 / 1e6) * 3 - (500 / 1e6) * 15) < 1e-12);
   });
 });
+
+describe('resolveBillingAgentKey', () => {
+  it('prefers specialist agent_key over phase', async () => {
+    const { resolveBillingAgentKey } = await import('../../src/analytics/recordUsage.js');
+    assert.equal(resolveBillingAgentKey({ agentKey: 'estimate', phase: 'agent' }), 'estimate');
+    assert.equal(resolveBillingAgentKey({ phase: 'formatter' }), 'formatter');
+    assert.equal(resolveBillingAgentKey({}), 'unknown');
+  });
+});

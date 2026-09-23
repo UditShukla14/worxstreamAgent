@@ -5,6 +5,7 @@
 import {
   hasCompleteWorxstreamContext,
   resolveAgentCredentials,
+  resolveConversationTenantIds,
 } from '../utils/worxstreamCredentials.js';
 import { setRequestContext } from '../request/requestContext.js';
 
@@ -39,6 +40,13 @@ export function requireWorxstreamAuth(req, res, next) {
     });
   }
 
-  setRequestContext(ctx);
+  // Keep MCP token from env/request, but bind ALS company/user to the conversation
+  // tenant (request/session) so list/stream never inherit DEFAULT_* from env mode.
+  const conversationTenant = resolveConversationTenantIds(req);
+  setRequestContext({
+    apiToken: ctx.apiToken,
+    companyId: conversationTenant.companyId || ctx.companyId,
+    userId: conversationTenant.userId || ctx.userId,
+  });
   next();
 }

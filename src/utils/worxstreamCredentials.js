@@ -113,27 +113,33 @@ export function resolveAgentCredentials(req) {
 
 /**
  * Mongo conversation / preferences tenancy from the caller only.
- * Prefers request (query/body/headers) → ALS → session. Never uses DEFAULT_COMPANY_ID /
- * DEFAULT_USER_ID — those remain for WorxStream MCP/Scribe API calls via buildWorxstreamContext.
+ * Prefers request (query/body/headers) → session → ALS.
+ * Never uses DEFAULT_COMPANY_ID / DEFAULT_USER_ID.
+ *
+ * When WORXSTREAM_API_TOKEN + DEFAULT_* are set, ALS is seeded with those
+ * defaults (for MCP tools). Ignore ALS in that mode so list/stream/delete
+ * stay scoped to the logged-in user (request or session), not DEFAULT_USER_ID.
  *
  * @param {import('express').Request} [req]
  * @returns {{ companyId?: string, userId?: string }}
  */
 export function resolveConversationTenantIds(req) {
-  const fromAls = getRequestContext() || {};
   const fromReq = req ? requestContextFromReq(req) : {};
   const session = worxstreamSession.getSession() || {};
+  // Env-credential mode overwrites ALS with DEFAULT_* — never use ALS for Mongo.
+  const envMode = Boolean(readEnvWorxstreamCredentials());
+  const fromAls = envMode ? {} : (getRequestContext() || {});
 
   const companyId =
     fromReq.companyId ||
-    fromAls.companyId ||
     session.companyId ||
+    fromAls.companyId ||
     undefined;
 
   const userId =
     fromReq.userId ||
-    fromAls.userId ||
     session.userId ||
+    fromAls.userId ||
     undefined;
 
   return {

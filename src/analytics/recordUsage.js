@@ -1,5 +1,6 @@
 /**
  * Persist Anthropic usage for billing analytics (fire-and-forget).
+ * One event per API call; daily rollups by company, user, agent, and model.
  */
 
 import { config } from '../config/index.js';
@@ -14,6 +15,18 @@ import LlmUsageDaily from './models/LlmUsageDaily.js';
  */
 export function utcDateKey(d = new Date()) {
   return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Billing label for multi-agent attribution.
+ * Prefer specialist agent_key; fall back to phase (router/formatter/…).
+ * @param {object} meta
+ */
+export function resolveBillingAgentKey(meta = {}) {
+  const key = String(meta.agentKey ?? meta.agent_key ?? '').trim();
+  if (key) return key;
+  const phase = String(meta.phase || '').trim();
+  return phase || 'unknown';
 }
 
 /**
@@ -32,11 +45,11 @@ export async function recordUsage(meta = {}, usage = null, model) {
     ).trim();
 
     if (!companyId || !userId) {
-      // Without tenant we cannot bill — skip quietly (e.g. boot-time probes).
       return null;
     }
 
     const phase = LLM_USAGE_PHASES.includes(meta.phase) ? meta.phase : 'agent';
+    const agentKey = resolveBillingAgentKey({ ...meta, phase });
     const rates = config.anthropic.pricing;
     const billed = normalizeUsageWithCost(usage, rates);
     const now = new Date();
@@ -49,7 +62,7 @@ export async function recordUsage(meta = {}, usage = null, model) {
       conversation_id: String(meta.conversationId ?? meta.conversation_id ?? ''),
       request_id: String(meta.requestId ?? meta.request_id ?? ''),
       phase,
-      agent_key: String(meta.agentKey ?? meta.agent_key ?? ''),
+      agent_key: agentKey,
       model: modelId,
       ...billed,
       created_at: now,
@@ -67,19 +80,54 @@ export async function recordUsage(meta = {}, usage = null, model) {
       call_count: 1,
     };
 
-    const upsertDaily = (uid) =>
-      LlmUsageDaily.findOneAndUpdate(
-        { company_id: companyId, user_id: uid, date },
-        {
-          $inc: inc,
-          $set: { updated_at: now },
-          $setOnInsert: { company_id: companyId, user_id: uid, date },
-        },
-        { upsert: true },
-      );
+    /**
+     * Four rollup rows so dashboards can slice by company / user / agent / model
+     * without re-scanning the event ledger:
+     *   (user='', agent='', model='')           company total
+     *   (user=uid, agent='', model='')          user total
+     *   (user='', agent=key, model='')          company × agent
+     *   (user=uid, agent=key, model='')         user × agent
+     *   (user='', agent='', model=id)           company × model
+     *   (user=uid, agent='', model=id)          user × model
+     *   (user='', agent=key, model=id)          company × agent × model
+     *   (user=uid, agent=key, model=id)         user × agent × model
+     */
+    const dims = [
+      { user_id: '', agent_key: '', model: '' },
+      { user_id: userId, agent_key: '', model: '' },
+      { user_id: '', agent_key: agentKey, model: '' },
+      { user_id: userId, agent_key: agentKey, model: '' },
+      { user_id: '', agent_key: '', model: modelId },
+      { user_id: userId, agent_key: '', model: modelId },
+      { user_id: '', agent_key: agentKey, model: modelId },
+      { user_id: userId, agent_key: agentKey, model: modelId },
+    ];
 
-    // Per-user row + company-wide row (user_id '').
-    await Promise.all([upsertDaily(userId), upsertDaily('')]);
+    await Promise.all(
+      dims.map((dim) =>
+        LlmUsageDaily.findOneAndUpdate(
+          {
+            company_id: companyId,
+            user_id: dim.user_id,
+            agent_key: dim.agent_key,
+            model: dim.model,
+            date,
+          },
+          {
+            $inc: inc,
+            $set: { updated_at: now },
+            $setOnInsert: {
+              company_id: companyId,
+              user_id: dim.user_id,
+              agent_key: dim.agent_key,
+              model: dim.model,
+              date,
+            },
+          },
+          { upsert: true },
+        ),
+      ),
+    );
 
     return eventDoc;
   } catch (err) {

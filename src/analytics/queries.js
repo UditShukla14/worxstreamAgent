@@ -1,8 +1,10 @@
 /**
  * Aggregate LLM usage from LlmUsageDaily for admin dashboards.
+ * Totals use agent_key='' + model='' rows; agents/models are separate slices.
  */
 
 import LlmUsageDaily from './models/LlmUsageDaily.js';
+import { config } from '../config/index.js';
 
 /**
  * @param {string|undefined} from
@@ -43,19 +45,43 @@ function sumRows(rows) {
   return totals;
 }
 
+function mapBreakdown(rows, keyField) {
+  const byKey = new Map();
+  for (const r of rows) {
+    const key = r[keyField] || 'unknown';
+    const prev = byKey.get(key) || emptyTotals();
+    byKey.set(key, sumRows([prev, r]));
+  }
+  return [...byKey.entries()]
+    .map(([key, totals]) => ({ [keyField]: key, ...totals }))
+    .sort((a, b) => b.cost_usd - a.cost_usd);
+}
+
 /**
- * Platform overview: totals + top companies.
+ * Platform overview: totals + top companies + agents + models.
  */
 export async function getOverview({ from, to, limit = 20 } = {}) {
   const range = parseDateRange(from, to);
-  const match = {
-    user_id: '',
-    date: { $gte: range.from, $lte: range.to },
-  };
+  const dateMatch = { date: { $gte: range.from, $lte: range.to } };
 
-  const rows = await LlmUsageDaily.find(match).lean();
+  const [totalRows, agentRows, modelRows] = await Promise.all([
+    LlmUsageDaily.find({ ...dateMatch, user_id: '', agent_key: '', model: '' }).lean(),
+    LlmUsageDaily.find({
+      ...dateMatch,
+      user_id: '',
+      agent_key: { $ne: '' },
+      model: '',
+    }).lean(),
+    LlmUsageDaily.find({
+      ...dateMatch,
+      user_id: '',
+      agent_key: '',
+      model: { $ne: '' },
+    }).lean(),
+  ]);
+
   const byCompany = new Map();
-  for (const r of rows) {
+  for (const r of totalRows) {
     const prev = byCompany.get(r.company_id) || emptyTotals();
     byCompany.set(r.company_id, sumRows([prev, r]));
   }
@@ -68,8 +94,17 @@ export async function getOverview({ from, to, limit = 20 } = {}) {
   return {
     from: range.from,
     to: range.to,
-    totals: sumRows(rows),
+    model: config.anthropic.model,
+    totals: sumRows(totalRows),
     companies,
+    agents: mapBreakdown(agentRows, 'agent_key').map(({ agent_key, ...rest }) => ({
+      agent_key,
+      ...rest,
+    })),
+    models: mapBreakdown(modelRows, 'model').map(({ model, ...rest }) => ({
+      model,
+      ...rest,
+    })),
   };
 }
 
@@ -86,25 +121,39 @@ export async function listCompanies({ from, to } = {}) {
 }
 
 /**
- * Company totals + per-user breakdown (+ optional daily series).
+ * Company totals + per-user + per-agent + per-model (+ optional daily series).
  */
 export async function getCompanyUsage(companyId, { from, to, groupBy } = {}) {
   const range = parseDateRange(from, to);
   const cid = String(companyId);
-
-  const companyRows = await LlmUsageDaily.find({
+  const dateMatch = {
     company_id: cid,
-    user_id: '',
     date: { $gte: range.from, $lte: range.to },
-  })
-    .sort({ date: 1 })
-    .lean();
+  };
 
-  const userRows = await LlmUsageDaily.find({
-    company_id: cid,
-    user_id: { $ne: '' },
-    date: { $gte: range.from, $lte: range.to },
-  }).lean();
+  const [companyRows, userRows, agentRows, modelRows] = await Promise.all([
+    LlmUsageDaily.find({ ...dateMatch, user_id: '', agent_key: '', model: '' })
+      .sort({ date: 1 })
+      .lean(),
+    LlmUsageDaily.find({
+      ...dateMatch,
+      user_id: { $ne: '' },
+      agent_key: '',
+      model: '',
+    }).lean(),
+    LlmUsageDaily.find({
+      ...dateMatch,
+      user_id: '',
+      agent_key: { $ne: '' },
+      model: '',
+    }).lean(),
+    LlmUsageDaily.find({
+      ...dateMatch,
+      user_id: '',
+      agent_key: '',
+      model: { $ne: '' },
+    }).lean(),
+  ]);
 
   const byUser = new Map();
   for (const r of userRows) {
@@ -120,8 +169,17 @@ export async function getCompanyUsage(companyId, { from, to, groupBy } = {}) {
     company_id: cid,
     from: range.from,
     to: range.to,
+    model: config.anthropic.model,
     totals: sumRows(companyRows),
     users,
+    agents: mapBreakdown(agentRows, 'agent_key').map(({ agent_key, ...rest }) => ({
+      agent_key,
+      ...rest,
+    })),
+    models: mapBreakdown(modelRows, 'model').map(({ model, ...rest }) => ({
+      model,
+      ...rest,
+    })),
   };
 
   if (groupBy === 'day') {
@@ -141,27 +199,49 @@ export async function getCompanyUsage(companyId, { from, to, groupBy } = {}) {
 }
 
 /**
- * User totals + daily series for one company user.
+ * User totals + daily + agents + models for one company user.
  */
 export async function getUserUsage(companyId, userId, { from, to } = {}) {
   const range = parseDateRange(from, to);
   const cid = String(companyId);
   const uid = String(userId);
-
-  const rows = await LlmUsageDaily.find({
+  const dateMatch = {
     company_id: cid,
     user_id: uid,
     date: { $gte: range.from, $lte: range.to },
-  })
-    .sort({ date: 1 })
-    .lean();
+  };
+
+  const [rows, agentRows, modelRows] = await Promise.all([
+    LlmUsageDaily.find({ ...dateMatch, agent_key: '', model: '' })
+      .sort({ date: 1 })
+      .lean(),
+    LlmUsageDaily.find({
+      ...dateMatch,
+      agent_key: { $ne: '' },
+      model: '',
+    }).lean(),
+    LlmUsageDaily.find({
+      ...dateMatch,
+      agent_key: '',
+      model: { $ne: '' },
+    }).lean(),
+  ]);
 
   return {
     company_id: cid,
     user_id: uid,
     from: range.from,
     to: range.to,
+    model: config.anthropic.model,
     totals: sumRows(rows),
+    agents: mapBreakdown(agentRows, 'agent_key').map(({ agent_key, ...rest }) => ({
+      agent_key,
+      ...rest,
+    })),
+    models: mapBreakdown(modelRows, 'model').map(({ model, ...rest }) => ({
+      model,
+      ...rest,
+    })),
     daily: rows.map((r) => ({
       date: r.date,
       input_tokens: r.input_tokens,

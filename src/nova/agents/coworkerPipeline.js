@@ -146,7 +146,7 @@ async function selfCheckCompletion(userMessage, rawText, usageMeta = {}) {
     max_tokens: 192,
     system: `You are a strict completion checker.\nReturn ONLY strict JSON: {"done": boolean, "next_instruction": string|null}.`,
     messages: [{ role: 'user', content: `User request:\n${userMessage}\n\nAgent raw output:\n${String(rawText || '').slice(0, SELF_CHECK_MAX_CHARS)}` }],
-  }, { ...usageMeta, phase: 'self_check' });
+  }, { ...usageMeta, phase: 'self_check', agentKey: 'self_check' });
   const text = response.content?.find((b) => b.type === 'text')?.text?.trim() || '';
   try {
     const parsed = JSON.parse(text);
@@ -194,7 +194,7 @@ export async function getNovaPlan(message, conversationContext, routing, priorMe
       max_tokens: config.anthropic.maxTokens?.nova ?? 256,
       system: novaSystem,
       messages: novaMessages,
-    }, { ...usageMeta, phase: 'nova_plan' });
+    }, { ...usageMeta, phase: 'nova_plan', agentKey: 'nova_plan' });
 
     const text = response.content[0]?.text?.trim() || '';
     const plan = JSON.parse(stripJsonCodeFence(text));
@@ -231,7 +231,7 @@ async function runGeneralChat({
         system: GENERAL_CHAT_SYSTEM,
         messages: generalMessages,
       },
-      { ...usageMeta, phase: 'general_chat' },
+      { ...usageMeta, phase: 'general_chat', agentKey: 'general_chat' },
       (delta) => sse({ type: 'text', content: delta }),
     );
     return text;
@@ -242,7 +242,7 @@ async function runGeneralChat({
     max_tokens: config.anthropic.maxTokens?.conversation ?? 4096,
     system: GENERAL_CHAT_SYSTEM,
     messages: generalMessages,
-  }, { ...usageMeta, phase: 'general_chat' });
+  }, { ...usageMeta, phase: 'general_chat', agentKey: 'general_chat' });
   return response.content[0]?.text || '';
 }
 
