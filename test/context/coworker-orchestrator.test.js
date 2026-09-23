@@ -71,8 +71,10 @@ describe('coworker orchestrator mode', () => {
     assert.ok(src.includes('COWORKER_MODE=specialists') || src.includes("mode !== 'specialists'"));
   });
 
-  it('shared proportionality applies to every kind of question', () => {
-    assert.ok(COWORKER_SHARED_RULES.includes('every kind of question'));
-    assert.ok(COWORKER_SHARED_RULES.includes('do not hardcode phrase lists'));
+  it('shared proportionality is conversation-based with page-wise safety', () => {
+    assert.ok(COWORKER_SHARED_RULES.includes('no phrase→action'));
+    assert.ok(COWORKER_SHARED_RULES.includes('conversation'));
+    assert.ok(COWORKER_SHARED_RULES.includes('ONE page'));
+    assert.ok(COWORKER_SHARED_RULES.includes('next page'));
   });
 });

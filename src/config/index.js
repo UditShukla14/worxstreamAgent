@@ -174,8 +174,13 @@ export const config = {
   agentRuntime: {
     /** Safety cap to prevent infinite tool loops. */
     maxToolIterations: parseInt(process.env.AGENT_MAX_TOOL_ITERATIONS || '15', 10),
-    /** When user asks for \"all\", how many additional pages to auto-fetch. */
-    maxAutoPages: parseInt(process.env.AGENT_MAX_AUTO_PAGES || '10', 10),
+    /**
+     * Max rows per list_* page. Multi-page aggregation (all_pages) is disabled —
+     * tenants can have thousands of invoices; dumping them breaks the model.
+     */
+    maxListPageSize: parseInt(process.env.AGENT_MAX_LIST_PAGE_SIZE || '25', 10),
+    /** @deprecated Multi-page auto-fetch removed; kept so old env vars do not crash. */
+    maxAutoPages: 0,
     /** Legacy chat loop iteration cap (if used). */
     maxLegacyIterations: parseInt(process.env.CHAT_MAX_ITERATIONS || '20', 10),
     /** After agents run, how many self-check retry loops are allowed. */

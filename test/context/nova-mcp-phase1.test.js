@@ -24,9 +24,9 @@ describe('coworker shared rules', () => {
 
   it('includes LLM-controlled answer proportionality (not phrase hardcoding)', () => {
     assert.ok(COWORKER_SHARED_RULES.includes('ANSWER PROPORTIONALITY'));
-    assert.ok(COWORKER_SHARED_RULES.includes('Match response length'));
-    assert.ok(COWORKER_SHARED_RULES.includes('do not hardcode phrase lists'));
-    assert.ok(COWORKER_SHARED_RULES.includes('every kind of question'));
+    assert.ok(COWORKER_SHARED_RULES.includes('no phrase→action'));
+    assert.ok(COWORKER_SHARED_RULES.includes('conversation'));
+    assert.ok(COWORKER_SHARED_RULES.includes('ONE page'));
   });
 
   it('nova is the default tool-using orchestrator', () => {

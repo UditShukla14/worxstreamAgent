@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { registerTool } from '../server.js';
 import { callWorxstreamAPI, normalizeFilter } from '../../services/httpClient.js';
 import { getWorxstreamContext } from '../../config/index.js';
+import { getMaxListPageSize } from '../../nova/agents/policies/listPolicies.js';
 
 function asText(result) {
   return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
@@ -25,23 +26,23 @@ export function registerSalesOrderTools() {
     'list_sales_orders',
     {
       title: 'List Sales Orders',
-      description: 'List sales orders. Defaults to page=1 and limit=25. filter.search is text only (sales order #, customer names — NOT status). For status filters (open/fulfilled): use date range in filter.advance, then filter results when presenting.',
+      description: 'List one page of sales orders (default page=1, limit=25, hard-capped). Returns pagination.has_more and pagination.next_page — call again with the next page when the user wants more. Never dump the full tenant dataset. filter.search is text only (NOT status).',
       inputSchema: {
         customer_id: z.number().optional().describe('Customer ID'),
         vendor_id: z.number().optional().describe('Vendor ID'),
-        limit: z.number().optional().describe('Number of results (default: 25)'),
-        page: z.number().optional().describe('Page number (default: 1)'),
-        all_pages: z.boolean().optional().describe('If true, fetch pages sequentially and combine results'),
-        max_pages: z.number().optional().describe('Safety cap when all_pages=true (default: 10)'),
+        limit: z.number().optional().describe('Page size (default 25, max enforced by runtime)'),
+        page: z.number().optional().describe('Page number (default: 1). Use next_page from prior response for more.'),
         filter: filterSchema.describe('Filter object. search: text only. advance: date ranges. Do NOT put status in search.'),
       },
     },
-    async ({ customer_id, vendor_id, limit = 25, page = 1, all_pages = false, max_pages = 10, filter } = {}) => {
+    async ({ customer_id, vendor_id, limit = 25, page = 1, filter } = {}) => {
       const { companyId, userId } = getWorxstreamContext();
       const normalized = normalizeFilter(filter);
-      const effectiveLimit = limit;
+      const max = getMaxListPageSize();
+      const effectiveLimit = Math.min(Math.max(1, Number(limit) || 25), max);
+      const effectivePage = Math.max(1, Math.floor(Number(page) || 1));
 
-      const fetchPage = async (p) => callWorxstreamAPI({
+      const result = await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/master-objects/list',
         data: {
@@ -50,72 +51,37 @@ export function registerSalesOrderTools() {
           appName: 'salesorder',
           customer_id,
           vendor_id,
-          page: p ?? 1,
-          limit: effectiveLimit ?? 25,
+          page: effectivePage,
+          limit: effectiveLimit,
           filter: normalized,
         },
       });
 
-      if (!all_pages) {
-        const result = await fetchPage(page ?? 1);
-        if (result?.success && result?.data && typeof result.data === 'object') {
-          const payload = result.data;
-          const rows = Array.isArray(payload?.data) ? payload.data : [];
-          const pagination = payload?.pagination && typeof payload.pagination === 'object' ? payload.pagination : null;
-          const currentPage = pagination?.currentPage;
-          const lastPage = pagination?.lastPage;
-          const total = pagination?.total;
-          const hasMore = Number.isFinite(currentPage) && Number.isFinite(lastPage)
-            ? currentPage < lastPage
-            : (Number.isFinite(total) ? rows.length < total : false);
-          const nextPage = Number.isFinite(currentPage) && Number.isFinite(lastPage) && currentPage < lastPage
-            ? currentPage + 1
-            : null;
+      if (result?.success && result?.data && typeof result.data === 'object') {
+        const payload = result.data;
+        const rows = Array.isArray(payload?.data) ? payload.data : [];
+        const pagination = payload?.pagination && typeof payload.pagination === 'object' ? payload.pagination : null;
+        const currentPage = pagination?.currentPage ?? effectivePage;
+        const lastPage = pagination?.lastPage;
+        const total = pagination?.total;
+        const hasMore = Number.isFinite(currentPage) && Number.isFinite(lastPage)
+          ? currentPage < lastPage
+          : (Number.isFinite(total) ? rows.length < total : false);
+        const nextPage = Number.isFinite(currentPage) && Number.isFinite(lastPage) && currentPage < lastPage
+          ? currentPage + 1
+          : null;
 
-          result.data = {
-            ...payload,
-            pagination: {
-              ...(pagination || {}),
-              returned: rows.length,
-              has_more: Boolean(hasMore),
-              next_page: nextPage,
-            },
-          };
-        }
-        return asText(result);
-      }
-
-      const safeMaxPages = Number.isFinite(max_pages) && max_pages > 0 ? Math.min(max_pages, 50) : 10;
-      const startPage = page ?? 1;
-      const first = await fetchPage(startPage);
-      if (!first?.success) return asText(first);
-
-      const payload = first.data;
-      const combined = Array.isArray(payload?.data) ? [...payload.data] : [];
-      const lastPage = payload?.pagination?.lastPage;
-      const totalPages = Number.isFinite(lastPage) ? lastPage : (startPage + safeMaxPages - 1);
-
-      for (let p = startPage + 1; p <= totalPages && p < startPage + safeMaxPages; p++) {
-        const next = await fetchPage(p);
-        if (!next?.success) break;
-        const nextRows = Array.isArray(next.data?.data) ? next.data.data : [];
-        combined.push(...nextRows);
-        if ((effectiveLimit ?? 25) > 0 && nextRows.length < (effectiveLimit ?? 25)) break;
-      }
-
-      return asText({
-        ...first,
-        data: {
+        result.data = {
           ...payload,
-          data: combined,
           pagination: {
-            ...(payload?.pagination || {}),
-            aggregated: true,
-            aggregatedPagesMax: safeMaxPages,
-            aggregatedCount: combined.length,
+            ...(pagination || {}),
+            returned: rows.length,
+            has_more: Boolean(hasMore),
+            next_page: nextPage,
           },
-        },
-      });
+        };
+      }
+      return asText(result);
     }
   );
 

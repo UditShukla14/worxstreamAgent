@@ -1,58 +1,47 @@
 /**
- * List policies applied at runtime for ALL agents/tools.
+ * List policies applied at runtime for list_* tools.
  *
- * These are enforced in BaseAgent so behavior is consistent even if
- * a prompt drifts (e.g. using status in search, wrong date attribute,
- * or only fetching page 1 for "all" requests).
+ * - Schema normalization (dates, BETWEEN shape)
+ * - Hard safety caps: never dump thousands of rows into the model
+ *   (strip all_pages; clamp limit/page). Claude must page interactively.
  */
 
-const ALL_HINTS = [
-  /\ball\b/i,
-  /\bevery\b/i,
-  /\beverything\b/i,
-  /\bentire\b/i,
-  /\bcomplete\b/i,
-];
+import { config } from '../../../config/index.js';
 
-const STATUS_KEYWORDS = [
-  'open',
-  'paid',
-  'draft',
-  'pending',
-  'approved',
-  'cancelled',
-  'canceled',
-];
+const DEFAULT_LIST_PAGE_SIZE = 25;
 
-/** Whether the user is requesting the full dataset. */
-export function shouldFetchAllPages(userMessage = '') {
-  return ALL_HINTS.some((re) => re.test(String(userMessage)));
+/** Max rows per list_* call (env AGENT_MAX_LIST_PAGE_SIZE). */
+export function getMaxListPageSize() {
+  const n = Number(config.agentRuntime?.maxListPageSize);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 100) : DEFAULT_LIST_PAGE_SIZE;
 }
 
 /**
- * Try to infer a desired status from the user message.
- * Returns a lowercase status label or null.
+ * Multi-page aggregation is permanently disabled — protects the model context
+ * when tenants have thousands of invoices/orders/etc.
  */
-export function inferDesiredStatus(userMessage = '') {
-  const msg = String(userMessage).toLowerCase();
-  for (const k of STATUS_KEYWORDS) {
-    // match whole word where possible
-    const re = new RegExp(`\\b${k}\\b`, 'i');
-    if (re.test(msg)) return k === 'canceled' ? 'cancelled' : k;
-  }
-  return null;
+export function shouldFetchAllPages() {
+  return false;
 }
 
 /**
- * Normalize tool input for list_* calls:
- * - Map db_attribute created_date -> created_at (API uses createdAt/created_at)
- * - For BETWEEN, convert value ["YYYY-MM-DD","YYYY-MM-DD"] -> "YYYY-MM-DD,YYYY-MM-DD"
- *   (matches Postman-tested payload shape)
+ * Normalize + safety-clamp list_* tool input.
+ * - Map db_attribute created_date -> created_at
+ * - BETWEEN arrays -> "from,to" string
+ * - Strip all_pages / max_pages (never allowed)
+ * - Clamp limit to maxListPageSize; ensure page >= 1
  */
 export function normalizeListInput(input = {}) {
   if (!input || typeof input !== 'object') return input;
 
   const next = { ...input };
+
+  // Hard gate: never allow bulk multi-page fetches into the LLM context.
+  delete next.all_pages;
+  delete next.allPages;
+  delete next.max_pages;
+  delete next.maxPages;
+
   if (next.filter && typeof next.filter === 'object') {
     const f = { ...next.filter };
     if (Array.isArray(f.advance)) {
@@ -72,12 +61,25 @@ export function normalizeListInput(input = {}) {
     next.filter = f;
   }
 
+  const max = getMaxListPageSize();
+  const rawLimit = next.limit ?? next.take ?? DEFAULT_LIST_PAGE_SIZE;
+  const limitNum = Number(rawLimit);
+  next.limit = Number.isFinite(limitNum) && limitNum > 0
+    ? Math.min(Math.floor(limitNum), max)
+    : Math.min(DEFAULT_LIST_PAGE_SIZE, max);
+  delete next.take;
+
+  if (next.page != null) {
+    const p = Number(next.page);
+    next.page = Number.isFinite(p) && p >= 1 ? Math.floor(p) : 1;
+  }
+
   return next;
 }
 
 /**
- * If the dataset items contain { status: { label } }, filter by desired label.
- * Returns a new array.
+ * Filter rows by status label when the caller already decided a label.
+ * Prefer letting Claude filter when presenting — this is a pure helper.
  */
 export function filterRowsByStatus(rows, desiredStatus) {
   if (!desiredStatus) return rows;
@@ -88,4 +90,3 @@ export function filterRowsByStatus(rows, desiredStatus) {
     return String(label || '').toLowerCase() === want;
   });
 }
-

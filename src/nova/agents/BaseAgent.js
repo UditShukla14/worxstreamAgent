@@ -14,10 +14,7 @@ import { rex } from './AgentTracker.js';
 import { getSoulSystemPrompt } from './soul.js';
 import { getToolIndex } from '../../mcp/toolIndex.js';
 import {
-  shouldFetchAllPages,
-  inferDesiredStatus,
   normalizeListInput,
-  filterRowsByStatus,
 } from './policies/listPolicies.js';
 import { appendPlaybookToPrompt } from './playbooks.js';
 import {
@@ -30,9 +27,6 @@ import { COWORKER_SHARED_RULES, stripDuplicatedSharedRules } from './coworkerRul
 const MAX_TOOL_ITERATIONS = Number.isFinite(config.agentRuntime?.maxToolIterations)
   ? config.agentRuntime.maxToolIterations
   : 15;
-const MAX_AUTO_PAGES = Number.isFinite(config.agentRuntime?.maxAutoPages)
-  ? config.agentRuntime.maxAutoPages
-  : 10;
 
 export class BaseAgent {
   /**
@@ -333,65 +327,6 @@ export class BaseAgent {
           const toolStart = Date.now();
           let result = await executeMcpTool(block.name, normalizedInput, { agent: this.name, userMessage: message });
           const toolDuration = Date.now() - toolStart;
-
-          // Runtime policy: if user asked for "all" and this is a list_* tool with pagination,
-          // auto-fetch additional pages up to a safe cap and merge results.
-          if (block.name?.startsWith('list_') && result?.success) {
-            const wantsAll = shouldFetchAllPages(message);
-            if (wantsAll) {
-              try {
-                const textBlock = result?.content?.find((c) => c?.type === 'text');
-                const parsed = textBlock?.text ? JSON.parse(textBlock.text) : null;
-                const payload = parsed?.data;
-                const pagination = payload?.pagination;
-                const currentPage = pagination?.currentPage ?? normalizedInput.page ?? 1;
-                const lastPage = pagination?.lastPage;
-                const limit = normalizedInput.take ?? normalizedInput.limit ?? 25;
-
-                if (Number.isFinite(currentPage) && Number.isFinite(lastPage) && currentPage < lastPage) {
-                  const combined = Array.isArray(payload?.data) ? [...payload.data] : [];
-                  const maxPages = Math.min(MAX_AUTO_PAGES, Math.max(1, lastPage - currentPage));
-
-                  for (let p = currentPage + 1; p <= lastPage && p < currentPage + 1 + maxPages; p++) {
-                    const nextInput = { ...normalizedInput, page: p };
-                    const next = await executeMcpTool(block.name, nextInput, { agent: this.name, userMessage: message });
-                    if (!next?.success) break;
-                    const nextText = next?.content?.find((c) => c?.type === 'text')?.text;
-                    const nextParsed = nextText ? JSON.parse(nextText) : null;
-                    const nextRows = Array.isArray(nextParsed?.data?.data) ? nextParsed.data.data : [];
-                    combined.push(...nextRows);
-                    if (Number.isFinite(limit) && limit > 0 && nextRows.length < limit) break;
-                  }
-
-                  // Optional: apply status filtering for common status requests (open/paid/etc.)
-                  const desiredStatus = inferDesiredStatus(message);
-                  const filtered = filterRowsByStatus(combined, desiredStatus);
-
-                  const merged = {
-                    ...parsed,
-                    data: {
-                      ...payload,
-                      data: filtered,
-                      pagination: {
-                        ...(pagination || {}),
-                        aggregated: true,
-                        aggregatedPagesMax: MAX_AUTO_PAGES,
-                        aggregatedCount: filtered.length,
-                        requestedAll: true,
-                      },
-                    },
-                  };
-
-                  result = {
-                    ...result,
-                    content: [{ type: 'text', text: JSON.stringify(merged, null, 2) }],
-                  };
-                }
-              } catch {
-                // If parsing/merging fails, fall back to the original result.
-              }
-            }
-          }
 
           toolsUsed.push({
             name: block.name,

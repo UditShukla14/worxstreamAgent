@@ -57,9 +57,17 @@ describe('agent tool domains', () => {
     assert.ok(bucketNames('deal').includes('list_deals'));
     assert.ok(bucketNames('deal').includes('list_pipelines'));
     assert.ok(bucketNames('crm').includes('global_search'));
+    assert.ok(bucketNames('crm').includes('list_calls'));
+    assert.ok(bucketNames('calls').includes('list_call_sessions'));
+    assert.ok(bucketNames('calls').includes('get_call_session_details'));
     assert.ok(bucketNames('payments').includes('list_received_payments'));
     assert.ok(bucketNames('communications').includes('send_object_email'));
     assert.ok(bucketNames('vendor').includes('list_vendor_accounts'));
+  });
+
+  it('voice-agent call sessions are not the CRM object call-log bucket', () => {
+    assert.ok(!bucketNames('crm').includes('list_call_sessions'));
+    assert.ok(!bucketNames('calls').includes('list_calls'));
   });
 
   it('organization contacts belong to company, not the CRM contact bucket', () => {

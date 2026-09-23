@@ -65,6 +65,8 @@ const DOMAIN_RULES = [
   ['pipeline_stage', 'deal'],
   ['pipeline', 'deal'],
   ['deal', 'deal'],
+  // Voice-agent call sessions (calls.js) — before CRM object list_calls
+  ['call_session', 'calls'],
   // CRM modules (crm.js)
   ['global_search', 'crm'],
   ['calendar_event', 'crm'],

@@ -32,29 +32,17 @@ export function getAllAgentInstances() {
 
 // ── Router prompt ────────────────────────────────────────────────────
 function buildRouterPrompt() {
-  return `You are a routing agent. Given a user message, decide which specialist agent(s) should handle it.
+  return `You are a routing agent. Given a user message and recent conversation context, decide which specialist agent(s) should handle it.
 
 Available agents:
 ${getAgentDescriptionsForRouter()}
 
-Rules:
-- Greetings / thanks / general chit-chat → ["none"]
-- Single-domain → one key. Cross-domain → minimum set (e.g. ["customer","estimate"]).
-- "customer" → customer (NOT contact). "contact" or "lead" → contact (NOT customer).
-- Prefer the agent whose description best matches; do not invent keys.
-- Counts / "how many" / simple status filters on one entity → that entity agent (invoice, estimate, …), NOT reports.
-- Route to "reports" only when the user asks for a report, analytics, charts, trends, overview, or dashboard.
-
-Ambiguous cases (follow these):
-- "create an estimate for customer X" → ["customer","estimate"]
-- "convert estimate to invoice" → ["workflow"]
-- "search everything for Acme" / notes on a deal → ["crm"]
-- "email this invoice" / unread notifications → ["communications"]
-- "warehouse stock" / SKU qty → ["inventory"]
-- "how many invoices got paid since last week" → ["invoice"] (not reports)
-- "invoice analytics report with charts for last quarter" → ["reports"]
-
-Respond with ONLY a JSON array of agent keys. Nothing else.`;
+Decide from meaning and context (not keyword lists):
+- Greetings / thanks / chit-chat with no task → ["none"]
+- Pick the minimum specialist set whose domains cover the ask. Prefer a single entity agent for simple reads/counts/filters on that entity.
+- Use "reports" only when the user clearly wants analytics, charts, trends, overview, or a report — not for a simple count or list of one entity.
+- customer vs contact: organizations/accounts → customer; people/leads → contact.
+- Do not invent keys. Respond with ONLY a JSON array of agent keys.`;
 }
 
 // ── Route-only (resolve agent keys without running them) ─────────────

@@ -33,6 +33,7 @@ import { registerDealTools } from './deals.js';
 import { registerCrmTools } from './crm.js';
 import { registerPaymentTools } from './payments.js';
 import { registerCommunicationsTools } from './communications.js';
+import { registerCallsTools } from './calls.js';
 
 /**
  * Register all tools
@@ -132,6 +133,9 @@ export function registerAllTools() {
 
   registerCommunicationsTools();
   console.log('  ✓ Communications tools registered');
+
+  registerCallsTools();
+  console.log('  ✓ Calls (voice-agent session report) tools registered');
 
   console.log('✅ All MCP tools registered');
 }
