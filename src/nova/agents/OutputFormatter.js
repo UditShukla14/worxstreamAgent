@@ -18,43 +18,27 @@ function stripCodeFence(text) {
   return m ? m[1].trim() : t;
 }
 
-const FORMATTER_PROMPT = `You are a strict output formatter for Worxstream UI.
-You receive raw data/text from a specialist agent and the user's original question.
-Your job is to synthesize a proportional answer for the UI — structured XML when useful, plain short text when that is enough.
+const FORMATTER_PROMPT = `You are a UI formatter for Worxstream.
+You receive raw text/data from an agent and the user's question.
+Render that answer for the frontend — do not invent a different answer shape. The agent (Claude) already chose what to say from conversation context.
 
 RULES:
 - Do NOT invent facts that are not in the raw data.
-- Infer intent from the user's current message and conversation context (Claude-style) — not from fixed phrase lists.
-- SYNTHESIZE: you MAY omit rows, columns, charts, and filler that do not answer what they need *now*. Prefer the smallest faithful answer — but never strip detail they asked for or accepted.
-- Do NOT call any tools — you only format/synthesize text.
-- Keep useful conversational sentences the agent wrote when they answer the question.
-- Be concise. No filler.
-- Output the formatted content DIRECTLY. NEVER wrap your output in markdown code fences (\`\`\` or \`\`\`xml) — the frontend renders your output as-is, and fences appear as literal text.
+- Preserve the agent's intent and detail level. Do not turn a table of rows into a summary, or a short answer into a report.
+- Do NOT call any tools — you only format text.
+- Prefer structured XML when the agent used it or when the content is clearly rows/metrics/one record. Use plain text when that is enough.
+- Output DIRECTLY. NEVER wrap in markdown code fences (\`\`\` or \`\`\`xml).
 
-## ANSWER SHAPE (LLM judgment — match intent, not keywords)
+## XML TAG REFERENCE (use when appropriate)
 
-- **Metric / count / total only**: short sentence and/or a single <stat>. No full row dump. No charts.
-- **Set of records / breakdown / comparison across rows**: <table> with useful columns. Do not collapse to a lone <stat>.
-- **Follow-up that wants more detail** (including accepting a prior offer): richer shape from the raw data (<table> or <details>). Do not re-apply an earlier shorter shape.
-- **Overview / dashboard-style summary**: <stats>; short <table> only if it helps.
-- **Analytics / trends / charts**: <chart> + <stats>; <table> optional.
-- **One record**: <details>.
-- **Completed action or failure**: <alert> with ONE brief sentence.
-- **Clarifying questions**: plain conversational text — never <alert>/<table>/<details> for questions.
-
-If raw data is huge but intent is only a metric, state the answer and discard the row dump.
-If intent is a breakdown/list/expand, keep the rows.
-## XML TAG REFERENCE
-
-### <stats> — metrics / KPI cards
+### <stats>
 <stats>
 <stat label="Total Invoices" value="6" icon="dollar" color="blue"/>
-<stat label="Open" value="4" icon="chart" color="yellow"/>
 </stats>
 Icons: users, package, dollar, building, chart, folder, check
 Colors: blue, green, purple, yellow, red, cyan
 
-### <table> — lists of records (when the user asked to list/show)
+### <table>
 <table title="Open Invoices">
 <headers>
 <th>Number</th><th>Customer</th><th>Date</th><th>Total</th><th>Status</th>
@@ -63,82 +47,27 @@ Colors: blue, green, purple, yellow, red, cyan
 <td>INV-4</td><td>Acme Corp</td><td>Dec 3, 2025</td><td>$5,664.00</td><td status="warning">Open</td>
 </row>
 </table>
-Status colors: status="success" (active/paid/approved/closed), status="warning" (open/draft/pending), status="error" (rejected/cancelled/inactive)
+Status colors: status="success" | "warning" | "error"
 
-### <details> — single-item detail view
+### <details>
 <details title="Invoice INV-4 Details">
 <item label="Number">INV-4</item>
 <item label="Status" badge="warning">Open</item>
-<item label="Grand Total">$5,664.00</item>
 </details>
-Badge colors: badge="success", badge="warning", badge="error"
 
-### Estimate / Invoice detail — special multi-card layout
-1. Header card (<details>) with number, status badge, dates, totals
-2. Customer card (<details>) with name, email, phone
-3. Address card (<details>) with billing/shipping
-4. Line items (<table> per section)
-5. Other info card (<details>) with job, currency, etc.
-
-### <alert> — success / error messages (ONE short sentence only; never lists or questions)
+### <alert>
 <alert type="success">Invoice created successfully!</alert>
 <alert type="error">Failed to create invoice.</alert>
 
-### <workflow> — NEVER emit this tag yourself
-Workflow tree visualizations are attached automatically by the system after your output.
-For workflow tree/hierarchy/flow queries, write ONE short intro sentence
-(e.g. "Here's the document flow for estimate 26-3000:") — do NOT reproduce the
-tree JSON and do NOT enumerate the nodes in text.
+### <workflow> — NEVER emit this tag yourself (system attaches it).
 
-### <chart> — only when the user asked for report/chart/analytics/trends
-<chart type="bar" title="Monthly Sales" color="blue">
-<chart-data label="Sales ($)">
-<bar category="Jan" value="50000" percentage="80"/>
-<bar category="Feb" value="62500" percentage="100"/>
-</chart-data>
-</chart>
+### <chart> / <gauge> / <trend> — only when the agent answer already called for analytics visuals.
 
-<chart type="line" title="Sales Trend" color="green">
-<chart-data label="Revenue ($)">
-<point period="Q1" value="150000"/>
-<point period="Q2" value="180000"/>
-</chart-data>
-</chart>
-
-<chart type="pie" title="Sales by Status">
-<chart-data label="Amount">
-<slice label="Paid" value="75000" percentage="60"/>
-<slice label="Pending" value="50000" percentage="40"/>
-</chart-data>
-</chart>
-
-### <gauge> — performance indicators (report/overview when useful)
-<gauge title="Sales Goal Progress" status="success">
-<current value="$125,000"/>
-<target value="$150,000"/>
-<percentage value="83%"/>
-</gauge>
-
-### <trend> — trend indicators (report/overview when useful)
-<trend label="Monthly Growth" direction="up" color="green">
-<current value="$62,500"/>
-<change value="$12,500" percentage="25%"/>
-</trend>
-
-Chart types: bar, line, pie, multi-bar
-Chart colors: blue, green, purple, yellow, red, cyan
-Gauge status: success, warning, error
-Trend directions: up, down, flat
-
-Do NOT output <milestones> — we use a simple status in the UI instead.
-
-## CRITICAL RULES
-1. NEVER show ID fields (id, company_id, user_id, category_id, etc.)
-2. Keep table columns to 4-5 max when you do emit a table
-3. Lists the user asked for MUST use <table> — no bullet-point lists for record data
-4. Status MUST use badge/status attributes with correct colors
-5. Charts only for report/analytics/chart/trends asks — never for simple counts
-6. Output the formatted result directly — no explanations about formatting`;
+## CRITICAL
+1. NEVER show raw ID fields as the only label
+2. Keep table columns to a useful set when emitting a table
+3. Output the formatted result directly — no meta commentary
+`;
 
 /**
  * Format raw agent output for the frontend (non-streaming).

@@ -71,10 +71,9 @@ describe('coworker orchestrator mode', () => {
     assert.ok(src.includes('COWORKER_MODE=specialists') || src.includes("mode !== 'specialists'"));
   });
 
-  it('shared proportionality is conversation-based with page-wise safety', () => {
-    assert.ok(COWORKER_SHARED_RULES.includes('no phrase→action'));
-    assert.ok(COWORKER_SHARED_RULES.includes('conversation'));
+  it('shared rules are conversation-native with page-wise safety only', () => {
+    assert.ok(COWORKER_SHARED_RULES.includes('Answer naturally from conversation'));
+    assert.ok(!COWORKER_SHARED_RULES.includes('ANSWER PROPORTIONALITY'));
     assert.ok(COWORKER_SHARED_RULES.includes('ONE page'));
-    assert.ok(COWORKER_SHARED_RULES.includes('next page'));
   });
 });

@@ -58,12 +58,13 @@ export function registerCallsTools() {
     {
       title: 'List Call Sessions',
       description:
-        'List voice-agent call sessions (Calls page). One page at a time (default limit 25, hard-capped). Returns pagination.has_more / next_page — ask before loading the next page. Filter by search, status, assigned_to, or created_at.',
+        'List voice-agent call sessions (Calls page). One page at a time (default limit 25, hard-capped). Returns pagination.has_more / next_page — ask before loading the next page. For a day or range use created_from + created_to (YYYY-MM-DD); that builds filter.advance BETWEEN on created_at (same as the Calls UI).',
       inputSchema: {
         search: z.string().optional().describe('Search caller name, phone, email, agent, etc.'),
         status: z.string().optional().describe('Call status filter'),
         assigned_to: z.string().optional().describe('Assignee filter (user/team-member id as string)'),
-        created_at: z.string().optional().describe('Created-at filter when the API expects a date string'),
+        created_from: z.string().optional().describe('Start date YYYY-MM-DD (inclusive). For a single day, set both from and to to that day.'),
+        created_to: z.string().optional().describe('End date YYYY-MM-DD (inclusive).'),
         app_id: z.number().optional().describe('App ID when known from Calls UI context'),
         with_trashed: z.boolean().optional().describe('Include soft-deleted (default: false)'),
         page: z.number().optional().describe('Page number (default: 1)'),
@@ -76,7 +77,8 @@ export function registerCallsTools() {
       search,
       status,
       assigned_to,
-      created_at,
+      created_from,
+      created_to,
       app_id,
       with_trashed = false,
       page = 1,
@@ -101,9 +103,29 @@ export function registerCallsTools() {
       if (search?.trim()) data.search = search.trim();
       if (status) data.status = status;
       if (assigned_to != null && assigned_to !== '') data.assigned_to = String(assigned_to);
-      if (created_at) data.created_at = created_at;
       if (app_id != null) data.app_id = app_id;
       if (with_trashed) data.with_trashed = true;
+
+      const from = created_from ? String(created_from).trim() : '';
+      const to = created_to ? String(created_to).trim() : '';
+      if (from && to) {
+        data.filter = {
+          advance: [{
+            db_attribute: 'created_at',
+            operator: 'BETWEEN',
+            value: `${from},${to}`,
+          }],
+        };
+      } else if (from || to) {
+        const day = from || to;
+        data.filter = {
+          advance: [{
+            db_attribute: 'created_at',
+            operator: 'BETWEEN',
+            value: `${day},${day}`,
+          }],
+        };
+      }
 
       const result = await callWorxstreamAPI({
         method: 'POST',

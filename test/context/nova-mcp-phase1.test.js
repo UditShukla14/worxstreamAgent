@@ -22,10 +22,9 @@ describe('coworker shared rules', () => {
     assert.ok(COWORKER_SHARED_RULES.includes('DATE AWARENESS'));
   });
 
-  it('includes LLM-controlled answer proportionality (not phrase hardcoding)', () => {
-    assert.ok(COWORKER_SHARED_RULES.includes('ANSWER PROPORTIONALITY'));
-    assert.ok(COWORKER_SHARED_RULES.includes('no phrase→action'));
-    assert.ok(COWORKER_SHARED_RULES.includes('conversation'));
+  it('includes conversation-native answering without shape taxonomy', () => {
+    assert.ok(COWORKER_SHARED_RULES.includes('Answer naturally from conversation'));
+    assert.ok(!COWORKER_SHARED_RULES.includes('ANSWER PROPORTIONALITY'));
     assert.ok(COWORKER_SHARED_RULES.includes('ONE page'));
   });
 
