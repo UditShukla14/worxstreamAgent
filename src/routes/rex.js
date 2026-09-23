@@ -16,12 +16,15 @@ const router = Router();
 router.get('/dashboard', (req, res) => {
   const dashboard = rex.getDashboardData();
 
-  const registeredAgents = getAgentKeys().map(key => ({
-    key,
-    name: AGENT_DEFINITIONS[key].name,
-    description: AGENT_DEFINITIONS[key].description,
-    toolCount: AGENT_DEFINITIONS[key].tools.length,
-  }));
+  const registeredAgents = getAgentKeys().map(key => {
+    const def = AGENT_DEFINITIONS[key] || {};
+    return {
+      key,
+      name: def.name || key,
+      description: def.description || '',
+      toolCount: def.tools?.length ?? def.extraTools?.length ?? 0,
+    };
+  });
 
   res.json({
     success: true,

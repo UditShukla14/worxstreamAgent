@@ -5,6 +5,9 @@
  * in the agent .env, those values are used for every WorxStream API call (MCP tools,
  * Scribe reports, etc.) — session JWT, localStorage, and Mongo tenant fields are ignored.
  *
+ * Conversation / preferences Mongo scoping must NOT use that path — use
+ * resolveConversationTenantIds() so request/session companyId/userId isolate each user.
+ *
  * Otherwise precedence is:
  *   1. AsyncLocalStorage (per-request middleware)
  *   2. Express request body, query, or headers
@@ -106,4 +109,35 @@ export function hasCompleteWorxstreamContext(ctx) {
  */
 export function resolveAgentCredentials(req) {
   return buildWorxstreamContext({ req }, { allowEnvFallback: true });
+}
+
+/**
+ * Mongo conversation / preferences tenancy from the caller only.
+ * Prefers request (query/body/headers) → ALS → session. Never uses DEFAULT_COMPANY_ID /
+ * DEFAULT_USER_ID — those remain for WorxStream MCP/Scribe API calls via buildWorxstreamContext.
+ *
+ * @param {import('express').Request} [req]
+ * @returns {{ companyId?: string, userId?: string }}
+ */
+export function resolveConversationTenantIds(req) {
+  const fromAls = getRequestContext() || {};
+  const fromReq = req ? requestContextFromReq(req) : {};
+  const session = worxstreamSession.getSession() || {};
+
+  const companyId =
+    fromReq.companyId ||
+    fromAls.companyId ||
+    session.companyId ||
+    undefined;
+
+  const userId =
+    fromReq.userId ||
+    fromAls.userId ||
+    session.userId ||
+    undefined;
+
+  return {
+    companyId: companyId ? String(companyId).trim() : undefined,
+    userId: userId ? String(userId).trim() : undefined,
+  };
 }

@@ -18,19 +18,45 @@ import {
   deleteConversationFull,
 } from '../agents/coworkerPipeline.js';
 import { requireWorxstreamAuth } from '../middleware/requireWorxstreamAuth.js';
-import { resolveAgentCredentials } from '../utils/worxstreamCredentials.js';
+import { resolveConversationTenantIds } from '../utils/worxstreamCredentials.js';
 
 const router = Router();
 
 router.use(requireWorxstreamAuth);
 
-/** Conversation scoping from UI login (session) or per-request companyId/userId — no .env defaults. */
+/**
+ * Conversation scoping from UI login (session) or per-request companyId/userId — no .env defaults.
+ * @param {import('express').Request} req
+ * @returns {{ company_id: string, user_id: string }}
+ */
 function resolveConversationTenant(req) {
-  const { companyId, userId } = resolveAgentCredentials(req);
+  const { companyId, userId } = resolveConversationTenantIds(req);
+  if (!companyId || !userId) {
+    const err = new Error('companyId and userId are required');
+    err.statusCode = 400;
+    throw err;
+  }
   return {
-    company_id: String(companyId),
-    user_id: String(userId),
+    company_id: companyId,
+    user_id: userId,
   };
+}
+
+/**
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ * @returns {{ company_id: string, user_id: string } | null}
+ */
+function requireConversationTenant(req, res) {
+  try {
+    return resolveConversationTenant(req);
+  } catch (error) {
+    if (error.statusCode === 400) {
+      res.status(400).json({ success: false, error: error.message });
+      return null;
+    }
+    throw error;
+  }
 }
 
 // ── GET /api/agents — list available agents ──────────────────────────
@@ -49,7 +75,8 @@ router.get('/', (req, res) => {
 
 // ── Preferences (cross-session coworker) ─────────────────────────────
 router.get('/preferences', async (req, res) => {
-  const tenant = resolveConversationTenant(req);
+  const tenant = requireConversationTenant(req, res);
+  if (!tenant) return;
   const doc = await UserPreferences.findOne({
     company_id: tenant.company_id,
     user_id: tenant.user_id,
@@ -58,7 +85,8 @@ router.get('/preferences', async (req, res) => {
 });
 
 router.patch('/preferences', async (req, res) => {
-  const tenant = resolveConversationTenant(req);
+  const tenant = requireConversationTenant(req, res);
+  if (!tenant) return;
   const { preferences } = req.body || {};
   if (!preferences || typeof preferences !== 'object') {
     return res.status(400).json({ success: false, error: 'preferences object is required' });
@@ -80,7 +108,8 @@ router.patch('/preferences', async (req, res) => {
 
 router.get('/conversations', async (req, res) => {
   try {
-    const tenant = resolveConversationTenant(req);
+    const tenant = requireConversationTenant(req, res);
+    if (!tenant) return;
     const limitNum = Math.min(parseInt(req.query?.limit || '50', 10) || 50, 200);
 
     const conversations = await Conversation.find({
@@ -119,7 +148,8 @@ router.get('/conversations', async (req, res) => {
 
 router.get('/conversations/:conversation_id', async (req, res) => {
   try {
-    const tenant = resolveConversationTenant(req);
+    const tenant = requireConversationTenant(req, res);
+    if (!tenant) return;
     const conversation = await Conversation.findOne({
       company_id: tenant.company_id,
       user_id: tenant.user_id,
@@ -146,7 +176,8 @@ router.get('/conversations/:conversation_id', async (req, res) => {
 
 router.delete('/conversations/:conversation_id', async (req, res) => {
   try {
-    const tenant = resolveConversationTenant(req);
+    const tenant = requireConversationTenant(req, res);
+    if (!tenant) return;
 
     const result = await Conversation.deleteOne({
       company_id: tenant.company_id,
@@ -174,7 +205,8 @@ router.delete('/conversations/:conversation_id', async (req, res) => {
 // ── POST /api/agents/confirm — approve/reject pending write ──────────
 router.post('/confirm', async (req, res) => {
   try {
-    const tenant = resolveConversationTenant(req);
+    const tenant = requireConversationTenant(req, res);
+    if (!tenant) return;
     const { conversation_id, confirmationId, approved } = req.body || {};
     if (!conversation_id || !confirmationId) {
       return res.status(400).json({
@@ -213,7 +245,16 @@ router.post('/stream', async (req, res) => {
       return res.end();
     }
 
-    const tenant = resolveConversationTenant(req);
+    let tenant;
+    try {
+      tenant = resolveConversationTenant(req);
+    } catch (error) {
+      if (error.statusCode === 400) {
+        sse({ type: 'error', error: error.message });
+        return res.end();
+      }
+      throw error;
+    }
 
     rex.startRequest(requestId, message);
 
@@ -247,7 +288,8 @@ router.post('/stream', async (req, res) => {
 // ── POST /api/agents/route — JSON (same pipeline) ────────────────────
 router.post('/route', async (req, res) => {
   try {
-    const tenant = resolveConversationTenant(req);
+    const tenant = requireConversationTenant(req, res);
+    if (!tenant) return;
     const { message, conversation_id } = req.body || {};
     if (!message) {
       return res.status(400).json({ success: false, error: 'message is required' });
@@ -278,7 +320,8 @@ router.post('/route', async (req, res) => {
 // ── POST /api/agents/multi ───────────────────────────────────────────
 router.post('/multi', async (req, res) => {
   try {
-    const tenant = resolveConversationTenant(req);
+    const tenant = requireConversationTenant(req, res);
+    if (!tenant) return;
     const { message, agents, mode = 'parallel', conversation_id } = req.body || {};
 
     if (!message) {
@@ -331,7 +374,8 @@ router.post('/:agentKey', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Not found' });
     }
 
-    const tenant = resolveConversationTenant(req);
+    const tenant = requireConversationTenant(req, res);
+    if (!tenant) return;
     const { message, conversation_id } = req.body || {};
     if (!message) {
       return res.status(400).json({ success: false, error: 'message is required' });
