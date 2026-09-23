@@ -63,12 +63,12 @@ describe('coworker orchestrator mode', () => {
     );
   });
 
-  it('pipeline default path is single Nova (no router/plan/formatter)', () => {
+  it('pipeline default path is single Nova with UI formatter on by default', () => {
     const src = readFileSync(pipelinePath, 'utf8');
     assert.ok(src.includes("type: 'orchestrator'"));
-    assert.ok(src.includes('forceFormatter'));
+    assert.ok(src.includes("options.formatOutput !== false"));
     assert.ok(src.includes("getAgentInstance('nova')"));
-    assert.ok(src.includes('COWORKER_MODE=specialists') || src.includes("mode !== 'specialists'"));
+    assert.ok(src.includes('formatOutputStreaming'));
   });
 
   it('shared rules are conversation-native with page-wise safety only', () => {

@@ -395,9 +395,9 @@ export async function runCoworkerTurn({
     });
 
     let combinedRawText = result.rawText || '';
-    // Optional escape hatch: second LLM formatter (costs tokens; off by default).
+    // UI formatter (tables/cards/badges) — on by default; set formatOutput:false to skip.
     let formattedForUi = combinedRawText;
-    const wantFormatter = options.forceFormatter === true;
+    const wantFormatter = options.formatOutput !== false;
     if (wantFormatter) {
       sse({ type: 'status', label: STATUS_LABEL_FORMATTING });
       if (options.streamFormatter && options.sseStreamRes) {
@@ -408,7 +408,6 @@ export async function runCoworkerTurn({
         formattedForUi = await formatOutput(message, combinedRawText);
       }
     } else if (options.streamFormatter) {
-      // Stream Nova's answer directly (no second model call).
       if (combinedRawText) sse({ type: 'text', content: combinedRawText });
     }
 

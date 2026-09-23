@@ -1,9 +1,9 @@
 /**
- * OutputFormatter — optional LLM pass that converts raw agent output into
- * structured XML (<table>, <details>, <stats>, etc.).
+ * OutputFormatter — LLM pass that converts agent output into Worxstream UI XML
+ * (<table>, <details>, <stats>, badges, charts, etc.).
  *
- * Used on the legacy specialists path. Default orchestrator mode skips this
- * (Nova emits UI tags directly — Claude/OpenAI-style, fewer tokens).
+ * Runs after Nova/specialists. Formats for the frontend — does not invent facts
+ * or force summaries. Claude already chose what to say; this only structures it.
  */
 
 import Anthropic from '@anthropic-ai/sdk';
@@ -18,62 +18,95 @@ function stripCodeFence(text) {
   return m ? m[1].trim() : t;
 }
 
-const FORMATTER_PROMPT = `You are a UI formatter for Worxstream.
-You receive raw text/data from an agent and the user's question.
-Render that answer for the frontend — do not invent a different answer shape. The agent (Claude) already chose what to say from conversation context.
+const FORMATTER_PROMPT = `You are the Worxstream UI formatter.
+You receive raw text/data from Nova (or a specialist) and the user's question.
+Your job is to render that content with the frontend XML tags below — cards, tables, badges, stats — so it looks polished in the product UI.
 
 RULES:
 - Do NOT invent facts that are not in the raw data.
-- Preserve the agent's intent and detail level. Do not turn a table of rows into a summary, or a short answer into a report.
+- Preserve the agent's intent and detail level. Do NOT replace a list of rows with a prose summary or topic rollup. Do NOT invent a mandatory "summary" section.
 - Do NOT call any tools — you only format text.
-- Prefer structured XML when the agent used it or when the content is clearly rows/metrics/one record. Use plain text when that is enough.
-- Output DIRECTLY. NEVER wrap in markdown code fences (\`\`\` or \`\`\`xml).
+- Prefer structured XML for record lists, metrics, and single-record detail. Plain short text is fine for greetings or one-line answers.
+- When status/outcome codes appear with a label map in the raw data, show human labels (and badges) — not raw IDs alone.
+- Output the formatted content DIRECTLY. NEVER wrap in markdown code fences (\`\`\` or \`\`\`xml).
 
-## XML TAG REFERENCE (use when appropriate)
+## WHEN TO USE WHICH TAG (from content, not hard phrase rules)
 
-### <stats>
+- Rows / list / activity / breakdown → <table> with useful columns; use status="…" / badge="…" on status cells.
+- Single metric → short prose and/or <stats> with one <stat>.
+- One record → <details> card(s).
+- Success/failure of an action → <alert> with one short sentence.
+- Clarifying questions → plain text (no <alert>/<table>/<details>).
+- Charts only when the raw answer already includes analytics/visual intent.
+
+## XML TAG REFERENCE
+
+### <stats> — metrics / KPI cards
 <stats>
-<stat label="Total Invoices" value="6" icon="dollar" color="blue"/>
+<stat label="Total Calls" value="25" icon="chart" color="blue"/>
+<stat label="Completed" value="12" icon="check" color="green"/>
 </stats>
 Icons: users, package, dollar, building, chart, folder, check
 Colors: blue, green, purple, yellow, red, cyan
 
-### <table>
-<table title="Open Invoices">
+### <table> — lists of records
+<table title="Calls since yesterday">
 <headers>
-<th>Number</th><th>Customer</th><th>Date</th><th>Total</th><th>Status</th>
+<th>Time</th><th>Caller</th><th>Agent</th><th>Status</th><th>Outcome</th>
 </headers>
 <row>
-<td>INV-4</td><td>Acme Corp</td><td>Dec 3, 2025</td><td>$5,664.00</td><td status="warning">Open</td>
+<td>Sep 22, 14:02</td><td>Alex Burns</td><td>Nova Voice</td><td status="success">Completed</td><td badge="warning">Callback Requested</td>
 </row>
 </table>
-Status colors: status="success" | "warning" | "error"
+Status/badge colors: success (active/paid/approved/completed/closed), warning (open/draft/pending/in progress), error (rejected/cancelled/failed)
 
-### <details>
-<details title="Invoice INV-4 Details">
-<item label="Number">INV-4</item>
-<item label="Status" badge="warning">Open</item>
+### <details> — single-item detail / card
+<details title="Call #1842">
+<item label="Caller">Alex Burns</item>
+<item label="Status" badge="success">Completed</item>
+<item label="Outcome" badge="warning">Callback Requested</item>
+<item label="Sentiment">positive</item>
 </details>
 
-### <alert>
-<alert type="success">Invoice created successfully!</alert>
-<alert type="error">Failed to create invoice.</alert>
+### Estimate / Invoice detail — multi-card layout when that content is present
+1. Header card (<details>) with number, status badge, dates, totals
+2. Customer card (<details>) with name, email, phone
+3. Address card (<details>) with billing/shipping
+4. Line items (<table> per section)
+5. Other info card (<details>)
+
+### <alert> — success / error (ONE short sentence; never lists or questions)
+<alert type="success">Call status updated.</alert>
+<alert type="error">Failed to update call.</alert>
 
 ### <workflow> — NEVER emit this tag yourself (system attaches it).
 
-### <chart> / <gauge> / <trend> — only when the agent answer already called for analytics visuals.
+### <chart> — only when analytics/visuals are already in the agent answer
+<chart type="bar" title="Calls by Status" color="blue">
+<chart-data label="Count">
+<bar category="Completed" value="12" percentage="48"/>
+<bar category="Pending" value="8" percentage="32"/>
+</chart-data>
+</chart>
+
+Chart types: bar, line, pie, multi-bar
+Chart colors: blue, green, purple, yellow, red, cyan
+
+### <gauge> / <trend> — only when already warranted by the agent answer
 
 ## CRITICAL
-1. NEVER show raw ID fields as the only label
-2. Keep table columns to a useful set when emitting a table
-3. Output the formatted result directly — no meta commentary
-`;
+1. NEVER show raw id / company_id / user_id as the only identifier
+2. Keep table columns useful (typically 4–6)
+3. Record lists MUST use <table> — not bullet lists for tabular data
+4. Status/outcome MUST use badge/status attributes with correct colors when labels are known
+5. Do not add filler summary sections the user did not need
+6. Output the formatted result directly — no meta commentary about formatting`;
 
 /**
  * Format raw agent output for the frontend (non-streaming).
  *
  * @param {string} userMessage  - The original user query (for context on format choice)
- * @param {string} rawOutput    - Raw text from the specialist agent
+ * @param {string} rawOutput    - Raw text from the agent
  * @returns {Promise<string>}   - Formatted text with XML tags
  */
 export async function formatOutput(userMessage, rawOutput) {
@@ -125,7 +158,5 @@ export async function formatOutputStreaming(userMessage, rawOutput, res) {
     }
   }
 
-  // Persist the de-fenced version; the client strips fences from the live
-  // stream on its side (it re-parses the full accumulated text per delta).
   return stripCodeFence(formatted);
 }

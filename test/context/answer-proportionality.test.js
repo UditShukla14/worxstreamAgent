@@ -18,11 +18,14 @@ describe('llm-native answer contracts (no shape taxonomy)', () => {
     assert.ok(COWORKER_SHARED_RULES.includes('ONE page'));
   });
 
-  it('formatter preserves agent intent instead of re-shaping', () => {
+  it('formatter preserves agent intent and restores UI chrome', () => {
     const src = readFileSync(formatterPath, 'utf8');
-    assert.ok(src.includes('do not invent a different answer shape'));
-    assert.ok(src.includes('Preserve the agent\'s intent'));
-    assert.ok(!src.includes('ANSWER SHAPE'));
+    assert.ok(src.includes('Do NOT replace a list of rows with a prose summary'));
+    assert.ok(src.includes('<table'));
+    assert.ok(src.includes('badge='));
+    assert.ok(src.includes('status="'));
+    assert.ok(src.includes('<details'));
+    assert.ok(src.includes('<stats'));
   });
 
   it('router decides from meaning and context, not keyword examples', () => {
