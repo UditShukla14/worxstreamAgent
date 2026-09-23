@@ -1,8 +1,9 @@
 /**
  * Calls tools — LiveKit voice-agent session reports (header Calls → `/calls`).
- * Source: apps/web/src/services/voiceAgentSessionReportService.ts
+ * Source of truth: apps/web/src/services/voiceAgentSessionReportService.ts
+ * + Calls UI list payload (filter.advance on started_at, value as [from, to]).
  *
- * Distinct from CRM `list_calls` (object-attached call logs via /modules/get-calls).
+ * Distinct from CRM `list_calls` (object-attached logs via /modules/get-calls).
  */
 
 import { z } from 'zod';
@@ -15,11 +16,63 @@ function asText(result) {
   return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
 }
 
+/**
+ * Build filter.advance for the Calls list API (same shape as the web Calls page).
+ * Date range MUST use started_at + BETWEEN + string[] value — not created_at, not "from,to".
+ */
+function buildCallsAdvanceFilter({
+  startedFrom,
+  startedTo,
+  status,
+  outcome,
+  assignedTo,
+} = {}) {
+  const advance = [];
+
+  const from = startedFrom ? String(startedFrom).trim() : '';
+  const to = startedTo ? String(startedTo).trim() : '';
+  if (from || to) {
+    const start = from || to;
+    const end = to || from;
+    advance.push({
+      db_attribute: 'started_at',
+      operator: 'BETWEEN',
+      value: [start, end],
+    });
+  }
+
+  if (status != null && String(status).trim() !== '') {
+    advance.push({
+      db_attribute: 'status',
+      operator: '=',
+      value: String(status).trim(),
+    });
+  }
+
+  if (outcome != null && String(outcome).trim() !== '') {
+    advance.push({
+      db_attribute: 'outcome',
+      operator: '=',
+      value: String(outcome).trim(),
+    });
+  }
+
+  if (assignedTo != null && String(assignedTo).trim() !== '') {
+    advance.push({
+      db_attribute: 'assigned_to',
+      operator: '=',
+      value: String(assignedTo).trim(),
+    });
+  }
+
+  return advance.length > 0 ? { advance } : null;
+}
+
 function attachListPagination(result, effectivePage, effectiveLimit) {
   if (!result?.success || !result?.data || typeof result.data !== 'object') return result;
 
-  // Service wraps API body; callWorxstreamAPI returns { success, data: axiosBody }.
-  // axiosBody is typically { success, message, data: { data: rows[], pagination } }.
+  // callWorxstreamAPI → { success, data: axiosBody }
+  // axiosBody → { success, message, data: { data: rows[], pagination } }
   const apiBody = result.data;
   const listPayload = apiBody?.data && typeof apiBody.data === 'object' ? apiBody.data : apiBody;
   const rows = Array.isArray(listPayload?.data) ? listPayload.data : [];
@@ -58,25 +111,37 @@ export function registerCallsTools() {
     {
       title: 'List Call Sessions',
       description:
-        'List voice-agent call sessions (Calls page). One page at a time (default limit 25, hard-capped). Returns pagination.has_more / next_page — ask before loading the next page. For a day or range use created_from + created_to (YYYY-MM-DD); that builds filter.advance BETWEEN on created_at (same as the Calls UI).',
+        'List voice-agent call sessions (Calls page). Matches the web Calls list API: pagination + filter.advance. '
+        + 'For “yesterday” / a day / a range, pass started_from + started_to (YYYY-MM-DD) — filters started_at BETWEEN [from,to] (NOT created_at). '
+        + 'Optional status / outcome / assigned_to filters (IDs as returned by get_call_session_filters). '
+        + 'One page at a time (default limit 25, hard-capped). Use pagination.has_more / next_page for more. '
+        + 'Pass app_id when known (Calls UI uses it, e.g. 39).',
       inputSchema: {
-        search: z.string().optional().describe('Search caller name, phone, email, agent, etc.'),
-        status: z.string().optional().describe('Call status filter'),
-        assigned_to: z.string().optional().describe('Assignee filter (user/team-member id as string)'),
-        created_from: z.string().optional().describe('Start date YYYY-MM-DD (inclusive). For a single day, set both from and to to that day.'),
-        created_to: z.string().optional().describe('End date YYYY-MM-DD (inclusive).'),
-        app_id: z.number().optional().describe('App ID when known from Calls UI context'),
+        search: z.string().optional().describe('Search caller name, phone, email, etc.'),
+        status: z.union([z.string(), z.number()]).optional().describe('Status ID/code (from get_call_session_filters), e.g. 246'),
+        outcome: z.union([z.string(), z.number()]).optional().describe('Outcome ID/code (from get_call_session_filters), e.g. 252'),
+        assigned_to: z.union([z.string(), z.number()]).optional().describe('Assignee user/team-member id'),
+        started_from: z.string().optional().describe('Call start date from YYYY-MM-DD (inclusive). Prefer this over created_*.'),
+        started_to: z.string().optional().describe('Call start date to YYYY-MM-DD (inclusive). For one day, set both from and to to that day.'),
+        /** @deprecated Use started_from — still accepted, mapped to started_at filter */
+        created_from: z.string().optional().describe('Alias for started_from (maps to started_at filter)'),
+        /** @deprecated Use started_to */
+        created_to: z.string().optional().describe('Alias for started_to (maps to started_at filter)'),
+        app_id: z.number().optional().describe('Calls app ID when known (web UI sends this, e.g. 39)'),
         with_trashed: z.boolean().optional().describe('Include soft-deleted (default: false)'),
         page: z.number().optional().describe('Page number (default: 1)'),
         limit: z.number().optional().describe('Page size (default 25, max enforced by runtime)'),
         sort: z.enum(['asc', 'desc']).optional().describe('Sort direction (default: desc)'),
-        sort_by: z.string().optional().describe('Sort field (default: created_at)'),
+        sort_by: z.string().optional().describe('Sort field (default: created_at; UI may use started_at)'),
       },
     },
     async ({
       search,
       status,
+      outcome,
       assigned_to,
+      started_from,
+      started_to,
       created_from,
       created_to,
       app_id,
@@ -91,6 +156,9 @@ export function registerCallsTools() {
       const effectiveLimit = Math.min(Math.max(1, Number(limit) || 25), max);
       const effectivePage = Math.max(1, Math.floor(Number(page) || 1));
 
+      const from = (started_from || created_from || '').toString().trim();
+      const to = (started_to || created_to || '').toString().trim();
+
       const data = {
         company_id: companyId,
         user_id: userId,
@@ -101,31 +169,17 @@ export function registerCallsTools() {
         sort_by: sort_by || 'created_at',
       };
       if (search?.trim()) data.search = search.trim();
-      if (status) data.status = status;
-      if (assigned_to != null && assigned_to !== '') data.assigned_to = String(assigned_to);
       if (app_id != null) data.app_id = app_id;
       if (with_trashed) data.with_trashed = true;
 
-      const from = created_from ? String(created_from).trim() : '';
-      const to = created_to ? String(created_to).trim() : '';
-      if (from && to) {
-        data.filter = {
-          advance: [{
-            db_attribute: 'created_at',
-            operator: 'BETWEEN',
-            value: `${from},${to}`,
-          }],
-        };
-      } else if (from || to) {
-        const day = from || to;
-        data.filter = {
-          advance: [{
-            db_attribute: 'created_at',
-            operator: 'BETWEEN',
-            value: `${day},${day}`,
-          }],
-        };
-      }
+      const filter = buildCallsAdvanceFilter({
+        startedFrom: from,
+        startedTo: to,
+        status,
+        outcome,
+        assignedTo: assigned_to,
+      });
+      if (filter) data.filter = filter;
 
       const result = await callWorxstreamAPI({
         method: 'POST',
@@ -141,7 +195,7 @@ export function registerCallsTools() {
     {
       title: 'Get Call Session Details',
       description:
-        'Get one voice-agent call session by ID (summary, chat history, quote lead, recording URLs, status, assignee, sentiment, outcome).',
+        'Get one voice-agent call session by ID (summary, chat, recording URLs, status, assignee, sentiment, outcome).',
       inputSchema: {
         id: z.number().describe('Call session report ID'),
         with_trashed: z.boolean().optional().describe('Include soft-deleted (default: false)'),
@@ -164,7 +218,7 @@ export function registerCallsTools() {
     {
       title: 'Get Call Session Filters',
       description:
-        'Load Calls page filter options: status map and assignedTo team-member list. Call before updating status/assignee when unsure of valid values.',
+        'Load Calls filter options: status id→label map and assignedTo list. Call this to resolve numeric status/outcome codes (e.g. 246→Completed) before presenting or updating.',
       inputSchema: {},
     },
     async () => {
@@ -182,11 +236,11 @@ export function registerCallsTools() {
     {
       title: 'Update Call Session Field',
       description:
-        'Quick-update one field on a call session: status, assigned_to, or outcome. Confirm with the user before changing. Use get_call_session_filters for valid status/assignee values.',
+        'Quick-update one field: status, assigned_to, or outcome. Confirm with the user first. Use get_call_session_filters for valid IDs/labels.',
       inputSchema: {
         id: z.number().describe('Call session report ID'),
         db_attribute: z.enum(['status', 'assigned_to', 'outcome']).describe('Field to update'),
-        value: z.union([z.string(), z.number()]).describe('New value (status/outcome string, or assignee user id)'),
+        value: z.union([z.string(), z.number()]).describe('New value (status/outcome id or assignee id)'),
       },
     },
     async ({ id, db_attribute, value }) => {
@@ -209,8 +263,7 @@ export function registerCallsTools() {
     'delete_call_session',
     {
       title: 'Delete Call Session',
-      description:
-        'Soft-delete a voice-agent call session. Confirm with the user before deleting.',
+      description: 'Soft-delete a voice-agent call session. Confirm with the user before deleting.',
       inputSchema: {
         id: z.number().describe('Call session report ID'),
       },

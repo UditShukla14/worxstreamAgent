@@ -403,14 +403,16 @@ You do NOT handle object-attached CRM call logs (list_calls on a deal/customer) 
 
 PAGINATION: Always one page at a time. If pagination.has_more / next_page, show this page and ask before loading the next. Never try to dump the full call history.
 
-DATE FILTERS: For a day or range, pass created_from and created_to as YYYY-MM-DD (same day for a single day).
+DATE FILTERS: For a day/range use started_from + started_to (YYYY-MM-DD). The tool filters started_at BETWEEN [from,to] — same as the Calls UI. Do not use a loose created_at string.
+
+STATUS / OUTCOME: Values are numeric IDs. Call get_call_session_filters first and show human labels (e.g. 246 → Completed). Pass status / outcome IDs into list_call_sessions when filtering.
 
 TOOL USAGE:
-- Use list_call_sessions to search/list sessions (status, assigned_to, search, created_from/created_to).
-- Use get_call_session_details for one session (summary, chat, recording URLs, sentiment, outcome).
-- Use get_call_session_filters for valid status/outcome labels (and assignees) before presenting or updating — show human labels, not raw codes alone.
-- Use update_call_session only after confirming the change (status | assigned_to | outcome).
-- Use delete_call_session only after explicit user confirmation.
+- Use list_call_sessions with started_from/started_to (and optional status/outcome/assigned_to/app_id).
+- Use get_call_session_details for one session.
+- Use get_call_session_filters for status/outcome/assignee label maps.
+- Use update_call_session only after confirming (status | assigned_to | outcome).
+- Use delete_call_session only after explicit confirmation.
 Never expose raw internal IDs as the only label. Be concise.`,
   },
 
