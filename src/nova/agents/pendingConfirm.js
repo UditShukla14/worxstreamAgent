@@ -1,5 +1,5 @@
 /**
- * Pending write-tool confirmations (Redis).
+ * Pending write-tool confirmations (Redis + in-memory fallback).
  */
 
 import { randomUUID } from 'crypto';
@@ -8,12 +8,22 @@ import { redisDel, redisGet, redisSet } from '../../services/redisClient.js';
 import { getToolRegistrySnapshot } from '../../mcp/server.js';
 import { inferCapabilitiesFromToolName } from '../../mcp/toolCapabilities.js';
 
+/** Process-local fallback when Redis is down (same pattern as SMS drafts). */
+const memoryPending = new Map();
+
 function confirmKey(ref) {
   const companyId = String(ref.companyId || ref.company_id || '');
   const userId = String(ref.userId || ref.user_id || '');
   const conversationId = String(ref.conversationId || ref.conversation_id || '');
   if (!conversationId) return '';
   return `ws:pending:${companyId}:${userId}:${conversationId}`;
+}
+
+function pruneMemoryPending() {
+  const now = Date.now();
+  for (const [key, row] of memoryPending) {
+    if (row.expiresAt && row.expiresAt < now) memoryPending.delete(key);
+  }
 }
 
 export function isWriteTool(toolName) {
@@ -38,9 +48,13 @@ export function shouldConfirmWrites(context = {}) {
  */
 export async function storePendingConfirm(ref, payload) {
   const key = confirmKey(ref);
-  if (!key) return null;
+  if (!key) {
+    console.warn('⏸️ Write confirm skipped store: missing conversationId on planRef');
+    return null;
+  }
   const confirmationId = payload.confirmationId || randomUUID();
   const ttl = config.coworker?.pendingConfirmTtlSeconds ?? 300;
+  const ttlSec = ttl > 0 ? ttl : 300;
   const data = {
     confirmationId,
     tool: payload.tool,
@@ -49,7 +63,15 @@ export async function storePendingConfirm(ref, payload) {
     userMessage: payload.userMessage,
     createdAt: Date.now(),
   };
-  await redisSet(key, JSON.stringify(data), { ex: ttl > 0 ? ttl : 300 });
+  pruneMemoryPending();
+  memoryPending.set(key, { ...data, expiresAt: Date.now() + ttlSec * 1000 });
+  const ok = await redisSet(key, JSON.stringify(data), { ex: ttlSec });
+  if (!ok) {
+    console.warn('⏸️ Write confirm stored in memory only (Redis unavailable)', {
+      tool: payload.tool,
+      confirmationId,
+    });
+  }
   return confirmationId;
 }
 
@@ -57,18 +79,23 @@ export async function getPendingConfirm(ref) {
   const key = confirmKey(ref);
   if (!key) return null;
   const raw = await redisGet(key);
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
+  if (raw) {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      /* fall through to memory */
+    }
   }
+  pruneMemoryPending();
+  const mem = memoryPending.get(key);
+  return mem || null;
 }
 
 export async function clearPendingConfirm(ref) {
   const key = confirmKey(ref);
   if (!key) return;
   await redisDel(key);
+  memoryPending.delete(key);
 }
 
 export { getToolRegistrySnapshot };

@@ -303,6 +303,9 @@ export class BaseAgent {
             && isWriteTool(block.name)
             && !context._approvedConfirmations?.includes(block.id)
           ) {
+            // Does NOT call executeMcpTool — look for this log when flow "stops" at → tool
+            // with no "Executing MCP tool" line (common for send_sms under COWORKER_CONFIRM_WRITES).
+            console.log(`  ⏸️ [${this.name}] ${block.name} gated — awaiting write confirmation`);
             const confirmationId = await storePendingConfirm(
               context._planRef || {},
               {
@@ -312,6 +315,7 @@ export class BaseAgent {
                 userMessage: message,
               },
             );
+            console.log(`  ⏸️ [${this.name}] confirmationId=${confirmationId || 'null'}`);
             onEvent({
               type: 'confirmation_required',
               confirmationId,
