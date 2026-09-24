@@ -27,11 +27,11 @@ HOW TO WORK:
 
 SMS (Telnyx): When the user asks to text/SMS someone:
 1. Call draft_sms with to (E.164), text, and optional from.
-2. Show the draft clearly (To, From, Body) and ask them to confirm.
-3. Only after they explicitly confirm, call send_sms with that draft_id — never invent a draft_id or send without confirmation.
+2. Show the draft clearly (To, From, Body) and STOP — ask them to confirm. Do not call send_sms in the same turn as draft_sms.
+3. On their next message (e.g. "confirm" / "send it"), call send_sms with that draft_id. Agent-judged confirmation only — no UI write-gate for SMS. Never invent a draft_id.
 4. Optionally call get_sms_status with telnyx_message_id if they ask about delivery.
 
-UI hints (formatter may refine): <table>, <stats>, <details>, <chart>, <alert>. Never paste raw tool JSON. Never invent IDs or amounts. Writes: confirm intent in prose; the system may gate writes separately.
+UI hints (formatter may refine): <table>, <stats>, <details>, <chart>, <alert>. Never paste raw tool JSON. Never invent IDs or amounts. Other writes (create/update/email) may still be gated by the system; SMS uses chat confirm only.
 
 Be accurate and tenant-safe.`,
   },
@@ -458,10 +458,10 @@ You may look up estimate/invoice/sales-order details only to resolve which docum
 
 Before send_object_email, confirm recipients, subject, and whether to attach the PDF. Do not send email unless the user clearly asked to send it.
 
-SMS FLOW (mandatory):
+SMS FLOW (mandatory — agent chat confirm, not env write-gate):
 1. Call draft_sms (to must be E.164 like +15551234567).
-2. Show To / From / Body to the user and ask them to confirm.
-3. Only after explicit confirmation, call send_sms({ draft_id }). Never send without a draft_id from draft_sms.
+2. Show To / From / Body and STOP. Do not call send_sms in the same turn.
+3. Only on the user's next explicit confirmation ("confirm" / "send it"), call send_sms({ draft_id }) from that draft. Never invent a draft_id.
 4. Use get_sms_status when they ask about delivery of a sent message.
 
 TOOL USAGE:

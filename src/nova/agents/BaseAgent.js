@@ -22,12 +22,20 @@ import {
   isWriteTool,
   shouldConfirmWrites,
   storePendingConfirm,
+  usesAgentChatConfirm,
 } from './pendingConfirm.js';
 import { COWORKER_SHARED_RULES, stripDuplicatedSharedRules } from './coworkerRules.js';
 
 const MAX_TOOL_ITERATIONS = Number.isFinite(config.agentRuntime?.maxToolIterations)
   ? config.agentRuntime.maxToolIterations
   : 15;
+
+/** User turn that means "send the SMS draft I already saw". */
+function isSmsChatConfirmMessage(message) {
+  const t = String(message || '').trim();
+  if (!t) return false;
+  return /^(yes|yep|yeah|ok|okay|confirm|confirmed|send(\s+it)?|approve|approved|go\s+ahead|do\s+it|ship\s+it)[.!\s]*$/i.test(t);
+}
 
 export class BaseAgent {
   /**
@@ -261,6 +269,7 @@ export class BaseAgent {
     const toolResultPayloads = [];
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
+    let draftedSmsThisRun = false;
 
     console.log(`\n🤖 [${this.name}] started (${tools.length} tools)`);
 
@@ -301,10 +310,11 @@ export class BaseAgent {
           if (
             shouldConfirmWrites(context)
             && isWriteTool(block.name)
+            && !usesAgentChatConfirm(block.name)
             && !context._approvedConfirmations?.includes(block.id)
           ) {
             // Does NOT call executeMcpTool — look for this log when flow "stops" at → tool
-            // with no "Executing MCP tool" line (common for send_sms under COWORKER_CONFIRM_WRITES).
+            // with no "Executing MCP tool" line. send_sms is excluded (agent chat confirm).
             console.log(`  ⏸️ [${this.name}] ${block.name} gated — awaiting write confirmation`);
             const confirmationId = await storePendingConfirm(
               context._planRef || {},
@@ -336,9 +346,37 @@ export class BaseAgent {
             };
           }
 
+          // SMS: agent chat confirm only — never draft+send in one turn unless user message is confirm.
+          if (
+            block.name === 'send_sms'
+            && draftedSmsThisRun
+            && !isSmsChatConfirmMessage(message)
+          ) {
+            console.log(`  ⏸️ [${this.name}] send_sms blocked — show draft and wait for chat confirm`);
+            const blocked = {
+              success: false,
+              error:
+                'Do not call send_sms in the same turn as draft_sms. '
+                + 'Show To/From/Body to the user and wait for their next message confirming.',
+            };
+            toolsUsed.push({ name: block.name, input: normalizedInput, success: false, error: blocked.error });
+            toolResultPayloads.push(blocked);
+            onEvent({ type: 'tool_result', tool: block.name, success: false });
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: block.id,
+              content: JSON.stringify(blocked),
+            });
+            continue;
+          }
+
           const toolStart = Date.now();
           let result = await executeMcpTool(block.name, normalizedInput, { agent: this.name, userMessage: message });
           const toolDuration = Date.now() - toolStart;
+
+          if (block.name === 'draft_sms' && result?.success !== false) {
+            draftedSmsThisRun = true;
+          }
 
           toolsUsed.push({
             name: block.name,

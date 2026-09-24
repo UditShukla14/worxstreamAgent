@@ -175,8 +175,8 @@ export function registerSmsTools() {
       title: 'Send SMS',
       description:
         'Send a previously drafted SMS via Telnyx. Requires draft_id from draft_sms. '
-        + 'ONLY call after the user has explicitly confirmed the draft. '
-        + 'This is a write action and may trigger a confirmation gate.',
+        + 'ONLY call after the user explicitly confirms in chat (e.g. "confirm" / "send it"). '
+        + 'Do not call in the same turn as draft_sms. Confirmation is agent-judged (not a UI write gate).',
       inputSchema: {
         draft_id: z.string().describe('draft_id returned by draft_sms'),
       },

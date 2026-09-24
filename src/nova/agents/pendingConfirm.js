@@ -31,9 +31,17 @@ export function isWriteTool(toolName) {
   if (caps.safety === 'write') return true;
   const n = String(toolName || '').toLowerCase();
   if (n.startsWith('create_') || n.startsWith('update_') || n.startsWith('delete_')) return true;
-  // Outbound messaging — always treat as writes for confirmation gating
-  if (n === 'send_sms' || n === 'send_object_email') return true;
+  // Outbound email still uses the env write gate when COWORKER_CONFIRM_WRITES=true
+  if (n === 'send_object_email') return true;
   return false;
+}
+
+/**
+ * Tools whose confirmation is owned by the agent chat flow (draft → user says
+ * confirm → send), not COWORKER_CONFIRM_WRITES / UI pending_confirmation.
+ */
+export function usesAgentChatConfirm(toolName) {
+  return String(toolName || '').toLowerCase() === 'send_sms';
 }
 
 export function shouldConfirmWrites(context = {}) {
