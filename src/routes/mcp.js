@@ -4,29 +4,47 @@
  * Each POST gets a fresh McpServer + transport pair (an SDK server instance
  * can only connect to one transport). GET/DELETE are rejected per the
  * stateless Streamable HTTP pattern.
+ *
+ * Tenant context is taken from Authorization / X-Company-Id / X-User-Id
+ * (or env token fallback) so remote MCP clients (e.g. Telnyx SMS agent) can
+ * call Worxstream-backed tools.
  */
 
 import { Router } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createMcpServer } from '../mcp/server.js';
+import {
+  requestContextFromReq,
+  runWithRequestContext,
+} from '../request/requestContext.js';
+import { readEnvApiToken } from '../utils/worxstreamCredentials.js';
 
 const router = Router();
 
 router.post('/', async (req, res) => {
   try {
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-      enableJsonResponse: true,
-    });
-    const server = createMcpServer();
+    const fromReq = requestContextFromReq(req);
+    const ctx = {
+      companyId: fromReq.companyId,
+      userId: fromReq.userId,
+      apiToken: fromReq.apiToken || readEnvApiToken() || undefined,
+    };
 
-    res.on('close', () => {
-      transport.close();
-      server.close();
-    });
+    await runWithRequestContext(ctx, async () => {
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+        enableJsonResponse: true,
+      });
+      const server = createMcpServer();
 
-    await server.connect(transport);
-    await transport.handleRequest(req, res, req.body);
+      res.on('close', () => {
+        transport.close();
+        server.close();
+      });
+
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+    });
   } catch (error) {
     console.error('❌ MCP request failed:', error);
     if (!res.headersSent) {

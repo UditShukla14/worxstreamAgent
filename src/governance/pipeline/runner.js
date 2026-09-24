@@ -22,7 +22,6 @@ import {
 } from './contextBuilder.js';
 import { findingKey, parseGovernanceFindings, runStatusFromSteps } from './parseVerdict.js';
 import { hydrateSharedContext } from './hydrate.js';
-import { getDefaultTenantIds } from '../../config/index.js';
 import { runWithRequestContext } from '../../request/requestContext.js';
 import {
   mergeStructuredOverLlm,
@@ -57,7 +56,7 @@ function enqueuePersist(runId, task) {
 
 export function startPipelineInBackground(event) {
   const companyId = String(event.company_id);
-  const userId = event.user_id != null ? String(event.user_id) : getDefaultTenantIds().userId;
+  const userId = event.user_id != null ? String(event.user_id) : '';
   const apiToken = process.env.WORXSTREAM_API_TOKEN || '';
 
   setImmediate(() => {

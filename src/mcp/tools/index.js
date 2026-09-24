@@ -33,6 +33,7 @@ import { registerDealTools } from './deals.js';
 import { registerCrmTools } from './crm.js';
 import { registerPaymentTools } from './payments.js';
 import { registerCommunicationsTools } from './communications.js';
+import { registerSmsTools } from './sms.js';
 import { registerCallsTools } from './calls.js';
 
 /**
@@ -133,6 +134,9 @@ export function registerAllTools() {
 
   registerCommunicationsTools();
   console.log('  ✓ Communications tools registered');
+
+  registerSmsTools();
+  console.log('  ✓ SMS (Telnyx draft/send) tools registered');
 
   registerCallsTools();
   console.log('  ✓ Calls (voice-agent session report) tools registered');

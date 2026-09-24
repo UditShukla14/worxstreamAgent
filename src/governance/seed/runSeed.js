@@ -18,11 +18,12 @@ import { seedGovernanceForCompany } from './seedGovernance.js';
 import { SEED_POLICIES, SEED_RULES } from './seedData.js';
 
 function resolveCompanyId(conversationIds) {
-  const fromEnv = (process.env.SEED_COMPANY_ID || process.env.DEFAULT_COMPANY_ID || '').trim();
+  const fromEnv = (process.env.SEED_COMPANY_ID || '').trim();
   if (fromEnv) return fromEnv;
-  if (conversationIds.length === 1) return conversationIds[0];
-  if (conversationIds.length > 1) return conversationIds[0];
-  return '1';
+  if (conversationIds.length >= 1) return conversationIds[0];
+  throw new Error(
+    'SEED_COMPANY_ID is required when no conversations exist yet to infer a company.',
+  );
 }
 
 async function main() {

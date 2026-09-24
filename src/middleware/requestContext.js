@@ -7,7 +7,7 @@ import { buildWorxstreamContext } from '../utils/worxstreamCredentials.js';
 
 const AGENT_PATH_PREFIXES = ['/api/agents', '/api/price-comparison'];
 const SERVER_PATH_PREFIXES = ['/api/tools', '/api/webhooks', '/api/control'];
-const ENV_FALLBACK_PREFIXES = ['/api/tools', '/api/webhooks'];
+const ENV_TOKEN_FALLBACK_PREFIXES = ['/api/tools', '/api/webhooks'];
 
 function matchesPrefix(path, prefixes) {
   return prefixes.some((p) => path.startsWith(p));
@@ -18,8 +18,8 @@ function shouldApplyContext(req) {
   return matchesPrefix(path, AGENT_PATH_PREFIXES) || matchesPrefix(path, SERVER_PATH_PREFIXES);
 }
 
-function allowEnvFallbackForPath(path) {
-  return matchesPrefix(path, ENV_FALLBACK_PREFIXES);
+function allowEnvTokenFallbackForPath(path) {
+  return matchesPrefix(path, ENV_TOKEN_FALLBACK_PREFIXES);
 }
 
 /**
@@ -33,7 +33,7 @@ export function requestContextMiddleware(req, res, next) {
 
   const ctx = buildWorxstreamContext(
     { req },
-    { allowEnvFallback: allowEnvFallbackForPath(req.path || '') },
+    { allowEnvTokenFallback: allowEnvTokenFallbackForPath(req.path || '') },
   );
 
   enterRequestContext(ctx, () => next());

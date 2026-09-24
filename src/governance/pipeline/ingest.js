@@ -7,7 +7,6 @@ import ProcessedEvent from '../models/ProcessedEvent.js';
 import PipelineRun from '../models/PipelineRun.js';
 import { startPipelineInBackground } from './runner.js';
 import { getPipelineForEvent, normalizeEventType } from './pipelineConfig.js';
-import { getDefaultTenantIds } from '../../config/index.js';
 
 /**
  * @param {object} input
@@ -29,9 +28,13 @@ export async function acceptGovernanceEvent(input) {
     throw error;
   }
 
-  const defaults = getDefaultTenantIds();
-  const companyId = input?.company_id != null ? String(input.company_id) : defaults.companyId;
-  const userId = input?.user_id != null ? String(input.user_id) : defaults.userId;
+  const companyId = input?.company_id != null ? String(input.company_id).trim() : '';
+  if (!companyId) {
+    const error = new Error('company_id is required');
+    error.status = 400;
+    throw error;
+  }
+  const userId = input?.user_id != null ? String(input.user_id) : '';
   const eventId = input?.event_id != null && String(input.event_id).trim()
     ? String(input.event_id).trim()
     : `evt_${randomUUID()}`;

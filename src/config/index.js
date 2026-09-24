@@ -215,17 +215,26 @@ export const config = {
       ? 'specialists'
       : 'orchestrator',
   },
+  /** Telnyx Messaging — used by MCP SMS tools (draft_sms / send_sms). Server-only. */
+  telnyx: {
+    apiKey: (process.env.TELNYX_API_KEY || '').trim(),
+    fromNumber: (process.env.TELNYX_FROM_NUMBER || '').trim(),
+    messagingProfileId: (process.env.TELNYX_MESSAGING_PROFILE_ID || '').trim(),
+    alphaSender: (process.env.TELNYX_ALPHA_SENDER || '').trim(),
+    /** SMS draft TTL in Redis / memory (seconds). */
+    draftTtlSeconds: parseInt(process.env.TELNYX_SMS_DRAFT_TTL || '600', 10),
+  },
 };
 
 /**
- * Worxstream API credentials. When .env has token + company + user, those are always used.
- * Otherwise: per-request ALS, session, then optional env fallbacks.
+ * Worxstream API credentials from ALS / session / request.
+ * Company and user never fall back to hardcoded defaults.
  */
-function resolveWorxstreamCredentials({ allowEnvFallback = true } = {}) {
-  const ctx = buildWorxstreamContext({}, { allowEnvFallback });
+function resolveWorxstreamCredentials({ allowEnvTokenFallback = true } = {}) {
+  const ctx = buildWorxstreamContext({}, { allowEnvTokenFallback });
   return {
-    companyId: ctx.companyId || (allowEnvFallback ? '1' : undefined),
-    userId: ctx.userId || (allowEnvFallback ? '1' : undefined),
+    companyId: ctx.companyId,
+    userId: ctx.userId,
     apiToken: ctx.apiToken || '',
   };
 }
@@ -236,13 +245,13 @@ export function getWorxstreamApiToken() {
   return apiToken || '';
 }
 
-/** companyId / userId for MCP tool calls — request/session, then optional env. */
+/** companyId / userId for MCP tool calls — request/session only (per-user). */
 export function getWorxstreamContext() {
   const { companyId, userId } = resolveWorxstreamCredentials();
   return { companyId, userId };
 }
 
-/** Default tenant for Mongo/Redis when the client omits companyId/userId (non-agent paths). */
+/** Tenant ids from the current request context (no DEFAULT_* fallback). */
 export function getDefaultTenantIds() {
   return getWorxstreamContext();
 }
@@ -269,7 +278,7 @@ export function validateConfig() {
 
   if (!process.env.WORXSTREAM_API_TOKEN) {
     console.warn(
-      '⚠️  WORXSTREAM_API_TOKEN not set — agent routes require POST /api/auth/session or per-request credentials; webhooks/scripts may need env defaults.',
+      '⚠️  WORXSTREAM_API_TOKEN not set — agent routes need a user JWT; Scribe scheduled reports need this env token.',
     );
   }
   if (isProduction && !process.env.WORXSTREAM_WEBHOOK_SECRET) {

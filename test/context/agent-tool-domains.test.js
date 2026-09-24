@@ -62,6 +62,9 @@ describe('agent tool domains', () => {
     assert.ok(bucketNames('calls').includes('get_call_session_details'));
     assert.ok(bucketNames('payments').includes('list_received_payments'));
     assert.ok(bucketNames('communications').includes('send_object_email'));
+    assert.ok(bucketNames('communications').includes('draft_sms'));
+    assert.ok(bucketNames('communications').includes('send_sms'));
+    assert.ok(bucketNames('communications').includes('get_sms_status'));
     assert.ok(bucketNames('vendor').includes('list_vendor_accounts'));
   });
 

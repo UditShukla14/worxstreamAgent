@@ -7,6 +7,9 @@ describe('write confirmation', () => {
     assert.equal(isWriteTool('create_invoice'), true);
     assert.equal(isWriteTool('list_invoices'), false);
     assert.equal(isWriteTool('update_customer'), true);
+    assert.equal(isWriteTool('send_sms'), true);
+    assert.equal(isWriteTool('draft_sms'), false);
+    assert.equal(isWriteTool('send_object_email'), true);
   });
 
   it('shouldConfirmWrites respects config flag', () => {

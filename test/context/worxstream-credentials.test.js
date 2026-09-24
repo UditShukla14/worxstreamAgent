@@ -10,7 +10,7 @@ import {
 import { runWithRequestContext } from '../../src/request/requestContext.js';
 
 describe('worxstreamCredentials', () => {
-  it('prefers request body over session when env fallback is disabled', async () => {
+  it('prefers request body over session', async () => {
     worxstreamSession.setSession({
       companyId: '100',
       userId: '200',
@@ -20,7 +20,7 @@ describe('worxstreamCredentials', () => {
     await runWithRequestContext(
       { companyId: '10', userId: '20', apiToken: 'req-token' },
       async () => {
-        const ctx = buildWorxstreamContext({}, { allowEnvFallback: false });
+        const ctx = buildWorxstreamContext({}, { allowEnvTokenFallback: false });
         assert.equal(ctx.companyId, '10');
         assert.equal(ctx.userId, '20');
         assert.equal(ctx.apiToken, 'req-token');
@@ -30,14 +30,14 @@ describe('worxstreamCredentials', () => {
     worxstreamSession.clearSession();
   });
 
-  it('uses session when request omits credentials and env fallback is disabled', () => {
+  it('uses session when request omits credentials', () => {
     worxstreamSession.setSession({
       companyId: '300',
       userId: '400',
       apiToken: 'session-token',
     });
 
-    const ctx = buildWorxstreamContext({}, { allowEnvFallback: false });
+    const ctx = buildWorxstreamContext({}, { allowEnvTokenFallback: false });
     assert.equal(ctx.companyId, '300');
     assert.equal(ctx.userId, '400');
     assert.equal(ctx.apiToken, 'session-token');
@@ -45,7 +45,7 @@ describe('worxstreamCredentials', () => {
     worxstreamSession.clearSession();
   });
 
-  it('resolveAgentCredentials uses env when WORXSTREAM_API_TOKEN + DEFAULT_* are set', () => {
+  it('never overrides company/user from DEFAULT_* even when env token is set', () => {
     const prev = {
       company: process.env.DEFAULT_COMPANY_ID,
       user: process.env.DEFAULT_USER_ID,
@@ -61,9 +61,10 @@ describe('worxstreamCredentials', () => {
         query: { companyId: '42', userId: '43' },
         headers: { authorization: 'Bearer header-token' },
       });
-      assert.equal(ctx.companyId, '999');
-      assert.equal(ctx.userId, '888');
-      assert.equal(ctx.apiToken, 'env-token');
+      assert.equal(ctx.companyId, '42');
+      assert.equal(ctx.userId, '43');
+      // Request bearer wins over env token when present
+      assert.equal(ctx.apiToken, 'header-token');
       assert.equal(hasCompleteWorxstreamContext(ctx), true);
     } finally {
       process.env.DEFAULT_COMPANY_ID = prev.company;
@@ -72,7 +73,7 @@ describe('worxstreamCredentials', () => {
     }
   });
 
-  it('reads tenant ids from headers when env credentials are not complete', () => {
+  it('reads tenant ids from headers', () => {
     const prev = {
       company: process.env.DEFAULT_COMPANY_ID,
       user: process.env.DEFAULT_USER_ID,
@@ -105,37 +106,22 @@ describe('worxstreamCredentials', () => {
     }
   });
 
-  it('conversation tenant uses query userId even when env DEFAULT_* are set', async () => {
-    const prev = {
-      company: process.env.DEFAULT_COMPANY_ID,
-      user: process.env.DEFAULT_USER_ID,
-      token: process.env.WORXSTREAM_API_TOKEN,
-    };
-    process.env.DEFAULT_COMPANY_ID = '999';
-    process.env.DEFAULT_USER_ID = '888';
-    process.env.WORXSTREAM_API_TOKEN = 'env-token';
-
-    try {
-      await runWithRequestContext(
-        { companyId: '999', userId: '888', apiToken: 'env-token' },
-        async () => {
-          const ids = resolveConversationTenantIds({
-            body: {},
-            query: { companyId: '30000000021', userId: '10000000048' },
-            headers: {},
-          });
-          assert.equal(ids.companyId, '30000000021');
-          assert.equal(ids.userId, '10000000048');
-        },
-      );
-    } finally {
-      process.env.DEFAULT_COMPANY_ID = prev.company;
-      process.env.DEFAULT_USER_ID = prev.user;
-      process.env.WORXSTREAM_API_TOKEN = prev.token;
-    }
+  it('conversation tenant uses query userId', async () => {
+    await runWithRequestContext(
+      { companyId: '1', userId: '2', apiToken: 't' },
+      async () => {
+        const ids = resolveConversationTenantIds({
+          body: {},
+          query: { companyId: '30000000021', userId: '10000000048' },
+          headers: {},
+        });
+        assert.equal(ids.companyId, '30000000021');
+        assert.equal(ids.userId, '10000000048');
+      },
+    );
   });
 
-  it('conversation tenant ignores env when request and session are empty', () => {
+  it('conversation tenant ignores DEFAULT_* when request and session are empty', () => {
     const prev = {
       company: process.env.DEFAULT_COMPANY_ID,
       user: process.env.DEFAULT_USER_ID,
@@ -173,35 +159,22 @@ describe('worxstreamCredentials', () => {
     }
   });
 
-  it('conversation tenant prefers session over ALS DEFAULT_* when env credentials are set', async () => {
-    const prev = {
-      company: process.env.DEFAULT_COMPANY_ID,
-      user: process.env.DEFAULT_USER_ID,
-      token: process.env.WORXSTREAM_API_TOKEN,
-    };
-    process.env.DEFAULT_COMPANY_ID = '999';
-    process.env.DEFAULT_USER_ID = '888';
+  it('api token may fall back to WORXSTREAM_API_TOKEN without changing tenant', () => {
+    const prev = process.env.WORXSTREAM_API_TOKEN;
     process.env.WORXSTREAM_API_TOKEN = 'env-token';
-    worxstreamSession.setSession({
-      companyId: '30000000021',
-      userId: '10000000048',
-      apiToken: 'session-token',
-    });
+    worxstreamSession.clearSession();
 
     try {
-      await runWithRequestContext(
-        { companyId: '999', userId: '888', apiToken: 'env-token' },
-        async () => {
-          const ids = resolveConversationTenantIds({ body: {}, query: {}, headers: {} });
-          assert.equal(ids.companyId, '30000000021');
-          assert.equal(ids.userId, '10000000048');
-        },
-      );
+      const ctx = resolveAgentCredentials({
+        body: {},
+        query: { companyId: '42', userId: '43' },
+        headers: {},
+      });
+      assert.equal(ctx.companyId, '42');
+      assert.equal(ctx.userId, '43');
+      assert.equal(ctx.apiToken, 'env-token');
     } finally {
-      worxstreamSession.clearSession();
-      process.env.DEFAULT_COMPANY_ID = prev.company;
-      process.env.DEFAULT_USER_ID = prev.user;
-      process.env.WORXSTREAM_API_TOKEN = prev.token;
+      process.env.WORXSTREAM_API_TOKEN = prev;
     }
   });
 });

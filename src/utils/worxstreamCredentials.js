@@ -1,18 +1,14 @@
 /**
  * Resolve Worxstream tenant credentials for agent and API calls.
  *
- * When WORXSTREAM_API_TOKEN, DEFAULT_COMPANY_ID, and DEFAULT_USER_ID are all set
- * in the agent .env, those values are used for every WorxStream API call (MCP tools,
- * Scribe reports, etc.) — session JWT, localStorage, and Mongo tenant fields are ignored.
+ * Company/user always come from the caller (ALS → request → session).
+ * Never use DEFAULT_COMPANY_ID / DEFAULT_USER_ID — every production user
+ * has their own company_id and user_id.
  *
- * Conversation / preferences Mongo scoping must NOT use that path — use
- * resolveConversationTenantIds() so request/session companyId/userId isolate each user.
+ * WORXSTREAM_API_TOKEN remains an optional fallback for the API token only
+ * (Scribe scheduled reports, unsigned server jobs) when the request has no JWT.
  *
- * Otherwise precedence is:
- *   1. AsyncLocalStorage (per-request middleware)
- *   2. Express request body, query, or headers
- *   3. In-memory session (POST /api/auth/session)
- *   4. Optional .env fallbacks when allowEnvFallback is true
+ * Conversation Mongo scoping: resolveConversationTenantIds() — request → session → ALS.
  */
 
 import { getRequestContext, requestContextFromReq } from '../request/requestContext.js';
@@ -23,68 +19,40 @@ import * as worxstreamSession from '../session/worxstreamSession.js';
  */
 
 /**
- * Read WorxStream API credentials from agent .env only.
- * @returns {WorxstreamCredentials | null}
+ * Optional server-side API token from .env (not a tenant identity).
+ * @returns {string}
  */
-export function readEnvWorxstreamCredentials() {
-  const companyId = (process.env.DEFAULT_COMPANY_ID || '').trim();
-  const userId = (process.env.DEFAULT_USER_ID || '').trim();
-  const apiToken = (process.env.WORXSTREAM_API_TOKEN || '').trim();
-  if (!companyId || !userId || !apiToken) return null;
-  return { companyId, userId, apiToken };
-}
-
-/**
- * @returns {WorxstreamCredentials}
- */
-export function requireEnvWorxstreamCredentials() {
-  const creds = readEnvWorxstreamCredentials();
-  if (!creds) {
-    throw new Error(
-      'Set WORXSTREAM_API_TOKEN, DEFAULT_COMPANY_ID, and DEFAULT_USER_ID in the agent .env file.',
-    );
-  }
-  return creds;
+export function readEnvApiToken() {
+  return (process.env.WORXSTREAM_API_TOKEN || '').trim();
 }
 
 /**
  * @param {{ req?: import('express').Request }} [source]
- * @param {{ allowEnvFallback?: boolean }} [options]
+ * @param {{ allowEnvTokenFallback?: boolean }} [options]
  * @returns {WorxstreamCredentials}
  */
-export function buildWorxstreamContext(source = {}, { allowEnvFallback = false } = {}) {
-  const fromEnv = readEnvWorxstreamCredentials();
-  if (fromEnv) {
-    return fromEnv;
-  }
-
+export function buildWorxstreamContext(source = {}, { allowEnvTokenFallback = false } = {}) {
   const fromAls = getRequestContext() || {};
   const fromReq = source.req ? requestContextFromReq(source.req) : {};
   const session = worxstreamSession.getSession() || {};
-
-  const envCompany = allowEnvFallback ? (process.env.DEFAULT_COMPANY_ID || '').trim() : '';
-  const envUser = allowEnvFallback ? (process.env.DEFAULT_USER_ID || '').trim() : '';
-  const envToken = allowEnvFallback ? (process.env.WORXSTREAM_API_TOKEN || '').trim() : '';
 
   const companyId =
     fromAls.companyId ||
     fromReq.companyId ||
     session.companyId ||
-    envCompany ||
     undefined;
 
   const userId =
     fromAls.userId ||
     fromReq.userId ||
     session.userId ||
-    envUser ||
     undefined;
 
   const apiToken =
     fromAls.apiToken ||
     fromReq.apiToken ||
     session.apiToken ||
-    envToken ||
+    (allowEnvTokenFallback ? readEnvApiToken() : '') ||
     undefined;
 
   return {
@@ -103,22 +71,17 @@ export function hasCompleteWorxstreamContext(ctx) {
 }
 
 /**
- * Credentials for agent routes. Env wins when all three vars are set; else request/session.
+ * Credentials for agent routes — per-request / session tenant; token may fall back to env.
  * @param {import('express').Request} req
  * @returns {WorxstreamCredentials}
  */
 export function resolveAgentCredentials(req) {
-  return buildWorxstreamContext({ req }, { allowEnvFallback: true });
+  return buildWorxstreamContext({ req }, { allowEnvTokenFallback: true });
 }
 
 /**
  * Mongo conversation / preferences tenancy from the caller only.
  * Prefers request (query/body/headers) → session → ALS.
- * Never uses DEFAULT_COMPANY_ID / DEFAULT_USER_ID.
- *
- * When WORXSTREAM_API_TOKEN + DEFAULT_* are set, ALS is seeded with those
- * defaults (for MCP tools). Ignore ALS in that mode so list/stream/delete
- * stay scoped to the logged-in user (request or session), not DEFAULT_USER_ID.
  *
  * @param {import('express').Request} [req]
  * @returns {{ companyId?: string, userId?: string }}
@@ -126,9 +89,7 @@ export function resolveAgentCredentials(req) {
 export function resolveConversationTenantIds(req) {
   const fromReq = req ? requestContextFromReq(req) : {};
   const session = worxstreamSession.getSession() || {};
-  // Env-credential mode overwrites ALS with DEFAULT_* — never use ALS for Mongo.
-  const envMode = Boolean(readEnvWorxstreamCredentials());
-  const fromAls = envMode ? {} : (getRequestContext() || {});
+  const fromAls = getRequestContext() || {};
 
   const companyId =
     fromReq.companyId ||

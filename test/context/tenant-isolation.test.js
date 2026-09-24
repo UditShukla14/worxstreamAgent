@@ -3,21 +3,7 @@ import assert from 'node:assert/strict';
 import { getWorxstreamContext, getWorxstreamApiToken } from '../../src/config/index.js';
 import { runWithRequestContext } from '../../src/request/requestContext.js';
 
-describe('Worxstream credentials (env / session)', () => {
-  it('uses DEFAULT_COMPANY_ID and DEFAULT_USER_ID from env when no session', () => {
-    const prevC = process.env.DEFAULT_COMPANY_ID;
-    const prevU = process.env.DEFAULT_USER_ID;
-    process.env.DEFAULT_COMPANY_ID = '42';
-    process.env.DEFAULT_USER_ID = '99';
-
-    const ctx = getWorxstreamContext();
-    assert.equal(ctx.companyId, '42');
-    assert.equal(ctx.userId, '99');
-
-    process.env.DEFAULT_COMPANY_ID = prevC;
-    process.env.DEFAULT_USER_ID = prevU;
-  });
-
+describe('Worxstream credentials (per-request)', () => {
   it('getWorxstreamApiToken falls back to WORXSTREAM_API_TOKEN env', () => {
     const prev = process.env.WORXSTREAM_API_TOKEN;
     process.env.WORXSTREAM_API_TOKEN = 'test-token-env';
@@ -25,11 +11,10 @@ describe('Worxstream credentials (env / session)', () => {
     process.env.WORXSTREAM_API_TOKEN = prev;
   });
 
-  it('per-request context (ALS) takes precedence over env defaults', async () => {
+  it('per-request context (ALS) supplies company/user — DEFAULT_* is ignored', async () => {
     const prevC = process.env.DEFAULT_COMPANY_ID;
     const prevU = process.env.DEFAULT_USER_ID;
     const prevT = process.env.WORXSTREAM_API_TOKEN;
-    // Env-credential mode (all three set) bypasses ALS — clear token so defaults are fallbacks only.
     process.env.DEFAULT_COMPANY_ID = '42';
     process.env.DEFAULT_USER_ID = '99';
     delete process.env.WORXSTREAM_API_TOKEN;
@@ -41,10 +26,10 @@ describe('Worxstream credentials (env / session)', () => {
       assert.equal(getWorxstreamApiToken(), 'req-token');
     });
 
-    // Outside the request scope, env fallback applies again
+    // Outside the request scope, no DEFAULT_* company/user fallback
     const ctx = getWorxstreamContext();
-    assert.equal(ctx.companyId, '42');
-    assert.equal(ctx.userId, '99');
+    assert.equal(ctx.companyId, undefined);
+    assert.equal(ctx.userId, undefined);
 
     process.env.DEFAULT_COMPANY_ID = prevC;
     process.env.DEFAULT_USER_ID = prevU;

@@ -6,7 +6,7 @@
 import { callWorxstreamAPI } from '../../services/httpClient.js';
 import { getWorxstreamContext } from '../../config/index.js';
 import { runWithRequestContext } from '../../request/requestContext.js';
-import { requireEnvWorxstreamCredentials } from '../../utils/worxstreamCredentials.js';
+import { readEnvApiToken } from '../../utils/worxstreamCredentials.js';
 import ReportRun from '../models/ReportRun.js';
 import {
   buildRowSnapshot,
@@ -543,9 +543,21 @@ export function computeNextRunAt(definition, fromDate = new Date()) {
   return anchor;
 }
 
-async function withDefinitionCredentials(_definition, _options, fn) {
-  const creds = requireEnvWorxstreamCredentials();
-  return runWithRequestContext(creds, fn);
+async function withDefinitionCredentials(definition, options, fn) {
+  const apiToken = String(options.apiToken || readEnvApiToken() || '').trim();
+  if (!apiToken) {
+    throw new Error(
+      'WORXSTREAM_API_TOKEN (or options.apiToken) is required for report runs.',
+    );
+  }
+  return runWithRequestContext(
+    {
+      companyId: String(definition.company_id),
+      userId: String(options.userId || definition.user_id || ''),
+      apiToken,
+    },
+    fn,
+  );
 }
 
 /**

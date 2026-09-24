@@ -75,10 +75,11 @@ const DOMAIN_RULES = [
   ['activit', 'crm'],
   ['list_calls', 'crm'],
   ['note', 'crm'],
-  // Communications (communications.js)
+  // Communications (communications.js + sms.js)
   ['object_email', 'communications'],
   ['email_outbox', 'communications'],
   ['notification', 'communications'],
+  ['sms', 'communications'],
   // HR (hr.js): departments, teams, team members
   ['department', 'hr'],
   ['team', 'hr'],

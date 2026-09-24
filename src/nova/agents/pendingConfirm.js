@@ -20,7 +20,10 @@ export function isWriteTool(toolName) {
   const caps = inferCapabilitiesFromToolName(toolName);
   if (caps.safety === 'write') return true;
   const n = String(toolName || '').toLowerCase();
-  return n.startsWith('create_') || n.startsWith('update_') || n.startsWith('delete_');
+  if (n.startsWith('create_') || n.startsWith('update_') || n.startsWith('delete_')) return true;
+  // Outbound messaging — always treat as writes for confirmation gating
+  if (n === 'send_sms' || n === 'send_object_email') return true;
+  return false;
 }
 
 export function shouldConfirmWrites(context = {}) {
