@@ -218,8 +218,13 @@ export const config = {
   /** Telnyx Messaging — used by MCP SMS tools (draft_sms / send_sms). Server-only. */
   telnyx: {
     apiKey: (process.env.TELNYX_API_KEY || '').trim(),
+    /** Purchased long code / TF — required for US/CA/PR (+1). */
     fromNumber: (process.env.TELNYX_FROM_NUMBER || '').trim(),
+    /** Messaging profile for alphanumeric (international) traffic. */
     messagingProfileId: (process.env.TELNYX_MESSAGING_PROFILE_ID || '').trim(),
+    /** Optional dedicated profile for US long-code sends. */
+    usMessagingProfileId: (process.env.TELNYX_US_MESSAGING_PROFILE_ID || '').trim(),
+    /** Alphanumeric brand sender for non-+1 destinations (e.g. Worxstream). */
     alphaSender: (process.env.TELNYX_ALPHA_SENDER || '').trim(),
     /** SMS draft TTL in Redis / memory (seconds). */
     draftTtlSeconds: parseInt(process.env.TELNYX_SMS_DRAFT_TTL || '600', 10),
