@@ -16,6 +16,7 @@ import {
   getTelnyxConfig,
   getTelnyxMessage,
   isE164,
+  resolveDefaultSmsFrom,
   sendTelnyxMessage,
 } from '../../services/telnyxClient.js';
 
@@ -52,14 +53,15 @@ async function storeDraft(companyId, userId, draft) {
     created_at: Date.now(),
   };
   const key = draftKey(companyId, userId, draftId);
-  const ok = await redisSet(key, JSON.stringify(payload), { ex: ttl > 0 ? ttl : 600 });
-  if (!ok) {
-    pruneMemoryDrafts();
-    memoryDrafts.set(draftId, {
-      ...payload,
-      expiresAt: Date.now() + (ttl > 0 ? ttl : 600) * 1000,
-    });
-  }
+  const ttlSec = ttl > 0 ? ttl : 600;
+  // Always keep a process-local copy so a Redis blip between draft and send
+  // does not drop the draft (seen as silent "no error" when send_sms hangs/retries).
+  pruneMemoryDrafts();
+  memoryDrafts.set(draftId, {
+    ...payload,
+    expiresAt: Date.now() + ttlSec * 1000,
+  });
+  await redisSet(key, JSON.stringify(payload), { ex: ttlSec });
   return payload;
 }
 
@@ -114,7 +116,8 @@ export function registerSmsTools() {
       const cfg = getTelnyxConfig();
       const toNorm = String(to || '').trim();
       const textNorm = String(text || '').trim();
-      const fromNorm = String(from || cfg.fromNumber || cfg.alphaSender || '').trim();
+      // US → DID; international → alpha when profile+alpha are set.
+      const fromNorm = String(from || resolveDefaultSmsFrom(toNorm, cfg)).trim();
 
       if (!cfg.apiKey) {
         return asText({
@@ -196,11 +199,18 @@ export function registerSmsTools() {
 
       const draft = await loadDraft(companyId, userId, id);
       if (!draft) {
+        console.error('📱 send_sms: draft missing', { draft_id: id, companyId, userId });
         return asText({
           success: false,
           error: 'Draft not found or expired. Call draft_sms again and re-confirm with the user.',
         });
       }
+
+      console.log('📱 send_sms: sending', {
+        draft_id: id,
+        to: draft.to,
+        from: draft.from,
+      });
 
       const result = await sendTelnyxMessage({
         to: draft.to,
@@ -212,6 +222,15 @@ export function registerSmsTools() {
 
       if (result.success) {
         await clearDraft(companyId, userId, id);
+      } else {
+        console.error('📱 send_sms failed:', {
+          draft_id: id,
+          to: draft.to,
+          from: draft.from,
+          error: result.error,
+          telnyx_error_code: result.telnyx_error_code || null,
+          status: result.status || null,
+        });
       }
 
       return asText({

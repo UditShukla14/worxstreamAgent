@@ -12,6 +12,11 @@ export function isE164(phone) {
   return /^\+[1-9]\d{7,14}$/.test(String(phone || '').trim());
 }
 
+/** US NANP (+1 + 10 digits). Alpha sender IDs are not supported for US destinations. */
+export function isUsDestination(phone) {
+  return /^\+1\d{10}$/.test(String(phone || '').trim());
+}
+
 export function getTelnyxConfig() {
   const apiKey = (config.telnyx?.apiKey || '').trim();
   const fromNumber = (config.telnyx?.fromNumber || '').trim();
@@ -24,6 +29,24 @@ export function getTelnyxConfig() {
     alphaSender: alphaSender || '',
     configured: Boolean(apiKey && (fromNumber || alphaSender)),
   };
+}
+
+/**
+ * Pick default From for a destination.
+ * US (+1): long-code DID only — alpha gets Telnyx 40301.
+ * International: prefer alpha when configured (needed for many markets / this profile).
+ */
+export function resolveDefaultSmsFrom(to, cfg = getTelnyxConfig()) {
+  if (isUsDestination(to)) {
+    return cfg.fromNumber || '';
+  }
+  if (cfg.messagingProfileId && cfg.alphaSender) return cfg.alphaSender;
+  return cfg.fromNumber || cfg.alphaSender || '';
+}
+
+function isAlphaSender(from) {
+  const s = String(from || '').trim();
+  return Boolean(s) && !s.startsWith('+');
 }
 
 /**
@@ -51,7 +74,18 @@ export async function sendTelnyxMessage(input) {
     return { success: false, error: 'Message text is required.' };
   }
 
-  const from = String(input.from || cfg.fromNumber || cfg.alphaSender || '').trim();
+  let from = String(input.from || resolveDefaultSmsFrom(to, cfg) || '').trim();
+  // Never send alpha to US — rewrite even if a stale draft stored alpha.
+  if (isUsDestination(to) && isAlphaSender(from)) {
+    if (!cfg.fromNumber) {
+      return {
+        success: false,
+        error: 'US destinations require TELNYX_FROM_NUMBER (long code). Alpha sender is not supported for +1.',
+        telnyx_error_code: '40301',
+      };
+    }
+    from = cfg.fromNumber;
+  }
   if (!from) {
     return {
       success: false,
@@ -64,8 +98,11 @@ export async function sendTelnyxMessage(input) {
     text,
     from,
   };
+  // Alpha traffic needs the messaging profile; DID can use it when set.
   const profileId = String(input.messagingProfileId || cfg.messagingProfileId || '').trim();
-  if (profileId) body.messaging_profile_id = profileId;
+  if (profileId && (isAlphaSender(from) || cfg.messagingProfileId)) {
+    body.messaging_profile_id = profileId;
+  }
 
   const mediaUrls = Array.isArray(input.mediaUrls)
     ? input.mediaUrls.map((u) => String(u).trim()).filter(Boolean)
@@ -90,6 +127,13 @@ export async function sendTelnyxMessage(input) {
         || json?.message
         || `Telnyx HTTP ${res.status}`;
       const code = json?.errors?.[0]?.code;
+      console.error('📱 Telnyx send failed:', {
+        to,
+        from,
+        http: res.status,
+        code: code || null,
+        detail,
+      });
       return {
         success: false,
         error: detail,
@@ -100,6 +144,12 @@ export async function sendTelnyxMessage(input) {
     }
 
     const data = json?.data || json;
+    console.log('📱 Telnyx send accepted:', {
+      to,
+      from,
+      id: data?.id || null,
+      status: data?.to?.[0]?.status || data?.status || 'queued',
+    });
     return {
       success: true,
       telnyx_message_id: data?.id || null,
@@ -110,6 +160,7 @@ export async function sendTelnyxMessage(input) {
       data,
     };
   } catch (err) {
+    console.error('📱 Telnyx send error:', err?.message || err);
     return {
       success: false,
       error: err?.message || 'Failed to reach Telnyx API',
