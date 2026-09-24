@@ -22,6 +22,23 @@ import {
 
 /** In-memory fallback when Redis is unavailable (dev / single-process). */
 const memoryDrafts = new Map();
+/** companyId:userId → latest draft_id (same process as drafts). */
+const memoryLatestByTenant = new Map();
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const PLACEHOLDER_DRAFT_IDS = new Set([
+  'draft_id',
+  'draftid',
+  'null',
+  'undefined',
+  'none',
+  'n/a',
+  '',
+]);
+
+/** Appended to every outbound SMS draft (compliance / carrier best practice). */
+export const SMS_OPT_OUT_FOOTER = 'Type STOP to opt-out from further receiving any updates';
 
 function asText(result) {
   return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
@@ -31,8 +48,45 @@ function draftTtlSeconds() {
   return config.telnyx?.draftTtlSeconds ?? 600;
 }
 
+/**
+ * Ensure the standard STOP footer is on the message once (case-insensitive).
+ * @param {string} text
+ * @returns {{ text: string, footer_appended: boolean }}
+ */
+export function withSmsOptOutFooter(text) {
+  const body = String(text || '').trim();
+  if (!body) return { text: body, footer_appended: false };
+  const lower = body.toLowerCase();
+  // Already has STOP opt-out language — do not duplicate.
+  if (
+    lower.includes('type stop to opt-out')
+    || lower.includes('type stop to opt out')
+    || /\bstop\b/.test(lower) && /opt[-\s]?out/.test(lower)
+  ) {
+    return { text: body, footer_appended: false };
+  }
+  return {
+    text: `${body}\n\n${SMS_OPT_OUT_FOOTER}`,
+    footer_appended: true,
+  };
+}
+
 function draftKey(companyId, userId, draftId) {
   return `ws:sms-draft:${companyId}:${userId}:${draftId}`;
+}
+
+function latestDraftKey(companyId, userId) {
+  return `ws:sms-latest:${companyId}:${userId}`;
+}
+
+function tenantMemKey(companyId, userId) {
+  return `${companyId}:${userId}`;
+}
+
+function isValidDraftId(id) {
+  const s = String(id || '').trim();
+  if (!s || PLACEHOLDER_DRAFT_IDS.has(s.toLowerCase())) return false;
+  return UUID_RE.test(s);
 }
 
 function pruneMemoryDrafts() {
@@ -40,6 +94,36 @@ function pruneMemoryDrafts() {
   for (const [id, row] of memoryDrafts) {
     if (row.expiresAt && row.expiresAt < now) memoryDrafts.delete(id);
   }
+}
+
+async function setLatestDraftId(companyId, userId, draftId) {
+  const ttlSec = draftTtlSeconds() > 0 ? draftTtlSeconds() : 600;
+  memoryLatestByTenant.set(tenantMemKey(companyId, userId), {
+    draftId,
+    expiresAt: Date.now() + ttlSec * 1000,
+  });
+  await redisSet(latestDraftKey(companyId, userId), draftId, { ex: ttlSec });
+}
+
+async function getLatestDraftId(companyId, userId) {
+  const raw = await redisGet(latestDraftKey(companyId, userId));
+  if (raw && isValidDraftId(raw)) return String(raw).trim();
+  const mem = memoryLatestByTenant.get(tenantMemKey(companyId, userId));
+  if (!mem) return null;
+  if (mem.expiresAt && mem.expiresAt < Date.now()) {
+    memoryLatestByTenant.delete(tenantMemKey(companyId, userId));
+    return null;
+  }
+  return isValidDraftId(mem.draftId) ? mem.draftId : null;
+}
+
+async function clearLatestDraftId(companyId, userId, onlyIfDraftId = null) {
+  if (onlyIfDraftId) {
+    const current = await getLatestDraftId(companyId, userId);
+    if (current && current !== onlyIfDraftId) return;
+  }
+  await redisDel(latestDraftKey(companyId, userId));
+  memoryLatestByTenant.delete(tenantMemKey(companyId, userId));
 }
 
 async function storeDraft(companyId, userId, draft) {
@@ -62,6 +146,7 @@ async function storeDraft(companyId, userId, draft) {
     expiresAt: Date.now() + ttlSec * 1000,
   });
   await redisSet(key, JSON.stringify(payload), { ex: ttlSec });
+  await setLatestDraftId(companyId, userId, draftId);
   return payload;
 }
 
@@ -87,6 +172,7 @@ async function loadDraft(companyId, userId, draftId) {
 async function clearDraft(companyId, userId, draftId) {
   await redisDel(draftKey(companyId, userId, draftId));
   memoryDrafts.delete(draftId);
+  await clearLatestDraftId(companyId, userId, draftId);
 }
 
 export function registerSmsTools() {
@@ -96,8 +182,8 @@ export function registerSmsTools() {
       title: 'Draft SMS',
       description:
         'Create an SMS draft for review. ALWAYS call this before send_sms. '
-        + 'Show the returned to/from/text to the user and wait for explicit confirmation before calling send_sms with draft_id. '
-        + 'Does not send anything.',
+        + 'Show the returned to/from/text AND the exact draft_id UUID to yourself for the next turn. '
+        + 'Wait for explicit confirmation before calling send_sms. Does not send anything.',
       inputSchema: {
         to: z.string().describe('Recipient phone in E.164 (e.g. +15551234567)'),
         text: z.string().min(1).max(1600).describe('SMS body text'),
@@ -115,7 +201,7 @@ export function registerSmsTools() {
       const { companyId, userId } = getWorxstreamContext();
       const cfg = getTelnyxConfig();
       const toNorm = String(to || '').trim();
-      const textNorm = String(text || '').trim();
+      const { text: textNorm, footer_appended: footerAppended } = withSmsOptOutFooter(text);
       // US → DID; international → alpha when profile+alpha are set.
       const fromNorm = String(from || resolveDefaultSmsFrom(toNorm, cfg)).trim();
 
@@ -149,6 +235,7 @@ export function registerSmsTools() {
         messaging_profile_id: cfg.messagingProfileId || null,
         char_count: textNorm.length,
         segments_estimate: Math.max(1, Math.ceil(textNorm.length / 160)),
+        opt_out_footer_appended: footerAppended,
       });
 
       return asText({
@@ -156,6 +243,9 @@ export function registerSmsTools() {
         status: 'draft',
         message:
           'Draft ready. Show To, From, and Body to the user. '
+          + (footerAppended
+            ? `Standard opt-out line was appended: "${SMS_OPT_OUT_FOOTER}". `
+            : '')
           + 'Only call send_sms({ draft_id }) after they explicitly confirm.',
         draft_id: draft.draft_id,
         to: draft.to,
@@ -164,6 +254,7 @@ export function registerSmsTools() {
         media_urls: draft.media_urls,
         char_count: draft.char_count,
         segments_estimate: draft.segments_estimate,
+        opt_out_footer_appended: footerAppended,
         expires_in_seconds: draftTtlSeconds(),
       });
     },
@@ -174,11 +265,15 @@ export function registerSmsTools() {
     {
       title: 'Send SMS',
       description:
-        'Send a previously drafted SMS via Telnyx. Requires draft_id from draft_sms. '
+        'Send a previously drafted SMS via Telnyx. Pass the exact draft_id UUID from draft_sms '
+        + '(never the literal string "draft_id"). If omitted after a recent draft, the latest pending draft is used. '
         + 'ONLY call after the user explicitly confirms in chat (e.g. "confirm" / "send it"). '
-        + 'Do not call in the same turn as draft_sms. Confirmation is agent-judged (not a UI write gate).',
+        + 'Do not call in the same turn as draft_sms unless the user message is already a confirm. '
+        + 'Confirmation is agent-judged (not a UI write gate).',
       inputSchema: {
-        draft_id: z.string().describe('draft_id returned by draft_sms'),
+        draft_id: z.string().optional().describe(
+          'Exact UUID from draft_sms result (e.g. 38c62c68-…). Never invent or use the placeholder "draft_id".',
+        ),
       },
       capabilities: {
         domain: 'communications',
@@ -189,11 +284,27 @@ export function registerSmsTools() {
     },
     async ({ draft_id } = {}) => {
       const { companyId, userId } = getWorxstreamContext();
-      const id = String(draft_id || '').trim();
-      if (!id) {
+      let id = String(draft_id || '').trim();
+      let usedLatestFallback = false;
+
+      if (!isValidDraftId(id)) {
+        const latest = await getLatestDraftId(companyId, userId);
+        if (latest) {
+          console.warn('📱 send_sms: invalid/missing draft_id — using latest pending draft', {
+            provided: id || null,
+            latest,
+          });
+          id = latest;
+          usedLatestFallback = true;
+        }
+      }
+
+      if (!isValidDraftId(id)) {
         return asText({
           success: false,
-          error: 'draft_id is required. Call draft_sms first, show the draft, then send after confirmation.',
+          error:
+            'draft_id must be the exact UUID returned by draft_sms (not the placeholder "draft_id"). '
+            + 'Call draft_sms again, then send_sms with that UUID after the user confirms.',
         });
       }
 
@@ -210,6 +321,7 @@ export function registerSmsTools() {
         draft_id: id,
         to: draft.to,
         from: draft.from,
+        used_latest_fallback: usedLatestFallback,
       });
 
       const result = await sendTelnyxMessage({

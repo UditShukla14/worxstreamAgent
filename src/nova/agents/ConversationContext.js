@@ -338,6 +338,19 @@ export async function updateContext(ref, agentKey, toolsUsed, toolResults = [], 
     const entityType = inferEntityTypeFromTool(toolName);
     const items = extractItemsArray(payload);
 
+    // SMS drafts: UUIDs are not numeric — persist explicitly so confirm turns don't invent "draft_id".
+    if (toolName === 'draft_sms' && payload?.success !== false && payload?.draft_id) {
+      ctx.entities.sms_draft_id = String(payload.draft_id);
+      if (payload.to) ctx.entities.sms_to = String(payload.to);
+      if (payload.from) ctx.entities.sms_from = String(payload.from);
+      console.log(`📎 Context SMS draft: sms_draft_id=${ctx.entities.sms_draft_id}`);
+    }
+    if (toolName === 'send_sms' && payload?.success) {
+      delete ctx.entities.sms_draft_id;
+      delete ctx.entities.sms_to;
+      delete ctx.entities.sms_from;
+    }
+
     if (entityType === 'customers' || toolName === 'list_customers') {
       if (toolName === 'list_customers' && Array.isArray(items) && items.length > 0) {
         const searchTerm = parseFilterSearch(toolInput) || ctx.lastSearch;
@@ -481,6 +494,14 @@ export async function buildContextPrompt(ref, opts = {}) {
   }
   if (ctx.entities.customer_id != null) {
     parts.push(`Use customer_id=${ctx.entities.customer_id} for list_estimates, list_invoices, list_credit_memos, list_bills, or list_purchase_orders when the user refers to "his/their/its" or the previously discussed customer`);
+  }
+  if (ctx.entities.sms_draft_id) {
+    parts.push(
+      `Pending SMS draft_id=${ctx.entities.sms_draft_id}`
+      + (ctx.entities.sms_to ? ` to=${ctx.entities.sms_to}` : '')
+      + (ctx.entities.sms_from ? ` from=${ctx.entities.sms_from}` : '')
+      + ' — when the user confirms, call send_sms with that exact UUID (or omit draft_id to use the latest pending draft). Never invent draft_id or use the placeholder string "draft_id". Do not re-draft unless send fails with expired/missing.',
+    );
   }
   if (ctx.lastSearch) {
     parts.push(`Last search: "${ctx.lastSearch}"`);
