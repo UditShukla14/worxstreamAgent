@@ -3,7 +3,6 @@
 This service can optionally use Redis for:
 
 - **ConversationContext**: storing extracted IDs and follow-up context per `(company_id, user_id, conversation_id)`
-- **Governance catalog context**: active policies and rules per `company_id` with **no TTL**. Reloaded only when a policy or rule changes.
 - **Tool response caching**: short-lived caching for selected MCP tools (currently estimates)
 
 ### Environment variables
