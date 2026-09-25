@@ -35,6 +35,7 @@ import { registerPaymentTools } from './payments.js';
 import { registerCommunicationsTools } from './communications.js';
 import { registerSmsTools } from './sms.js';
 import { registerCallsTools } from './calls.js';
+import { registerShopifyTools } from './shopify.js';
 
 /**
  * Register all tools
@@ -140,6 +141,9 @@ export function registerAllTools() {
 
   registerCallsTools();
   console.log('  ✓ Calls (voice-agent session report) tools registered');
+
+  registerShopifyTools();
+  console.log('  ✓ Shopify (Sales Channel) tools registered');
 
   console.log('✅ All MCP tools registered');
 }

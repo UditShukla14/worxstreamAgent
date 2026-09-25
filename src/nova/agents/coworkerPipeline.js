@@ -15,6 +15,7 @@ import {
 } from './agentDefinitions.js';
 import { resolveAgentKeys, getAgentInstance } from './router.js';
 import { formatOutput, formatOutputStreaming } from './OutputFormatter.js';
+import { createDeltaCoalesceBuffer } from './streamSectionBuffer.js';
 import { rex } from './AgentTracker.js';
 import {
   buildContextPrompt,
@@ -224,16 +225,20 @@ async function runGeneralChat({
   logContextUsage('General chat context', generalMessages, GENERAL_CHAT_SYSTEM);
 
   if (stream) {
+    const deltaBuf = createDeltaCoalesceBuffer((chunk) => {
+      if (chunk) sse({ type: 'text', content: chunk });
+    }, { maxDelayMs: 40, maxChars: 96 });
     const { text } = await streamMessage(
       {
         model: config.anthropic.model,
-        max_tokens: config.anthropic.maxTokens?.conversation ?? 4096,
+        max_tokens: config.anthropic.maxTokens?.conversation ?? 8192,
         system: GENERAL_CHAT_SYSTEM,
         messages: generalMessages,
       },
       { ...usageMeta, phase: 'general_chat', agentKey: 'general_chat' },
-      (delta) => sse({ type: 'text', content: delta }),
+      (delta) => deltaBuf.push(delta),
     );
+    deltaBuf.flush();
     return text;
   }
 

@@ -47,6 +47,9 @@ const ACTIONS = /** @type {const} */ ({
 const DOMAIN_RULES = [
   // Governance-only tools (must precede any generic match; not in chat router)
   ['relevant_policies', 'governance'],
+  // Shopify Sales Channel — before purchase_order / tax / product / customer
+  // so generate_shopify_purchase_order and calculate_shopify_draft_order_tax stay here
+  ['shopify', 'shopify'],
   ['organization_contact', 'company'],
   ['credit_memo', 'credit_memo'],
   ['purchase_order', 'purchase_order'],
@@ -210,6 +213,7 @@ export function inferCapabilitiesFromToolName(toolName) {
   if (caps.domain === 'deal') idFields.push('deal_id', 'id');
   if (caps.domain === 'inventory') idFields.push('warehouse_id', 'product_id', 'id');
   if (caps.domain === 'payments') idFields.push('received_payment_id', 'id');
+  if (caps.domain === 'shopify') idFields.push('order_id', 'shopify_order_id', 'id');
   if (idFields.length > 0) caps.idFields = idFields;
  
   return caps;

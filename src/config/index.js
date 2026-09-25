@@ -106,16 +106,16 @@ export const config = {
      * and can be tuned via env without touching code.
      */
     maxTokens: {
-      /** For specialist agent runs (tool loop). */
-      agent: parseInt(process.env.ANTHROPIC_MAX_TOKENS_AGENT || '4096', 10),
-      /** For OutputFormatter pass. */
-      formatter: parseInt(process.env.ANTHROPIC_MAX_TOKENS_FORMATTER || '4096', 10),
+      /** For specialist agent runs (tool loop). Reports/large answers need headroom. */
+      agent: parseInt(process.env.ANTHROPIC_MAX_TOKENS_AGENT || '8192', 10),
+      /** For OutputFormatter pass — large reports expand into XML tables/charts. */
+      formatter: parseInt(process.env.ANTHROPIC_MAX_TOKENS_FORMATTER || '16384', 10),
       /** For router key selection. */
       router: parseInt(process.env.ANTHROPIC_MAX_TOKENS_ROUTER || '100', 10),
       /** For Nova orchestration plan. */
       nova: parseInt(process.env.ANTHROPIC_MAX_TOKENS_NOVA || '256', 10),
       /** For conversational fallback streaming in agents/stream and legacy flows. */
-      conversation: parseInt(process.env.ANTHROPIC_MAX_TOKENS_CONVERSATION || '4096', 10),
+      conversation: parseInt(process.env.ANTHROPIC_MAX_TOKENS_CONVERSATION || '8192', 10),
       /** For conversation-only (non-stream) replies. */
       conversationShort: parseInt(process.env.ANTHROPIC_MAX_TOKENS_CONVERSATION_SHORT || '1024', 10),
     },

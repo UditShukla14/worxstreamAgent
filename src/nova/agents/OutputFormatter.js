@@ -4,10 +4,17 @@
  *
  * Runs after Nova/specialists. Formats for the frontend — does not invent facts
  * or force summaries. Claude already chose what to say; this only structures it.
+ *
+ * Streaming emits complete sections only (tables/charts/stats/…) via
+ * streamSectionBuffer — never char-by-char — so chat XML parsing stays intact.
  */
 
 import { config } from '../../config/index.js';
 import { createMessage, streamMessage } from '../../llm/anthropicClient.js';
+import {
+  createDeltaCoalesceBuffer,
+  resolveFormatterMaxTokens,
+} from './streamSectionBuffer.js';
 
 /** Remove a markdown code fence wrapper if the model disobeys the no-fence rule. */
 function stripCodeFence(text) {
@@ -27,6 +34,8 @@ RULES:
 - Prefer structured XML for record lists, metrics, and single-record detail. Plain short text is fine for greetings or one-line answers.
 - When status/outcome codes appear with a label map in the raw data, show human labels (and badges) — not raw IDs alone.
 - Output the formatted content DIRECTLY. NEVER wrap in markdown code fences (\`\`\` or \`\`\`xml).
+- REPORT REVISIONS: If the user asked to change an existing report and the raw output is a partial/updated report, format only what was provided — do not expand it into a brand-new full report (extra summary/KPI/chart/table pack the agent did not emit).
+- LARGE OUTPUTS: Prefer complete XML blocks one after another (<stats>, then <chart>, then <table>, …). Finish each block before starting the next. Do not truncate mid-tag.
 
 ## WHEN TO USE WHICH TAG (from content, not hard phrase rules)
 
@@ -100,6 +109,14 @@ Chart colors: blue, green, purple, yellow, red, cyan
 5. Do not add filler summary sections the user did not need
 6. Output the formatted result directly — no meta commentary about formatting`;
 
+const CONTINUE_PROMPT =
+  'Continue the formatted output from exactly where you stopped. '
+  + 'Do not repeat any prior content. Resume mid-tag or mid-row if needed so every '
+  + '<table>/<stats>/<chart>/<details>/<alert>/<gauge>/<trend> block is completed.';
+
+/** Max continuation passes when the model hits max_tokens mid-report. */
+const FORMATTER_CONTINUE_LIMIT = 3;
+
 /**
  * Format raw agent output for the frontend (non-streaming).
  *
@@ -109,25 +126,48 @@ Chart colors: blue, green, purple, yellow, red, cyan
  * @returns {Promise<string>}   - Formatted text with XML tags
  */
 export async function formatOutput(userMessage, rawOutput, usageMeta = {}) {
-  const response = await createMessage({
-    model: config.anthropic.model,
-    max_tokens: config.anthropic.maxTokens?.formatter ?? 4096,
-    system: FORMATTER_PROMPT,
-    messages: [
-      {
-        role: 'user',
-        content: `User's question: ${userMessage}\n\nRaw agent output:\n${rawOutput}`,
-      },
-    ],
-  }, { ...usageMeta, phase: 'formatter', agentKey: 'formatter' });
+  const maxTokens = resolveFormatterMaxTokens(
+    rawOutput,
+    config.anthropic.maxTokens?.formatter ?? 16384,
+  );
 
-  const textBlocks = response.content.filter(b => b.type === 'text');
-  return stripCodeFence(textBlocks.map(b => b.text).join('\n'));
+  const messages = [
+    {
+      role: 'user',
+      content: `User's question: ${userMessage}\n\nRaw agent output:\n${rawOutput}`,
+    },
+  ];
+
+  let full = '';
+  for (let pass = 0; pass < FORMATTER_CONTINUE_LIMIT; pass++) {
+    const response = await createMessage({
+      model: config.anthropic.model,
+      max_tokens: maxTokens,
+      system: FORMATTER_PROMPT,
+      messages,
+    }, { ...usageMeta, phase: 'formatter', agentKey: 'formatter' });
+
+    const textBlocks = response.content.filter((b) => b.type === 'text');
+    const piece = textBlocks.map((b) => b.text).join('\n');
+    full += piece;
+
+    if (response.stop_reason !== 'max_tokens') break;
+
+    console.warn(
+      `⚠️ [formatter] stop_reason=max_tokens (pass ${pass + 1}/${FORMATTER_CONTINUE_LIMIT}); continuing…`,
+    );
+    messages.push({ role: 'assistant', content: piece });
+    messages.push({ role: 'user', content: CONTINUE_PROMPT });
+  }
+
+  return stripCodeFence(full);
 }
 
 /**
- * Format raw agent output and stream it via SSE.
- * Returns the full formatted text (same as streamed) so callers can persist it for history.
+ * Format raw agent output and stream it via SSE as continuous text deltas
+ * (OpenAI / Claude content_block_delta style), coalesced into short frames.
+ * Incomplete XML blocks are a client render concern (fence/snippet panel).
+ * Returns the full formatted text so callers can persist it for history.
  *
  * @param {string} userMessage
  * @param {string} rawOutput
@@ -137,22 +177,48 @@ export async function formatOutput(userMessage, rawOutput, usageMeta = {}) {
  */
 export async function formatOutputStreaming(userMessage, rawOutput, res, usageMeta = {}) {
   const sse = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
-
-  const { text } = await streamMessage(
-    {
-      model: config.anthropic.model,
-      max_tokens: config.anthropic.maxTokens?.formatter ?? 4096,
-      system: FORMATTER_PROMPT,
-      messages: [
-        {
-          role: 'user',
-          content: `User's question: ${userMessage}\n\nRaw agent output:\n${rawOutput}`,
-        },
-      ],
-    },
-    { ...usageMeta, phase: 'formatter', agentKey: 'formatter' },
-    (delta) => sse({ type: 'text', content: delta }),
+  const maxTokens = resolveFormatterMaxTokens(
+    rawOutput,
+    config.anthropic.maxTokens?.formatter ?? 16384,
   );
 
-  return stripCodeFence(text);
+  // Coalesce token deltas into ~40ms / ~96-char frames — same feel as ChatGPT/Claude,
+  // without holding an entire <table> until closed.
+  const deltaBuf = createDeltaCoalesceBuffer((chunk) => {
+    if (chunk) sse({ type: 'text', content: chunk });
+  }, { maxDelayMs: 40, maxChars: 96 });
+
+  const messages = [
+    {
+      role: 'user',
+      content: `User's question: ${userMessage}\n\nRaw agent output:\n${rawOutput}`,
+    },
+  ];
+
+  let full = '';
+  for (let pass = 0; pass < FORMATTER_CONTINUE_LIMIT; pass++) {
+    const { text, message } = await streamMessage(
+      {
+        model: config.anthropic.model,
+        max_tokens: maxTokens,
+        system: FORMATTER_PROMPT,
+        messages,
+      },
+      { ...usageMeta, phase: 'formatter', agentKey: 'formatter' },
+      (delta) => deltaBuf.push(delta),
+    );
+
+    full += text;
+
+    if (message?.stop_reason !== 'max_tokens') break;
+
+    console.warn(
+      `⚠️ [formatter stream] stop_reason=max_tokens (pass ${pass + 1}/${FORMATTER_CONTINUE_LIMIT}); continuing…`,
+    );
+    messages.push({ role: 'assistant', content: text });
+    messages.push({ role: 'user', content: CONTINUE_PROMPT });
+  }
+
+  deltaBuf.flush();
+  return stripCodeFence(full);
 }
