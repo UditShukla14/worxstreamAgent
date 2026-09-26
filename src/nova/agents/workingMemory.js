@@ -171,6 +171,16 @@ export function mergeWorkingSet(existing, delta) {
   const base = existing && typeof existing === 'object' ? { ...existing } : {};
   if (delta.sessionGoal != null) base.sessionGoal = delta.sessionGoal;
   if (delta.activeTask != null) base.activeTask = delta.activeTask;
+  if (delta.executionPlan === null) {
+    delete base.executionPlan;
+  } else if (delta.executionPlan != null) {
+    base.executionPlan = delta.executionPlan;
+  }
+  if (delta.taskState === null) {
+    delete base.taskState;
+  } else if (delta.taskState != null) {
+    base.taskState = delta.taskState;
+  }
   if (delta.pendingClarification === null) {
     delete base.pendingClarification;
   } else if (delta.pendingClarification != null) {
@@ -206,6 +216,15 @@ export function formatWorkingSetForPrompt(workingSet, lastAssistantSnippet = '')
 
   const lines = ['[Session focus]'];
   if (workingSet.sessionGoal) lines.push(`Goal: ${workingSet.sessionGoal}`);
+  if (workingSet.taskState?.goal) {
+    const ts = workingSet.taskState;
+    lines.push(`Task: ${ts.goal} (${ts.status || 'unknown'})`);
+    if (Array.isArray(ts.next) && ts.next.length > 0) {
+      lines.push(`Next steps: ${ts.next.slice(0, 5).join('; ')}`);
+    }
+  } else if (workingSet.executionPlan?.goal) {
+    lines.push(`Plan goal: ${workingSet.executionPlan.goal}`);
+  }
   if (workingSet.activeTask) {
     const t = workingSet.activeTask;
     lines.push(

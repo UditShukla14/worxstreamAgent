@@ -10,6 +10,7 @@ import {
   truncateByTokens,
   getContextStats,
 } from './contextWindow.js';
+import { sanitizeTranscriptMessageForApi } from '../nova/agents/agentTranscript.js';
 
 const VALID_ROLES = new Set(['user', 'assistant']);
 
@@ -54,8 +55,47 @@ function renderToolActivity(activity) {
 }
 
 /**
+ * Expand Mongo messages into Anthropic history.
+ * Prefer agent_transcript (tool_use / tool_result / raw text) when present;
+ * fall back to UI content + compact tool_activity for older turns.
+ *
+ * @param {Array<{ role: string, content: unknown, tool_activity?: object[], agent_transcript?: object[] }>} stored
+ * @returns {Array<{ role: 'user' | 'assistant', content: string | object[] }>}
+ */
+export function expandStoredMessagesForAgent(stored) {
+  if (!Array.isArray(stored)) return [];
+
+  const out = [];
+  for (const m of stored) {
+    if (!m || !VALID_ROLES.has(m.role)) continue;
+
+    if (m.role === 'user') {
+      const text = messageContentToString(m.content).trim();
+      if (text) out.push({ role: 'user', content: text });
+      continue;
+    }
+
+    // assistant
+    if (Array.isArray(m.agent_transcript) && m.agent_transcript.length > 0) {
+      for (const tm of m.agent_transcript) {
+        const clean = sanitizeTranscriptMessageForApi(tm);
+        if (clean) out.push(clean);
+      }
+      continue;
+    }
+
+    const text = messageContentToString(m.content).trim();
+    const toolBlock = renderToolActivity(m.tool_activity);
+    const combined = `${text}${toolBlock}`.trim();
+    if (combined) out.push({ role: 'assistant', content: combined });
+  }
+  return out;
+}
+
+/**
  * @param {Array<{ role: string, content: unknown, tool_activity?: object[] }>} stored
  * @returns {Array<{ role: 'user' | 'assistant', content: string }>}
+ * @deprecated Prefer expandStoredMessagesForAgent for orchestrator memory.
  */
 export function normalizeStoredMessages(stored) {
   if (!Array.isArray(stored)) return [];
@@ -73,9 +113,10 @@ export function normalizeStoredMessages(stored) {
 
 /**
  * Build messages for router / Nova / general chat (full managed window).
+ * Uses agent_transcript when available so follow-ups see real tool outputs.
  *
  * @param {object} opts
- * @param {Array<{ role: string, content: string }>} opts.priorMessages - Already normalized
+ * @param {Array} opts.priorMessages - Mongo messages (may include agent_transcript)
  * @param {string} opts.currentUserContent - Full text for this turn's user message
  * @param {string} [opts.systemPrompt]
  * @param {object[]} [opts.tools]
@@ -86,7 +127,7 @@ export function buildOrchestratorMessages({
   systemPrompt = '',
   tools = [],
 }) {
-  const prior = normalizeStoredMessages(priorMessages);
+  const prior = expandStoredMessagesForAgent(priorMessages);
   const current = String(currentUserContent || '').trim();
   const messages = current
     ? [...prior, { role: 'user', content: current }]
@@ -103,10 +144,12 @@ export function buildOrchestratorMessages({
  * @param {object} [opts.workingSet] - When activeTask in progress, use larger window
  */
 export function buildSpecialistHistory(priorMessages = [], opts = {}) {
+  // Specialists still use compact text history (cheaper); orchestrator uses full transcript.
   const prior = normalizeStoredMessages(priorMessages);
   if (prior.length === 0) return [];
 
-  const activeInProgress = opts.workingSet?.activeTask?.status === 'in_progress';
+  const activeInProgress = opts.workingSet?.activeTask?.status === 'in_progress'
+    || opts.workingSet?.taskState?.status === 'in_progress';
   const maxMessages = activeInProgress
     ? (config.contextWindow.specialistMessagesActive ?? 12)
     : (config.contextWindow.specialistMaxMessages ?? 6);

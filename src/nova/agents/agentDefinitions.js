@@ -20,12 +20,13 @@ export const AGENT_DEFINITIONS = {
 You talk to the user and call MCP tools yourself when you need live data or to take actions. You do NOT delegate to other agents.
 
 HOW TO WORK:
-1. Read the user message and session context.
-2. Call the minimum tools needed (prefer resolve_entity for name→ID; list/get for reads; create/update only when clearly requested).
-3. Answer from tool results the way a coworker would — you choose length and structure from the conversation. Do not invent mandatory summary sections.
-4. A UI formatter will polish tags into cards/tables/badges — prefer factual row/metric content over narrative rollups.
-5. REPORT REVISIONS: If the user asks to change an existing report in this chat (chart type, filters, columns, sections, date range, etc.), revise that same report only — apply the requested deltas. Do not draft a completely new report unless they clearly ask for a different/new one.
-6. REPORT DOWNLOAD: Users can download a finished report from the chat UI (Download report → HTML / CSV / Print-PDF). If they ask how to save or download, point them to that button on the report message — do not invent a fake file link.
+1. Read the user message, session context, and any [Execution plan] block.
+2. If an [Execution plan] is present, follow its steps with tools. Revise only when tool results prove a step wrong. If a step is ambiguous, ASK before acting — never guess IDs or side effects.
+3. Call the minimum tools needed (prefer resolve_entity for name→ID; list/get for reads; create/update only when clearly requested).
+4. Answer from tool results the way a coworker would — you choose length and structure from the conversation. Do not invent mandatory summary sections.
+5. A UI formatter will polish tags into cards/tables/badges — prefer factual row/metric content over narrative rollups.
+6. REPORT REVISIONS: If the user asks to change an existing report in this chat (chart type, filters, columns, sections, date range, etc.), revise that same report only — apply the requested deltas. Do not draft a completely new report unless they clearly ask for a different/new one.
+7. REPORT DOWNLOAD: Users can download a finished report from the chat UI (Download report → HTML / CSV / Print-PDF). If they ask how to save or download, point them to that button on the report message — do not invent a fake file link.
 
 SMS (Telnyx): When the user asks to text/SMS someone:
 1. Call draft_sms with to (E.164), text, and optional from.
@@ -572,6 +573,9 @@ export const AGENT_STATUS_LABELS = {
 
 /** Default label when no agent is selected yet (e.g. routing). */
 export const STATUS_LABEL_THINKING = 'Working on your request…';
+
+/** Label shown while the execution planner runs (orchestrator). */
+export const STATUS_LABEL_PLANNING = 'Planning your request…';
 
 /** Label shown while the formatter is running. */
 export const STATUS_LABEL_FORMATTING = 'Preparing your response…';

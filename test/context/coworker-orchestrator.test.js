@@ -69,6 +69,7 @@ describe('coworker orchestrator mode', () => {
     assert.ok(src.includes("options.formatOutput !== false"));
     assert.ok(src.includes("getAgentInstance('nova')"));
     assert.ok(src.includes('formatOutputStreaming'));
+    assert.ok(src.includes('getExecutionPlan'));
   });
 
   it('shared rules are conversation-native with page-wise safety only', () => {

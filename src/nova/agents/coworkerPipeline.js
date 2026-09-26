@@ -11,8 +11,14 @@ import {
   getAgentKeys,
   getStatusLabelForAgent,
   STATUS_LABEL_FORMATTING,
+  STATUS_LABEL_PLANNING,
   STATUS_LABEL_THINKING,
 } from './agentDefinitions.js';
+import {
+  formatExecutionPlanForPrompt,
+  getExecutionPlan,
+  planToTaskState,
+} from './executionPlan.js';
 import { resolveAgentKeys, getAgentInstance } from './router.js';
 import { formatOutput, formatOutputStreaming } from './OutputFormatter.js';
 import { createDeltaCoalesceBuffer } from './streamSectionBuffer.js';
@@ -42,8 +48,21 @@ import { detectClarificationNeeded } from './workingMemory.js';
 import { executeMcpTool } from '../../mcp/server.js';
 import { clearPendingConfirm, getPendingConfirm } from './pendingConfirm.js';
 import UserPreferences from '../models/UserPreferences.js';
+import {
+  appendConversationTurn,
+  deleteConversationTurns,
+  listConversationTurns,
+  turnsToPriorMessages,
+} from './conversationTurns.js';
 
 const GENERAL_CHAT_SYSTEM = 'You are a helpful assistant for Worxstream, a business management platform. Be concise and helpful.';
+
+/** User asks to resume a mid-task agent run. */
+function isContinueMessage(message) {
+  const t = String(message || '').trim();
+  if (!t) return false;
+  return /^(continue|keep\s+going|resume|go\s+on|carry\s+on)[.!\s]*$/i.test(t);
+}
 
 function stripJsonCodeFence(text) {
   const t = String(text || '').trim();
@@ -53,15 +72,24 @@ function stripJsonCodeFence(text) {
 
 export async function loadConversationState(company_id, user_id, conversation_id) {
   try {
-    const doc = await Conversation.findOne({ company_id, user_id, conversation_id }).lean();
+    const [doc, turns] = await Promise.all([
+      Conversation.findOne({ company_id, user_id, conversation_id }).lean(),
+      listConversationTurns(company_id, user_id, conversation_id),
+    ]);
+
+    // Prefer professional turn documents for agent memory when available.
+    const fromTurns = turnsToPriorMessages(turns);
+    const messages = fromTurns.length > 0 ? fromTurns : (doc?.messages || []);
+
     return {
-      messages: doc?.messages || [],
+      messages,
       conversation_summary: doc?.conversation_summary || '',
       summary_through_turn: doc?.summary_through_turn ?? 0,
+      turns,
     };
   } catch (err) {
     console.warn('⚠️ Failed to load conversation:', err?.message || err);
-    return { messages: [], conversation_summary: '', summary_through_turn: 0 };
+    return { messages: [], conversation_summary: '', summary_through_turn: 0, turns: [] };
   }
 }
 
@@ -87,9 +115,29 @@ async function persistConversation({
   conversation_summary,
   summary_through_turn,
   requestId,
+  agentTranscript,
+  plan = null,
+  usage = null,
+  agentKey = 'nova',
+  agents = null,
+  status = 'completed',
+  mode = 'orchestrator',
 }) {
   const toolActivity = compactToolActivity(toolsUsed);
-  const messagesArr = [...priorMessages];
+  const transcript = Array.isArray(agentTranscript) && agentTranscript.length > 0
+    ? agentTranscript
+    : null;
+
+  // UI timeline stays lean — strip agent_transcript if prior was hydrated from turns.
+  const leanPrior = (priorMessages || []).map((m) => {
+    if (!m || typeof m !== 'object') return m;
+    if (m.role === 'user') return { role: 'user', content: m.content };
+    const row = { role: 'assistant', content: m.content };
+    if (m.tool_activity) row.tool_activity = m.tool_activity;
+    return row;
+  });
+
+  const messagesArr = [...leanPrior];
   messagesArr.push(
     { role: 'user', content: message },
     {
@@ -102,6 +150,19 @@ async function persistConversation({
   let summary = conversation_summary;
   let throughTurn = summary_through_turn;
   try {
+    let sessionHints = null;
+    try {
+      const liveCtx = await getContext({ company_id, user_id, conversation_id });
+      sessionHints = {
+        workingSet: liveCtx?.workingSet,
+        entities: liveCtx?.entities,
+        entityRefs: liveCtx?.entityRefs,
+        toolsUsed,
+      };
+    } catch {
+      sessionHints = { toolsUsed };
+    }
+
     const refreshed = await maybeRefreshSummary({
       priorMessages: messagesArr,
       existingSummary: conversation_summary,
@@ -112,6 +173,7 @@ async function persistConversation({
         conversationId: conversation_id,
         requestId,
       },
+      sessionHints,
     });
     if (refreshed) {
       summary = refreshed.summary;
@@ -134,6 +196,26 @@ async function persistConversation({
     },
     { upsert: true, new: true, setDefaultsOnInsert: true },
   );
+
+  // Professional turn document (transcript + observability log).
+  const userTurnCount = messagesArr.filter((m) => m?.role === 'user').length;
+  await appendConversationTurn({
+    company_id,
+    user_id,
+    conversation_id,
+    userContent: message,
+    uiContent: assistantContent,
+    agentTranscript: transcript || [],
+    toolsUsed,
+    plan,
+    usage,
+    agentKey,
+    agents,
+    status,
+    mode,
+    requestId,
+    turnIndex: Math.max(0, userTurnCount - 1),
+  });
 
   return { summary, throughTurn };
 }
@@ -342,11 +424,119 @@ export async function runCoworkerTurn({
     && options.mode !== 'specialists';
 
   // ── Single Nova orchestrator (default): one LLM + tools, Claude/OpenAI-style ──
-  // Skips router, Nova-plan, specialist fan-out, self-check, and formatter LLM
-  // (token savings). Nova owns answer shape via shared proportionality rules.
+  // Skips router, Nova-plan, specialist fan-out, and self-check.
+  // Optional execution plan runs before the tool loop (COWORKER_EXECUTION_PLAN).
   if (useOrchestrator) {
     const nova = getAgentInstance('nova');
     if (!nova) throw new Error('Nova orchestrator is not initialized');
+
+    const openTask = redisCtx.workingSet?.taskState;
+    const resumingContinue = isContinueMessage(message)
+      && openTask
+      && ['in_progress', 'waiting_continue'].includes(String(openTask.status || ''));
+
+    let planBlock = '';
+    let continueBlock = '';
+    let executionPlan = null;
+    const wantPlan =
+      config.coworker?.executionPlan !== false
+      && options.skipExecutionPlan !== true
+      && !resumingContinue;
+
+    if (resumingContinue) {
+      continueBlock = [
+        '[Resume task]',
+        `Goal: ${openTask.goal || 'open task'}`,
+        `Status: ${openTask.status}`,
+        Array.isArray(openTask.next) && openTask.next.length
+          ? `Next: ${openTask.next.slice(0, 5).join('; ')}`
+          : '',
+        'Continue without re-planning. Use prior tool results in conversation history. Ask only if truly ambiguous.',
+      ].filter(Boolean).join('\n');
+      sse({ type: 'status', label: 'Continuing your request…' });
+      sse({
+        type: 'task_progress',
+        status: 'resuming',
+        goal: openTask.goal || null,
+      });
+      await saveContext(ctxRef, {
+        ...redisCtx,
+        workingSet: mergeWorkingSet(redisCtx.workingSet, {
+          taskState: { ...openTask, status: 'in_progress', updatedAt: Date.now() },
+        }),
+      });
+    }
+
+    if (wantPlan) {
+      sse({ type: 'status', label: STATUS_LABEL_PLANNING });
+      try {
+        executionPlan = await getExecutionPlan({
+          message,
+          conversationContext: contextPrompt,
+          priorMessages,
+          usageMeta,
+        });
+      } catch (err) {
+        console.warn('⚠️ Execution plan failed; continuing without plan:', err?.message || err);
+        executionPlan = null;
+      }
+
+      if (executionPlan?.mode === 'clarify' && executionPlan.ask) {
+        const askText = executionPlan.ask;
+        sse({ type: 'plan', plan: executionPlan });
+        sse({ type: 'agent_selected', agent: 'nova' });
+        if (options.streamFormatter) {
+          sse({ type: 'text', content: askText });
+        }
+        await persistConversation({
+          company_id,
+          user_id,
+          conversation_id: convId,
+          priorMessages,
+          message,
+          assistantContent: askText,
+          toolsUsed: [],
+          conversation_summary: convState.conversation_summary,
+          summary_through_turn: convState.summary_through_turn,
+          requestId,
+          plan: executionPlan,
+          agentKey: 'nova',
+          agents: ['nova'],
+          status: 'plan_clarify',
+          mode: 'orchestrator',
+        });
+        await saveContext(ctxRef, {
+          ...redisCtx,
+          workingSet: mergeWorkingSet(redisCtx.workingSet, {
+            executionPlan,
+            sessionGoal: executionPlan.goal || redisCtx.workingSet?.sessionGoal,
+          }),
+        });
+        sse({ type: 'done', agent: 'nova', toolsUsed: [], plan_clarify: true });
+        return {
+          conversation_id: convId,
+          type: 'plan_clarify',
+          response: askText,
+          formattedText: askText,
+          plan: executionPlan,
+          toolsUsed: [],
+        };
+      }
+
+      if (executionPlan?.mode === 'execute') {
+        planBlock = formatExecutionPlanForPrompt(executionPlan);
+        sse({ type: 'plan', plan: executionPlan });
+        const taskState = planToTaskState(executionPlan);
+        await saveContext(ctxRef, {
+          ...redisCtx,
+          workingSet: mergeWorkingSet(redisCtx.workingSet, {
+            executionPlan,
+            taskState,
+            sessionGoal: executionPlan.goal || message.slice(0, 200),
+          }),
+        });
+      }
+    }
 
     // Managed conversation window (same pattern as ChatGPT/Claude tool chat).
     const orchestratorHistory = buildOrchestratorMessages({
@@ -357,6 +547,8 @@ export async function runCoworkerTurn({
     if (priorMessages.length > 0) {
       logContextUsage('Orchestrator context', orchestratorHistory, nova.systemPrompt);
     }
+
+    const orchContextPrompt = [contextPrompt, planBlock, continueBlock].filter(Boolean).join('\n\n');
 
     const orchRunContext = {
       _conversationHistory: orchestratorHistory,
@@ -376,7 +568,7 @@ export async function runCoworkerTurn({
       message,
       {
         _rexRequestId: requestId,
-        _conversationContext: contextPrompt,
+        _conversationContext: orchContextPrompt,
         ...orchRunContext,
       },
       sse,
@@ -459,6 +651,13 @@ export async function runCoworkerTurn({
       conversation_summary: convState.conversation_summary,
       summary_through_turn: convState.summary_through_turn,
       requestId,
+      agentTranscript: result.agentTranscript,
+      plan: executionPlan,
+      usage: result.usage || null,
+      agentKey: 'nova',
+      agents: ['nova'],
+      status: result.needsContinue ? 'waiting_continue' : 'completed',
+      mode: 'orchestrator',
     });
 
     await updateContext(ctxRef, 'nova', allToolsUsed, [], {
@@ -466,10 +665,49 @@ export async function runCoworkerTurn({
       assistantSummary: (formattedForUi || '').slice(0, 500),
     });
 
+    if (result.needsContinue) {
+      const latest = await getContext(ctxRef);
+      const prevTask = latest.workingSet?.taskState || planToTaskState(executionPlan) || {
+        goal: message.slice(0, 200),
+        next: [],
+        completed: [],
+      };
+      await saveContext(ctxRef, {
+        ...latest,
+        workingSet: mergeWorkingSet(latest.workingSet, {
+          taskState: {
+            ...prevTask,
+            status: 'waiting_continue',
+            updatedAt: Date.now(),
+          },
+        }),
+      });
+      sse({
+        type: 'task_progress',
+        status: 'waiting_continue',
+        goal: prevTask.goal || null,
+      });
+    } else if (executionPlan?.mode === 'execute' || resumingContinue) {
+      const latest = await getContext(ctxRef);
+      await saveContext(ctxRef, {
+        ...latest,
+        workingSet: mergeWorkingSet(latest.workingSet, {
+          taskState: {
+            ...(latest.workingSet?.taskState || planToTaskState(executionPlan) || {}),
+            status: 'done',
+            next: [],
+            updatedAt: Date.now(),
+          },
+        }),
+      });
+    }
+
     sse({
       type: 'done',
       agent: 'nova',
       toolsUsed: allToolsUsed.map((t) => t.name),
+      ...(executionPlan ? { plan: executionPlan } : {}),
+      ...(result.needsContinue ? { waiting_continue: true } : {}),
     });
 
     return {
@@ -477,8 +715,10 @@ export async function runCoworkerTurn({
       type: 'orchestrator',
       response: combinedRawText,
       formattedText: formattedForUi || combinedRawText,
-      agents: ['nova'],
+      plan: executionPlan || undefined,
       toolsUsed: allToolsUsed,
+      agents: ['nova'],
+      ...(result.needsContinue ? { waiting_continue: true } : {}),
     };
   }
 
@@ -528,9 +768,14 @@ export async function runCoworkerTurn({
       priorMessages,
       message,
       assistantContent: text,
+      toolsUsed: [],
       conversation_summary: convState.conversation_summary,
       summary_through_turn: convState.summary_through_turn,
       requestId,
+      agentKey: 'general',
+      agents: ['general'],
+      status: 'completed',
+      mode: 'specialists',
     });
     await updateContext(ctxRef, 'general', [], [], { message, assistantSummary: text });
     return {
@@ -577,9 +822,14 @@ export async function runCoworkerTurn({
       priorMessages,
       message,
       assistantContent: text,
+      toolsUsed: [],
       conversation_summary: convState.conversation_summary,
       summary_through_turn: convState.summary_through_turn,
       requestId,
+      agentKey: 'general',
+      agents: ['general'],
+      status: 'completed',
+      mode: 'specialists',
     });
     return {
       conversation_id: convId,
@@ -598,10 +848,13 @@ export async function runCoworkerTurn({
   let workflowTree = null;
   const planState = await getPlanState(planRef);
   const maxSelfCheckLoops = config.agentRuntime?.maxSelfCheckLoops ?? 1;
+  /** Merged agent transcripts from specialist runs (for next-turn tool memory). */
+  let specialistAgentTranscript = [];
 
   const runAgentsOnce = async (overrideMessage = null) => {
     const msg = overrideMessage || message;
     allToolsUsed.length = 0;
+    specialistAgentTranscript = [];
     const agentRawTexts = [];
 
     const runSingle = async (key, chainedContext) => {
@@ -624,6 +877,9 @@ export async function runCoworkerTurn({
         return { needsConfirmation: true, confirmationId: result.confirmationId, toolsUsed: result.toolsUsed };
       }
       allToolsUsed.push(...(result.toolsUsed || []));
+      if (Array.isArray(result.agentTranscript) && result.agentTranscript.length > 0) {
+        specialistAgentTranscript.push(...result.agentTranscript);
+      }
       (result.toolsUsed || []).forEach((t, i) => {
         if (t.name === 'get_workflow_object_tree' && t.success !== false) {
           const payload = result.toolResultPayloads?.[i];
@@ -746,6 +1002,12 @@ export async function runCoworkerTurn({
     conversation_summary: convState.conversation_summary,
     summary_through_turn: convState.summary_through_turn,
     requestId,
+    agentTranscript: specialistAgentTranscript,
+    plan: novaPlan || null,
+    agentKey: primaryKey,
+    agents: plannedAgents,
+    status: 'completed',
+    mode: 'specialists',
   });
 
   await updateContext(ctxRef, primaryKey, allToolsUsed, [], {
@@ -811,6 +1073,7 @@ export async function runConfirmAction({
 
 export async function deleteConversationFull(company_id, user_id, conversation_id) {
   await Conversation.deleteOne({ company_id, user_id, conversation_id });
+  await deleteConversationTurns(company_id, user_id, conversation_id);
   await clearContext({ company_id, user_id, conversation_id });
   await clearPlanState({ company_id, user_id, conversation_id });
   await clearPendingConfirm({ company_id, user_id, conversation_id });

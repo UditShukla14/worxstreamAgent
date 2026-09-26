@@ -288,14 +288,17 @@ export async function updateContext(ref, agentKey, toolsUsed, toolResults = [], 
   const key = ctxKey(ref);
   if (!key) return;
 
+  const scrapeIds = config.coworker?.scrapeEntityIds === true;
   const existing = await getContext(ref);
   const ctx = { ...emptyContextShape(), ...existing };
 
-  // Merge numeric fields AND search terms from tool inputs
+  // Merge search terms always; numeric ID scrape only when enabled (P4 default off).
   for (const tool of toolsUsed) {
     if (tool.input && tool.success !== false) {
-      const nums = extractNumericFields(tool.input);
-      Object.assign(ctx.entities, nums);
+      if (scrapeIds) {
+        const nums = extractNumericFields(tool.input);
+        Object.assign(ctx.entities, nums);
+      }
       const filterSearch = parseFilterSearch(tool.input);
       if (filterSearch) {
         ctx.lastSearch = filterSearch;
@@ -304,8 +307,7 @@ export async function updateContext(ref, agentKey, toolsUsed, toolResults = [], 
       } else if (typeof tool.input.name === 'string' && tool.input.name.trim()) {
         ctx.lastSearch = tool.input.name.trim();
       }
-      // get_customer_details id input — only treat 300-series as customer_id
-      if (tool.name === 'get_customer_details') {
+      if (scrapeIds && tool.name === 'get_customer_details') {
         const reqId = toNumericId(tool.input.id);
         if (isWorxstreamCustomerMasterId(reqId)) {
           ctx.entities.customer_id = reqId;
@@ -314,17 +316,16 @@ export async function updateContext(ref, agentKey, toolsUsed, toolResults = [], 
     }
   }
 
-  // Merge numeric fields from tool results
   for (let i = 0; i < toolResults.length; i++) {
     const result = toolResults[i];
-    const nums = extractFromResult(result);
-    if (Object.keys(nums).length > 0) {
-      console.log(`📎 Context extracted from result:`, nums);
+    if (scrapeIds) {
+      const nums = extractFromResult(result);
+      if (Object.keys(nums).length > 0) {
+        console.log(`📎 Context extracted from result:`, nums);
+      }
+      Object.assign(ctx.entities, nums);
     }
-    Object.assign(ctx.entities, nums);
 
-    // Best-effort: capture structured entity refs + recent result sets
-    // Unwrap MCP text JSON if needed (same as extractFromResult)
     let payload = result;
     if (result?.content && Array.isArray(result.content)) {
       const textBlock = result.content.find(b => b.type === 'text');
@@ -338,7 +339,7 @@ export async function updateContext(ref, agentKey, toolsUsed, toolResults = [], 
     const entityType = inferEntityTypeFromTool(toolName);
     const items = extractItemsArray(payload);
 
-    // SMS drafts: UUIDs are not numeric — persist explicitly so confirm turns don't invent "draft_id".
+    // SMS drafts always (not ID scrape) — confirm turns need draft_id.
     if (toolName === 'draft_sms' && payload?.success !== false && payload?.draft_id) {
       ctx.entities.sms_draft_id = String(payload.draft_id);
       if (payload.to) ctx.entities.sms_to = String(payload.to);
@@ -351,6 +352,7 @@ export async function updateContext(ref, agentKey, toolsUsed, toolResults = [], 
       delete ctx.entities.sms_from;
     }
 
+    // recentResults always — clarification UI ("the second one") needs them.
     if (entityType === 'customers' || toolName === 'list_customers') {
       if (toolName === 'list_customers' && Array.isArray(items) && items.length > 0) {
         const searchTerm = parseFilterSearch(toolInput) || ctx.lastSearch;
@@ -367,7 +369,7 @@ export async function updateContext(ref, agentKey, toolsUsed, toolResults = [], 
           ].slice(0, 5);
         }
 
-        if (searchTerm) {
+        if (scrapeIds && searchTerm) {
           const matched = items.find((row) => rowMatchesSearch(row, searchTerm));
           const matchedId = matched ? resolveCustomerRecordId(matched) : null;
           if (matchedId != null) {
@@ -377,7 +379,7 @@ export async function updateContext(ref, agentKey, toolsUsed, toolResults = [], 
         }
       }
 
-      if (toolName === 'get_customer_details' && payload && typeof payload === 'object') {
+      if (scrapeIds && toolName === 'get_customer_details' && payload && typeof payload === 'object') {
         const dataObj = payload?.data && typeof payload.data === 'object' && !Array.isArray(payload.data)
           ? payload.data
           : payload;
@@ -389,7 +391,6 @@ export async function updateContext(ref, agentKey, toolsUsed, toolResults = [], 
         }
       }
     } else if (entityType) {
-      // For list tools, keep a small “recent results” window for reference resolution (\"the second one\").
       if (toolName && toolName.startsWith('list_') && Array.isArray(items) && items.length > 0) {
         const top = items.slice(0, 10).map((row) => ({
           id: row?.id ?? row?.[`${entityType}_id`] ?? null,
@@ -404,8 +405,7 @@ export async function updateContext(ref, agentKey, toolsUsed, toolResults = [], 
         }
       }
 
-      // For detail tools, store a single “last seen entity ref” per entityType
-      if (toolName && (toolName.startsWith('get_') || toolName.startsWith('create_')) && payload && typeof payload === 'object') {
+      if (scrapeIds && toolName && (toolName.startsWith('get_') || toolName.startsWith('create_')) && payload && typeof payload === 'object') {
         const dataObj = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
         const id = dataObj?.id ?? ctx.entities?.id ?? null;
         const label = pickLabel(dataObj);
@@ -429,8 +429,7 @@ export async function updateContext(ref, agentKey, toolsUsed, toolResults = [], 
   });
   ctx.workingSet = mergeWorkingSet(ctx.workingSet, wmDelta);
 
-  // Customer agent: never promote 200-series list `id` into customer_id
-  if (agentKey === 'customer') {
+  if (scrapeIds && agentKey === 'customer') {
     if (ctx.entities.customer_id != null) {
       ctx.entities.id = ctx.entities.customer_id;
     } else if (ctx.entities.id != null && !isWorxstreamCustomerMasterId(ctx.entities.id)) {
@@ -459,22 +458,24 @@ export async function updateContext(ref, agentKey, toolsUsed, toolResults = [], 
  */
 export async function buildContextPrompt(ref, opts = {}) {
   const ctx = await getContext(ref);
-  const entries = Object.entries(ctx.entities);
+  const scrapeIds = config.coworker?.scrapeEntityIds === true;
+  const entries = scrapeIds ? Object.entries(ctx.entities).filter(([k]) => k !== 'sms_draft_id' && k !== 'sms_to' && k !== 'sms_from') : [];
   const hasRecent = Array.isArray(ctx.recentResults) && ctx.recentResults.length > 0;
-  const hasRefs = ctx.entityRefs && typeof ctx.entityRefs === 'object' && Object.keys(ctx.entityRefs).length > 0;
+  const hasRefs = scrapeIds && ctx.entityRefs && typeof ctx.entityRefs === 'object' && Object.keys(ctx.entityRefs).length > 0;
   const hasWorkingSet = ctx.workingSet && Object.keys(ctx.workingSet).length > 0;
   const focusBlock = formatWorkingSetForPrompt(
     hasWorkingSet ? ctx.workingSet : null,
     opts.lastAssistantSnippet || '',
   );
 
-  if (entries.length === 0 && !hasRecent && !hasRefs && !ctx.lastAgent && !ctx.lastSearch && !focusBlock) {
+  if (entries.length === 0 && !hasRecent && !hasRefs && !ctx.lastAgent && !ctx.lastSearch && !focusBlock && !ctx.entities.sms_draft_id) {
     return '';
   }
 
   const parts = [];
   if (focusBlock) parts.push(focusBlock);
-  if (entries.length > 0) {
+  // P4: do not inject Known IDs / Use customer_id= when scrape is off — transcript is memory.
+  if (scrapeIds && entries.length > 0) {
     const entityStr = entries.map(([k, v]) => `${k}=${v}`).join(', ');
     parts.push(`Known IDs: ${entityStr}`);
   }
@@ -492,7 +493,7 @@ export async function buildContextPrompt(ref, opts = {}) {
       parts.push(`Recent ${latest.entityType} results: ${s}`);
     }
   }
-  if (ctx.entities.customer_id != null) {
+  if (scrapeIds && ctx.entities.customer_id != null) {
     parts.push(`Use customer_id=${ctx.entities.customer_id} for list_estimates, list_invoices, list_credit_memos, list_bills, or list_purchase_orders when the user refers to "his/their/its" or the previously discussed customer`);
   }
   if (ctx.entities.sms_draft_id) {
@@ -514,7 +515,7 @@ export async function buildContextPrompt(ref, opts = {}) {
   }
   const body = parts.join('. ');
   return body
-    ? `${body}\n\nUse this context to resolve references like "its", "that", "their", and to continue the active task.`
+    ? `${body}\n\nUse this context to resolve references like "its", "that", "their", and to continue the active task. Prefer tool results in conversation history over guessing IDs.`
     : '';
 }
 

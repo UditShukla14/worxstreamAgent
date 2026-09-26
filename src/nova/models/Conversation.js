@@ -14,10 +14,15 @@ const messageSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.Mixed,
     required: true,
   },
-  // Compact per-turn tool transcript: [{ tool, input, ok, error? }].
-  // Replayed into agent history so later turns know what was already
-  // called, what worked, and what failed (Cursor/Claude-style memory).
+  // Compact per-turn tool list for UI/legacy fallback.
+  // Full Anthropic transcript + observability live in ConversationTurn.
   tool_activity: {
+    type: [mongoose.Schema.Types.Mixed],
+    default: undefined,
+  },
+  // Legacy: older rows may still have agent_transcript embedded.
+  // New writes use ConversationTurn.transcript instead.
+  agent_transcript: {
     type: [mongoose.Schema.Types.Mixed],
     default: undefined,
   },

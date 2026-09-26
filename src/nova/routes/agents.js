@@ -17,6 +17,10 @@ import {
   runConfirmAction,
   deleteConversationFull,
 } from '../agents/coworkerPipeline.js';
+import {
+  listConversationTurns,
+  turnToApi,
+} from '../agents/conversationTurns.js';
 import { requireWorxstreamAuth } from '../../middleware/requireWorxstreamAuth.js';
 import { resolveConversationTenantIds } from '../../utils/worxstreamCredentials.js';
 
@@ -163,13 +167,43 @@ router.get('/conversations/:conversation_id', async (req, res) => {
     res.json({
       success: true,
       conversation_id: conversation.conversation_id,
-      messages: conversation.messages,
+      // agent_transcript (if any legacy) is for the model only — omit from UI payloads
+      messages: (conversation.messages || []).map((m) => {
+        if (!m || typeof m !== 'object') return m;
+        const { agent_transcript, ...rest } = m;
+        return rest;
+      }),
       conversation_summary: conversation.conversation_summary,
       created_at: conversation.created_at,
       updated_at: conversation.updated_at,
     });
   } catch (error) {
     console.error('❌ Error fetching conversation:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * Turn-by-turn agent logs + optional transcript (Claude/ChatGPT-style audit).
+ * Query: ?transcript=1 to include full agent transcript per turn.
+ */
+router.get('/conversations/:conversation_id/turns', async (req, res) => {
+  try {
+    const tenant = requireConversationTenant(req, res);
+    if (!tenant) return;
+    const includeTranscript = req.query.transcript === '1' || req.query.transcript === 'true';
+    const turns = await listConversationTurns(
+      tenant.company_id,
+      tenant.user_id,
+      req.params.conversation_id,
+    );
+    res.json({
+      success: true,
+      conversation_id: req.params.conversation_id,
+      turns: turns.map((t) => turnToApi(t, { includeTranscript })),
+    });
+  } catch (error) {
+    console.error('❌ Error fetching conversation turns:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });

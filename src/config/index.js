@@ -214,6 +214,24 @@ export const config = {
     mode: (process.env.COWORKER_MODE || 'orchestrator').toLowerCase() === 'specialists'
       ? 'specialists'
       : 'orchestrator',
+    /**
+     * Orchestrator: LLM execution plan before the tool loop (default on).
+     * Set COWORKER_EXECUTION_PLAN=false to skip (legacy direct tool chat).
+     */
+    executionPlan: process.env.COWORKER_EXECUTION_PLAN !== 'false',
+    /** Cap each tool_result in stored agent_transcript (default 4000 chars). */
+    agentTranscriptMaxResultChars: parseInt(
+      process.env.AGENT_TRANSCRIPT_MAX_RESULT_CHARS || '4000',
+      10,
+    ),
+    /**
+     * Redis numeric ID scrape into entities.* (legacy). Default off — agent
+     * memory comes from ConversationTurn transcript. Keep SMS draft keys always.
+     * Set COWORKER_SCRAPE_ENTITY_IDS=true to restore old ID injection.
+     */
+    scrapeEntityIds: process.env.COWORKER_SCRAPE_ENTITY_IDS === 'true',
+    /** Intra-request agent continue slices when tool budget / max_tokens hits (default 3). */
+    maxContinueSlices: parseInt(process.env.AGENT_CONTINUE_SLICES || '3', 10),
   },
   /** Telnyx Messaging — used by MCP SMS tools (draft_sms / send_sms). Server-only. */
   telnyx: {
