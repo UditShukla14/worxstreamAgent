@@ -90,7 +90,6 @@ export const config = {
     maxRetries: parseInt(process.env.LLM_MAX_RETRIES || '1', 10),
     maxTokens: {
       agent: envInt('LLM_MAX_TOKENS_AGENT', 'ANTHROPIC_MAX_TOKENS_AGENT', '8192'),
-      formatter: envInt('LLM_MAX_TOKENS_FORMATTER', 'ANTHROPIC_MAX_TOKENS_FORMATTER', '16384'),
       router: envInt('LLM_MAX_TOKENS_ROUTER', 'ANTHROPIC_MAX_TOKENS_ROUTER', '100'),
       nova: envInt('LLM_MAX_TOKENS_NOVA', 'ANTHROPIC_MAX_TOKENS_NOVA', '256'),
       conversation: envInt('LLM_MAX_TOKENS_CONVERSATION', 'ANTHROPIC_MAX_TOKENS_CONVERSATION', '8192'),

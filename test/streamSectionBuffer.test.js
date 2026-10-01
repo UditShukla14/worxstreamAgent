@@ -7,7 +7,6 @@ import { describe, it } from 'node:test';
 import {
   createDeltaCoalesceBuffer,
   findEarliestOpenBlock,
-  resolveFormatterMaxTokens,
   splitStreamingUiContent,
 } from '../src/nova/agents/streamSectionBuffer.js';
 
@@ -66,13 +65,5 @@ describe('streamSectionBuffer (OpenAI/Claude style)', () => {
     assert.equal(chunks.length, 0);
     buf.flush();
     assert.deepEqual(chunks, ['hi']);
-  });
-
-  it('resolveFormatterMaxTokens scales with raw size', () => {
-    const small = resolveFormatterMaxTokens('hi', 4096);
-    assert.equal(small, 4096);
-    const large = resolveFormatterMaxTokens('x'.repeat(60000), 4096);
-    assert.ok(large > 4096);
-    assert.ok(large <= 32000);
   });
 });

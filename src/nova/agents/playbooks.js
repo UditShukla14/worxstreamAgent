@@ -47,13 +47,34 @@ export function getPlaybookForDomain(domain) {
     return '';
   }
   let text = readFileSync(path, 'utf8').trim();
-  for (const extra of DOMAIN_EXTRAS[key] || []) {
-    const extraPath = join(PLAYBOOK_DIR, extra);
-    if (existsSync(extraPath)) {
-      text = `${text}\n\n${readFileSync(extraPath, 'utf8').trim()}`;
-    }
+  const extras = getPlaybookExtrasFragment(key);
+  if (extras) {
+    text = `${text}\n\n${extras}`;
   }
   cache.set(key, text);
+  return text;
+}
+
+/**
+ * Load DOMAIN_EXTRAS only (e.g. chart/table XML for orchestrator Nova).
+ * @param {string|null|undefined} domain
+ * @returns {string}
+ */
+export function getPlaybookExtrasFragment(domain) {
+  const key = String(domain || '').toLowerCase();
+  const extras = DOMAIN_EXTRAS[key];
+  if (!extras?.length) return '';
+  const cacheKey = `extras:${key}`;
+  if (cache.has(cacheKey)) return cache.get(cacheKey);
+  const parts = [];
+  for (const extra of extras) {
+    const extraPath = join(PLAYBOOK_DIR, extra);
+    if (existsSync(extraPath)) {
+      parts.push(readFileSync(extraPath, 'utf8').trim());
+    }
+  }
+  const text = parts.join('\n\n');
+  cache.set(cacheKey, text);
   return text;
 }
 

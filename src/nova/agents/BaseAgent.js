@@ -19,7 +19,7 @@ import {
   normalizeListInput,
 } from './policies/listPolicies.js';
 import { startActivityKeywordRotation } from './activityKeywords.js';
-import { appendPlaybookToPrompt } from './playbooks.js';
+import { appendPlaybookToPrompt, getPlaybookExtrasFragment } from './playbooks.js';
 import {
   isWriteTool,
   shouldConfirmWrites,
@@ -84,8 +84,12 @@ export class BaseAgent {
     const resumeNote = '\n\nIf [Session focus] shows a failed last action, attempt recovery (correct IDs/parameters) before asking the user to repeat.';
     const lookupNote = '\n\nID RESOLUTION: NEVER ask the user for an internal ID (user, customer, contact, product, vendor, tax, job, project...). When the user gives a name, call the resolve_entity tool (entity_type + the name) — or a domain lookup tool you have — to get the ID yourself. Only ask the user when the lookup finds nothing or returns multiple ambiguous matches (then show the matching names, never raw IDs).';
     // Domain playbooks only for specialists; orchestrator discovers via tools + shared rules.
+    // Chart/table XML shapes still help orchestrator Nova (same as ChatGPT structured blocks).
+    const chartTableShapes = this.orchestrator
+      ? getPlaybookExtrasFragment('reports')
+      : '';
     this.systemPrompt = this.orchestrator
-      ? base + resumeNote + lookupNote
+      ? base + resumeNote + lookupNote + (chartTableShapes ? `\n\n[UI XML shapes]\n${chartTableShapes}` : '')
       : appendPlaybookToPrompt(base + resumeNote + lookupNote, definition.domain);
   }
 

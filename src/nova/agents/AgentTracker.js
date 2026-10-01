@@ -4,7 +4,6 @@
  * Singleton that observes every agent invocation in the system:
  *   - Router decisions (which agent was picked, latency)
  *   - Specialist agent runs (duration, tool calls, token usage, status)
- *   - Formatter runs (duration)
  *
  * Provides:
  *   - In-memory dashboard data (aggregate stats + recent activity)
@@ -35,7 +34,6 @@ class AgentTracker {
       totalToolCalls: 0,
       totalErrors: 0,
       totalTokens: 0,
-      totalFormatterCalls: 0,
       startedAt: new Date().toISOString(),
     };
 
@@ -93,7 +91,6 @@ class AgentTracker {
       status: 'routing',
       error: null,
       rawDuration: null,
-      formatterDuration: null,
       totalDuration: null,
       tokens: null,
     };
@@ -153,7 +150,7 @@ class AgentTracker {
   }
 
   /**
-   * Call when the specialist agent finishes (before formatter).
+   * Call when the specialist / Nova agent finishes its tool loop.
    */
   agentFinished(requestId, agentName, durationMs, tokens) {
     const entry = this.activeRequests.get(requestId);
@@ -162,7 +159,7 @@ class AgentTracker {
     entry.agentName = agentName;
     entry.rawDuration = durationMs;
     entry.tokens = tokens;
-    entry.status = 'formatting';
+    entry.status = 'agent_done';
 
     if (tokens) {
       this.global.totalTokens += tokens.total_tokens || 0;
@@ -170,17 +167,6 @@ class AgentTracker {
 
     const event = { type: 'agent_finished', requestId, agentName, duration: durationMs };
     this._broadcast(event);
-  }
-
-  /**
-   * Call when the formatter finishes streaming.
-   */
-  formatterFinished(requestId, durationMs) {
-    const entry = this.activeRequests.get(requestId);
-    if (!entry) return;
-
-    entry.formatterDuration = durationMs;
-    this.global.totalFormatterCalls++;
   }
 
   /**
