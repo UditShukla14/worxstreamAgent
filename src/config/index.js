@@ -47,23 +47,21 @@ function buildRedisUrlFromEnv() {
 const DEFAULT_LLM_MODEL = 'openai/gpt-oss-120b';
 
 /**
- * Read int env with optional legacy Anthropic_* fallback during migration.
- * @param {string} primary
- * @param {string} legacy
+ * Read an integer environment setting.
+ * @param {string} name
  * @param {string} fallback
  */
-function envInt(primary, legacy, fallback) {
-  const raw = process.env[primary] || process.env[legacy] || fallback;
+function envInt(name, fallback) {
+  const raw = process.env[name] || fallback;
   return parseInt(raw, 10);
 }
 
 /**
- * @param {string} primary
- * @param {string} legacy
+ * @param {string} name
  * @param {string} fallback
  */
-function envFloat(primary, legacy, fallback) {
-  const raw = process.env[primary] || process.env[legacy] || fallback;
+function envFloat(name, fallback) {
+  const raw = process.env[name] || fallback;
   return parseFloat(raw);
 }
 
@@ -71,10 +69,7 @@ const llmBaseUrl = (process.env.LLM_BASE_URL || '').trim().replace(/\/$/, '');
 const llmModel = (process.env.LLM_MODEL || DEFAULT_LLM_MODEL).trim() || DEFAULT_LLM_MODEL;
 
 export const config = {
-  /**
-   * OpenAI-compatible inference (DigitalOcean vLLM / gpt-oss, etc.).
-   * Anthropic Messages API is no longer used.
-   */
+  /** OpenAI-compatible inference (DigitalOcean vLLM / gpt-oss, etc.). */
   llm: {
     /** Base URL including /v1, e.g. http://10.x.x.x:8000/v1 or http://127.0.0.1:8000/v1 */
     baseUrl: llmBaseUrl,
@@ -82,47 +77,29 @@ export const config = {
     apiKey: (process.env.LLM_API_KEY || 'not-needed').trim(),
     model: llmModel,
     /**
-     * Anthropic tool_search is unavailable on OpenAI-compatible backends.
-     * Always false — BaseAgent loads full allow-lists (or domain buckets).
+     * Constrain tool-call envelopes and arguments on vLLM-compatible servers.
+     * Disable only for an older gateway that rejects OpenAI's `strict` field.
      */
-    useToolSearch: false,
+    strictToolCalls: process.env.LLM_STRICT_TOOL_CALLS !== 'false',
     timeoutMs: parseInt(process.env.LLM_TIMEOUT_MS || '120000', 10),
     maxRetries: parseInt(process.env.LLM_MAX_RETRIES || '1', 10),
     maxTokens: {
-      agent: envInt('LLM_MAX_TOKENS_AGENT', 'ANTHROPIC_MAX_TOKENS_AGENT', '8192'),
-      router: envInt('LLM_MAX_TOKENS_ROUTER', 'ANTHROPIC_MAX_TOKENS_ROUTER', '100'),
-      nova: envInt('LLM_MAX_TOKENS_NOVA', 'ANTHROPIC_MAX_TOKENS_NOVA', '256'),
-      conversation: envInt('LLM_MAX_TOKENS_CONVERSATION', 'ANTHROPIC_MAX_TOKENS_CONVERSATION', '8192'),
-      conversationShort: envInt(
-        'LLM_MAX_TOKENS_CONVERSATION_SHORT',
-        'ANTHROPIC_MAX_TOKENS_CONVERSATION_SHORT',
-        '1024',
-      ),
+      agent: envInt('LLM_MAX_TOKENS_AGENT', '8192'),
+      router: envInt('LLM_MAX_TOKENS_ROUTER', '100'),
+      nova: envInt('LLM_MAX_TOKENS_NOVA', '256'),
+      conversation: envInt('LLM_MAX_TOKENS_CONVERSATION', '8192'),
+      conversationShort: envInt('LLM_MAX_TOKENS_CONVERSATION_SHORT', '1024'),
     },
     /**
      * USD per 1M tokens for usage analytics. Self-hosted default is $0
      * (GPU billed separately). Override if you want internal chargeback.
      */
     pricing: {
-      inputPerMillion: envFloat('LLM_PRICE_INPUT_PER_MTOK', 'ANTHROPIC_PRICE_INPUT_PER_MTOK', '0'),
-      outputPerMillion: envFloat('LLM_PRICE_OUTPUT_PER_MTOK', 'ANTHROPIC_PRICE_OUTPUT_PER_MTOK', '0'),
-      cacheWritePerMillion: envFloat(
-        'LLM_PRICE_CACHE_WRITE_PER_MTOK',
-        'ANTHROPIC_PRICE_CACHE_WRITE_PER_MTOK',
-        '0',
-      ),
-      cacheReadPerMillion: envFloat(
-        'LLM_PRICE_CACHE_READ_PER_MTOK',
-        'ANTHROPIC_PRICE_CACHE_READ_PER_MTOK',
-        '0',
-      ),
+      inputPerMillion: envFloat('LLM_PRICE_INPUT_PER_MTOK', '0'),
+      outputPerMillion: envFloat('LLM_PRICE_OUTPUT_PER_MTOK', '0'),
+      cacheWritePerMillion: envFloat('LLM_PRICE_CACHE_WRITE_PER_MTOK', '0'),
+      cacheReadPerMillion: envFloat('LLM_PRICE_CACHE_READ_PER_MTOK', '0'),
     },
-  },
-  /**
-   * @deprecated Use config.llm — alias kept so leftover imports do not crash mid-migrate.
-   */
-  get anthropic() {
-    return this.llm;
   },
   /** Platform-ops key for /api/admin/* (token usage billing). */
   admin: {
@@ -213,7 +190,7 @@ export const config = {
      * Set COWORKER_EXECUTION_PLAN=false to skip the planner call.
      */
     executionPlan: process.env.COWORKER_EXECUTION_PLAN !== 'false',
-    /** Cap each tool_result in stored agent_transcript (default 4000 chars). */
+    /** Cap each OpenAI tool message in stored agent_transcript (default 4000 chars). */
     agentTranscriptMaxResultChars: parseInt(
       process.env.AGENT_TRANSCRIPT_MAX_RESULT_CHARS || '4000',
       10,

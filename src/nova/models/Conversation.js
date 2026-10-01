@@ -15,7 +15,7 @@ const messageSchema = new mongoose.Schema({
     required: true,
   },
   // Compact per-turn tool list for UI/legacy fallback.
-  // Full Anthropic transcript + observability live in ConversationTurn.
+  // Full OpenAI transcript + observability live in ConversationTurn.
   tool_activity: {
     type: [mongoose.Schema.Types.Mixed],
     default: undefined,
@@ -80,4 +80,3 @@ conversationSchema.index({ company_id: 1, user_id: 1, updated_at: -1 });
 const Conversation = mongoose.model('Conversation', conversationSchema);
 
 export default Conversation;
-

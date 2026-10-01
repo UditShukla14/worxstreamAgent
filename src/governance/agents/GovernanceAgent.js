@@ -6,9 +6,10 @@
  */
 
 import { config } from '../../config/index.js';
-import { createMessage } from '../../llm/client.js';
+import { createMessage, getAssistantMessage, getResponseText } from '../../llm/client.js';
+import { parseToolArguments } from '../../llm/toolArguments.js';
 import { usageMetaFromContext } from '../../analytics/usageMeta.js';
-import { getAnthropicTools, executeMcpTool } from '../../mcp/server.js';
+import { getOpenAITools, executeMcpTool } from '../../mcp/server.js';
 import { getToolIndex } from '../../mcp/toolIndex.js';
 
 const MAX_TOOL_ITERATIONS = Number.isFinite(config.agentRuntime?.maxToolIterations)
@@ -69,7 +70,7 @@ export class GovernanceAgent {
       return [];
     }
 
-    return getAnthropicTools([...allowSet]);
+    return getOpenAITools([...allowSet], { strict: config.llm.strictToolCalls });
   }
 
   /**
@@ -94,59 +95,60 @@ export class GovernanceAgent {
       const params = {
         model: config.llm.model,
         max_tokens: config.llm.maxTokens?.agent ?? 4096,
-        system: this.systemPrompt,
         messages,
       };
 
       if (tools.length > 0) {
         params.tools = tools;
-        params.tool_choice = { type: 'auto' };
+        params.tool_choice = 'auto';
+        params.parallel_tool_calls = false;
       }
 
       response = await createMessage(params, this._usageMeta(context));
+      const assistant = getAssistantMessage(response);
+      const finishReason = response.choices?.[0]?.finish_reason;
 
       if (response.usage) {
-        totalInputTokens += response.usage.input_tokens || 0;
-        totalOutputTokens += response.usage.output_tokens || 0;
+        totalInputTokens += response.usage.prompt_tokens || 0;
+        totalOutputTokens += response.usage.completion_tokens || 0;
       }
 
-      if (response.stop_reason === 'tool_use') {
-        const toolUseBlocks = response.content.filter((b) => b.type === 'tool_use');
-        messages.push({ role: 'assistant', content: response.content });
+      if (finishReason === 'tool_calls' || assistant.tool_calls?.length) {
+        const toolCalls = assistant.tool_calls || [];
+        messages.push(assistant);
 
-        const toolResults = [];
-        for (const block of toolUseBlocks) {
-          console.log(`  🔧 [${this.name}] → ${block.name}`);
+        for (const call of toolCalls) {
+          const name = call.function?.name || '';
+          const input = parseToolArguments(call.function?.arguments);
+          console.log(`  🔧 [${this.name}] → ${name}`);
           const toolStart = Date.now();
-          const result = await executeMcpTool(block.name, block.input, {
+          const result = await executeMcpTool(name, input, {
             agent: this.name,
             userMessage: message,
           });
           const toolDuration = Date.now() - toolStart;
           toolsUsed.push({
-            name: block.name,
-            input: block.input,
+            name,
+            input,
             success: result.success,
             durationMs: toolDuration,
             ...(result.success === false && result.error
               ? { error: String(result.error).slice(0, 300) }
               : {}),
           });
-          toolResults.push({
-            type: 'tool_result',
-            tool_use_id: block.id,
+          messages.push({
+            role: 'tool',
+            tool_call_id: call.id,
             content: JSON.stringify(result),
           });
         }
-        messages.push({ role: 'user', content: toolResults });
         continue;
       }
 
       break;
     }
 
-    const textBlocks = response.content.filter((b) => b.type === 'text');
-    const finalText = textBlocks.map((b) => b.text).join('\n');
+    const finalText = getResponseText(response);
 
     console.log(
       `✅ [${this.name}] done (${iterations} iteration(s), ${toolsUsed.length} tool call(s), ${totalInputTokens + totalOutputTokens} tokens)`,
@@ -155,7 +157,7 @@ export class GovernanceAgent {
     return {
       agent: this.name,
       response: finalText,
-      rawContent: response.content,
+      rawContent: getAssistantMessage(response),
       toolsUsed,
       usage: {
         input_tokens: totalInputTokens,
@@ -167,7 +169,10 @@ export class GovernanceAgent {
 
   _buildInitialMessages(message, context = {}) {
     const turnPrompt = this._buildPrompt(message, context);
-    return [{ role: 'user', content: turnPrompt }];
+    return [
+      { role: 'system', content: this.systemPrompt },
+      { role: 'user', content: turnPrompt },
+    ];
   }
 
   _buildPrompt(message, context) {

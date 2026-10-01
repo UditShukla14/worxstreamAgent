@@ -1,5 +1,5 @@
 /**
- * Daily rollup of Anthropic usage for fast admin dashboards.
+ * Daily rollup of hosted-LLM usage for fast admin dashboards.
  *
  * Dimensions:
  * - user_id '' = company-wide day total
@@ -20,7 +20,7 @@ const llmUsageDailySchema = new mongoose.Schema(
      * Otherwise specialist key (estimate, nova, …) or phase label (router, formatter).
      */
     agent_key: { type: String, default: '' },
-    /** Anthropic model id for this row (empty = all models rolled together). */
+    /** Hosted model id for this row (empty = all models rolled together). */
     model: { type: String, default: '' },
     /** UTC calendar day YYYY-MM-DD */
     date: { type: String, required: true },

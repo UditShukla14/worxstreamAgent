@@ -1,7 +1,7 @@
 /**
  * Token Counting Utility
  * Estimates token counts for messages and context using approximation
- * (Anthropic uses ~4 characters per token on average)
+ * (roughly four characters per token for planning purposes)
  */
 
 /**
@@ -20,7 +20,7 @@ export function countTokens(text) {
 
 /**
  * Count tokens in a message content
- * Handles both string and array formats (Anthropic message format)
+ * Handles strings and OpenAI content-part arrays.
  */
 export function countMessageContentTokens(content) {
   if (!content) {
@@ -39,31 +39,6 @@ export function countMessageContentTokens(content) {
 
       if (block.type === 'text' && block.text) {
         return total + countTokens(String(block.text));
-      }
-
-      if (block.type === 'tool_use') {
-        // Count tool_use block: name, id, and input
-        let tokens = 0;
-        if (block.name) tokens += countTokens(String(block.name));
-        if (block.id) tokens += countTokens(String(block.id));
-        if (block.input) {
-          tokens += countTokens(JSON.stringify(block.input));
-        }
-        return total + tokens;
-      }
-
-      if (block.type === 'tool_result') {
-        // Count tool_result block: tool_use_id and content
-        let tokens = 0;
-        if (block.tool_use_id) tokens += countTokens(String(block.tool_use_id));
-        if (block.content) {
-          tokens += countTokens(
-            typeof block.content === 'string' 
-              ? block.content 
-              : JSON.stringify(block.content)
-          );
-        }
-        return total + tokens;
       }
 
       return total;
@@ -91,6 +66,10 @@ export function countMessageTokens(message) {
 
   // Content tokens
   tokens += countMessageContentTokens(message.content);
+  if (Array.isArray(message.tool_calls)) {
+    tokens += countTokens(JSON.stringify(message.tool_calls));
+  }
+  if (message.tool_call_id) tokens += countTokens(String(message.tool_call_id));
 
   return tokens;
 }
@@ -117,15 +96,14 @@ export function countToolsTokens(tools) {
   }
 
   // Estimate tokens for tools schema
-  // Each tool definition includes: name, description, input_schema
+  // Each OpenAI tool definition includes a function name, description, and parameters.
   let tokens = 0;
   
   for (const tool of tools) {
-    if (tool.name) tokens += countTokens(String(tool.name));
-    if (tool.description) tokens += countTokens(String(tool.description));
-    if (tool.input_schema) {
-      tokens += countTokens(JSON.stringify(tool.input_schema));
-    }
+    const fn = tool.function || {};
+    if (fn.name) tokens += countTokens(String(fn.name));
+    if (fn.description) tokens += countTokens(String(fn.description));
+    if (fn.parameters) tokens += countTokens(JSON.stringify(fn.parameters));
     // Overhead for tool structure
     tokens += 10;
   }
@@ -155,4 +133,3 @@ export function estimateContextSize(systemPrompt, messages, tools = []) {
 
   return totalTokens;
 }
-

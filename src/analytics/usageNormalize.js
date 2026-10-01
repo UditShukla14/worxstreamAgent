@@ -1,14 +1,13 @@
 /**
  * Normalize LLM response.usage into billing fields + USD cost.
- * Accepts Anthropic-shaped fields (input_tokens/output_tokens) after
- * OpenAI→Anthropic mapping in src/llm/client.js.
+ * Accepts native OpenAI Chat Completions usage fields.
  * Estimates in tokenCounter.js are NEVER used for billing.
  */
 
-/** @typedef {{ input_tokens?: number, output_tokens?: number, cache_creation_input_tokens?: number, cache_read_input_tokens?: number }} AnthropicUsage */
+/** @typedef {{ prompt_tokens?: number, completion_tokens?: number, total_tokens?: number, prompt_tokens_details?: object }} OpenAIUsage */
 
 /**
- * @param {AnthropicUsage|null|undefined} usage
+ * @param {OpenAIUsage|null|undefined} usage
  * @returns {{
  *   input_tokens: number,
  *   output_tokens: number,
@@ -17,17 +16,15 @@
  *   total_tokens: number,
  * }}
  */
-export function normalizeAnthropicUsage(usage) {
-  const input_tokens = Math.max(0, Number(usage?.input_tokens) || 0);
-  const output_tokens = Math.max(0, Number(usage?.output_tokens) || 0);
-  const cache_creation_input_tokens = Math.max(
-    0,
-    Number(usage?.cache_creation_input_tokens) || 0,
-  );
+export function normalizeOpenAIUsage(usage) {
+  const promptTokens = Math.max(0, Number(usage?.prompt_tokens) || 0);
+  const output_tokens = Math.max(0, Number(usage?.completion_tokens) || 0);
+  const cache_creation_input_tokens = 0;
   const cache_read_input_tokens = Math.max(
     0,
-    Number(usage?.cache_read_input_tokens) || 0,
+    Number(usage?.prompt_tokens_details?.cached_tokens) || 0,
   );
+  const input_tokens = Math.max(0, promptTokens - cache_read_input_tokens);
   return {
     input_tokens,
     output_tokens,
@@ -42,7 +39,7 @@ export function normalizeAnthropicUsage(usage) {
 }
 
 /**
- * @param {ReturnType<typeof normalizeAnthropicUsage>} tokens
+ * @param {ReturnType<typeof normalizeOpenAIUsage>} tokens
  * @param {{
  *   inputPerMillion: number,
  *   outputPerMillion: number,
@@ -74,11 +71,11 @@ export function computeUsageCostUsd(tokens, rates) {
 }
 
 /**
- * @param {AnthropicUsage|null|undefined} usage
+ * @param {OpenAIUsage|null|undefined} usage
  * @param {object} rates
  */
 export function normalizeUsageWithCost(usage, rates) {
-  const tokens = normalizeAnthropicUsage(usage);
+  const tokens = normalizeOpenAIUsage(usage);
   const costs = computeUsageCostUsd(tokens, rates);
   return { ...tokens, ...costs };
 }

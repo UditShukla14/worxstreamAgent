@@ -1,11 +1,11 @@
 /**
- * Unit tests for Anthropic usage normalization + cost calculation.
+ * Unit tests for OpenAI usage normalization + cost calculation.
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  normalizeAnthropicUsage,
+  normalizeOpenAIUsage,
   computeUsageCostUsd,
   normalizeUsageWithCost,
 } from '../../src/analytics/usageNormalize.js';
@@ -17,23 +17,22 @@ const RATES = {
   cacheReadPerMillion: 0.3,
 };
 
-describe('normalizeAnthropicUsage', () => {
-  it('reads all Anthropic usage fields including cache', () => {
-    const tokens = normalizeAnthropicUsage({
-      input_tokens: 1000,
-      output_tokens: 200,
-      cache_creation_input_tokens: 500,
-      cache_read_input_tokens: 8000,
+describe('normalizeOpenAIUsage', () => {
+  it('reads OpenAI usage fields including cached prompt tokens', () => {
+    const tokens = normalizeOpenAIUsage({
+      prompt_tokens: 1000,
+      completion_tokens: 200,
+      prompt_tokens_details: { cached_tokens: 800 },
     });
-    assert.equal(tokens.input_tokens, 1000);
+    assert.equal(tokens.input_tokens, 200);
     assert.equal(tokens.output_tokens, 200);
-    assert.equal(tokens.cache_creation_input_tokens, 500);
-    assert.equal(tokens.cache_read_input_tokens, 8000);
-    assert.equal(tokens.total_tokens, 9700);
+    assert.equal(tokens.cache_creation_input_tokens, 0);
+    assert.equal(tokens.cache_read_input_tokens, 800);
+    assert.equal(tokens.total_tokens, 1200);
   });
 
   it('defaults missing fields to zero', () => {
-    const tokens = normalizeAnthropicUsage(null);
+    const tokens = normalizeOpenAIUsage(null);
     assert.deepEqual(tokens, {
       input_tokens: 0,
       output_tokens: 0,
@@ -46,25 +45,24 @@ describe('normalizeAnthropicUsage', () => {
 
 describe('computeUsageCostUsd', () => {
   it('prices each bucket at USD per 1M tokens', () => {
-    const tokens = normalizeAnthropicUsage({
-      input_tokens: 1_000_000,
-      output_tokens: 1_000_000,
-      cache_creation_input_tokens: 1_000_000,
-      cache_read_input_tokens: 1_000_000,
+    const tokens = normalizeOpenAIUsage({
+      prompt_tokens: 1_000_000,
+      completion_tokens: 1_000_000,
+      prompt_tokens_details: { cached_tokens: 1_000_000 },
     });
     const costs = computeUsageCostUsd(tokens, RATES);
-    assert.equal(costs.input_cost_usd, 3);
+    assert.equal(costs.input_cost_usd, 0);
     assert.equal(costs.output_cost_usd, 15);
-    assert.equal(costs.cache_write_cost_usd, 3.75);
+    assert.equal(costs.cache_write_cost_usd, 0);
     assert.equal(costs.cache_read_cost_usd, 0.3);
-    assert.equal(costs.cost_usd, 22.05);
+    assert.equal(costs.cost_usd, 15.3);
   });
 });
 
 describe('normalizeUsageWithCost', () => {
   it('combines tokens and cost for billing records', () => {
     const billed = normalizeUsageWithCost(
-      { input_tokens: 2000, output_tokens: 500 },
+      { prompt_tokens: 2000, completion_tokens: 500 },
       RATES,
     );
     assert.equal(billed.input_tokens, 2000);

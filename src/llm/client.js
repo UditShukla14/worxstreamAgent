@@ -1,125 +1,157 @@
-/**
- * OpenAI-compatible LLM client (vLLM / self-hosted gpt-oss, etc.).
- * Uses fetch (no openai package) so we stay compatible with zod v4.
- * Callers keep Anthropic-shaped params + responses; conversion is in messageAdapter.
- */
-
+/** Native OpenAI Chat Completions client for the hosted model. */
+import { randomUUID } from 'crypto';
 import { config } from '../config/index.js';
 import { recordUsageAsync } from '../analytics/recordUsage.js';
-import {
-  buildOpenAIChatBody,
-  fromOpenAICompletion,
-  contentToText,
-} from './messageAdapter.js';
+import { sanitizeOpenAIMessages } from '../utils/validateMessages.js';
 
-/**
- * @typedef {object} LlmCallMeta
- * @property {string} [companyId]
- * @property {string} [userId]
- * @property {string} [conversationId]
- * @property {string} [requestId]
- * @property {string} [phase]
- * @property {string} [agentKey]
- * @property {string} [model]
- */
+function normalizeCompletion(completion) {
+  const message = completion?.choices?.[0]?.message;
+  if (!message || !Array.isArray(message.tool_calls)) return completion;
+  message.tool_calls = message.tool_calls.map((call) => ({
+    ...call,
+    id: call.id || `call_${randomUUID()}`,
+    type: 'function',
+    function: {
+      ...call.function,
+      arguments: typeof call.function?.arguments === 'string'
+        ? call.function.arguments
+        : JSON.stringify(call.function?.arguments || {}),
+    },
+  }));
+  return completion;
+}
 
 function chatCompletionsUrl() {
-  const base = (config.llm.baseUrl || '').replace(/\/$/, '');
-  return `${base}/chat/completions`;
+  return `${String(config.llm.baseUrl || '').replace(/\/$/, '')}/chat/completions`;
 }
 
-function authHeaders() {
-  const key = config.llm.apiKey || 'not-needed';
-  return {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${key}`,
-  };
-}
-
-/**
- * @param {object} body
- * @param {{ stream?: boolean }} [opts]
- */
-async function postChat(body, opts = {}) {
+async function postChat(body, { stream = false } = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.llm.timeoutMs || 120000);
   try {
-    const res = await fetch(chatCompletionsUrl(), {
+    const response = await fetch(chatCompletionsUrl(), {
       method: 'POST',
-      headers: authHeaders(),
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${config.llm.apiKey || 'not-needed'}`,
+      },
       body: JSON.stringify(body),
       signal: controller.signal,
     });
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '');
-      throw new Error(
-        `LLM HTTP ${res.status} from ${chatCompletionsUrl()}: ${errText.slice(0, 500)}`,
-      );
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(`LLM HTTP ${response.status} from ${chatCompletionsUrl()}: ${detail.slice(0, 500)}`);
     }
-    if (opts.stream) return res;
-    return res.json();
+    return stream ? response : response.json();
   } finally {
     clearTimeout(timeout);
   }
 }
 
-/**
- * @param {object} params - Anthropic-shaped MessageCreateParams
- * @param {LlmCallMeta} [meta]
- */
+export function buildChatCompletionBody(params) {
+  const body = {
+    ...params,
+    model: params.model || config.llm.model,
+    messages: sanitizeOpenAIMessages(params.messages),
+  };
+  if (!body.tools?.length) {
+    delete body.tools;
+    delete body.tool_choice;
+    delete body.parallel_tool_calls;
+  }
+  return body;
+}
+
+export function getAssistantMessage(completion) {
+  return completion?.choices?.[0]?.message || { role: 'assistant', content: '' };
+}
+
+export function getResponseText(completion) {
+  const content = getAssistantMessage(completion).content;
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content.map((part) => part?.type === 'text' ? String(part.text || '') : '').join('');
+}
+
 export async function createMessage(params, meta = {}) {
-  const body = buildOpenAIChatBody(params, config.llm.model);
-  let lastErr;
+  const body = buildChatCompletionBody(params);
+  let lastError;
   const retries = Math.max(0, config.llm.maxRetries ?? 1);
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const completion = await postChat({ ...body, stream: false });
-      const message = fromOpenAICompletion(completion);
-      recordUsageAsync(meta, message.usage, body.model || config.llm.model);
-      return message;
-    } catch (err) {
-      lastErr = err;
+      const completion = normalizeCompletion(await postChat({ ...body, stream: false }));
+      recordUsageAsync(meta, completion.usage, completion.model || body.model);
+      return completion;
+    } catch (error) {
+      lastError = error;
       if (attempt >= retries) break;
     }
   }
-  throw lastErr;
+  throw lastError;
 }
 
-/**
- * Stream chat completion; calls onTextDelta for text chunks.
- * Returns Anthropic-shaped final message.
- *
- * @param {object} params
- * @param {LlmCallMeta} [meta]
- * @param {(delta: string) => void} [onTextDelta]
- * @returns {Promise<{ text: string, message: object }>}
- */
 export async function streamMessage(params, meta = {}, onTextDelta = () => {}) {
-  const body = buildOpenAIChatBody(params, config.llm.model);
-  const res = await postChat({ ...body, stream: true }, { stream: true });
+  const body = buildChatCompletionBody(params);
+  const response = await postChat({
+    ...body,
+    stream: true,
+    stream_options: { include_usage: true },
+  }, { stream: true });
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('LLM stream response has no body');
 
   let text = '';
   let finishReason = 'stop';
-  /** @type {Map<number, { id: string, name: string, arguments: string }>} */
-  const toolAcc = new Map();
-  let usage = {
-    input_tokens: 0,
-    output_tokens: 0,
-    cache_creation_input_tokens: 0,
-    cache_read_input_tokens: 0,
-  };
-
-  const reader = res.body?.getReader();
-  if (!reader) {
-    throw new Error('LLM stream response has no body');
-  }
+  let usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  let finalMessage = null;
+  const calls = new Map();
   const decoder = new TextDecoder();
   let buffer = '';
 
-  const pushText = (piece) => {
-    if (!piece) return;
-    text += piece;
-    onTextDelta(piece);
+  const appendCall = (call, fallbackIndex = 0) => {
+    if (!call) return;
+    const index = call.index ?? fallbackIndex;
+    const current = calls.get(index) || {
+      id: '', type: 'function', function: { name: '', arguments: '' },
+    };
+    if (call.id) current.id = call.id;
+    if (call.function?.name) {
+      const piece = call.function.name;
+      if (!current.function.name || piece.startsWith(current.function.name)) current.function.name = piece;
+      else if (piece !== current.function.name) current.function.name += piece;
+    }
+    if (call.function?.arguments != null) {
+      const piece = call.function.arguments;
+      if (typeof piece === 'object') current.function.arguments = JSON.stringify(piece);
+      else {
+        const previous = typeof current.function.arguments === 'string' ? current.function.arguments : '';
+        current.function.arguments = piece.startsWith(previous) ? piece : previous + piece;
+      }
+    }
+    calls.set(index, current);
+  };
+
+  const processData = (data) => {
+    if (!data || data === '[DONE]') return;
+    let chunk;
+    try { chunk = JSON.parse(data); } catch { return; }
+    if (chunk.usage) usage = chunk.usage;
+    const choice = chunk.choices?.[0];
+    if (!choice) return;
+    if (choice.finish_reason) finishReason = choice.finish_reason;
+    const delta = choice.delta || {};
+    if (typeof delta.content === 'string' && delta.content) {
+      text += delta.content;
+      onTextDelta(delta.content);
+    }
+    if (Array.isArray(delta.tool_calls)) {
+      delta.tool_calls.forEach((call, index) => appendCall(call, index));
+    }
+    if (choice.message) finalMessage = choice.message;
+  };
+  const processLine = (raw) => {
+    const line = raw.trim();
+    if (line.startsWith('data:')) processData(line.slice(5).trim());
   };
 
   while (true) {
@@ -128,81 +160,32 @@ export async function streamMessage(params, meta = {}, onTextDelta = () => {}) {
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split('\n');
     buffer = lines.pop() || '';
-    for (const rawLine of lines) {
-      const line = rawLine.trim();
-      if (!line.startsWith('data:')) continue;
-      const data = line.slice(5).trim();
-      if (!data || data === '[DONE]') continue;
-      let chunk;
-      try {
-        chunk = JSON.parse(data);
-      } catch {
-        continue;
-      }
-      if (chunk.usage) {
-        usage = {
-          input_tokens: Number(chunk.usage.prompt_tokens) || 0,
-          output_tokens: Number(chunk.usage.completion_tokens) || 0,
-          cache_creation_input_tokens: 0,
-          cache_read_input_tokens: 0,
-        };
-      }
-      const choice = chunk.choices?.[0];
-      if (!choice) continue;
-      if (choice.finish_reason) finishReason = choice.finish_reason;
-      const delta = choice.delta || {};
-      // Prefer delta.content; some backends only send choice.message on the final chunk.
-      const deltaText = contentToText(delta.content);
-      if (deltaText) {
-        pushText(deltaText);
-      } else if (!text && choice.message) {
-        const finalText = contentToText(choice.message.content);
-        if (finalText) pushText(finalText);
-      }
-      if (Array.isArray(delta.tool_calls)) {
-        for (const tc of delta.tool_calls) {
-          const idx = tc.index ?? 0;
-          const cur = toolAcc.get(idx) || { id: '', name: '', arguments: '' };
-          if (tc.id) cur.id = tc.id;
-          if (tc.function?.name) cur.name = tc.function.name;
-          if (tc.function?.arguments) cur.arguments += tc.function.arguments;
-          toolAcc.set(idx, cur);
-        }
-      }
-    }
+    lines.forEach(processLine);
+  }
+  buffer += decoder.decode();
+  if (buffer.trim()) processLine(buffer);
+
+  if (!text && typeof finalMessage?.content === 'string') {
+    text = finalMessage.content;
+    if (text) onTextDelta(text);
+  }
+  if (calls.size === 0 && Array.isArray(finalMessage?.tool_calls)) {
+    finalMessage.tool_calls.forEach((call, index) => appendCall(call, index));
   }
 
-  const content = [];
-  if (text) content.push({ type: 'text', text });
-  for (const tc of toolAcc.values()) {
-    let input = {};
-    try {
-      input = JSON.parse(tc.arguments || '{}');
-    } catch {
-      input = { _raw: tc.arguments || '' };
-    }
-    content.push({
-      type: 'tool_use',
-      id: tc.id || `tool_${Date.now()}`,
-      name: tc.name,
-      input,
-    });
-  }
-  if (content.length === 0) content.push({ type: 'text', text: '' });
-
-  let stop_reason = 'end_turn';
-  if (finishReason === 'tool_calls' || toolAcc.size > 0) stop_reason = 'tool_use';
-  else if (finishReason === 'length') stop_reason = 'max_tokens';
-
-  const message = {
-    id: '',
-    type: 'message',
-    role: 'assistant',
-    content,
-    stop_reason,
+  const completion = normalizeCompletion({
+    id: '', object: 'chat.completion', model: body.model,
+    choices: [{
+      index: 0,
+      finish_reason: calls.size > 0 ? 'tool_calls' : finishReason,
+      message: {
+        role: 'assistant',
+        content: text || null,
+        ...(calls.size > 0 ? { tool_calls: [...calls.values()] } : {}),
+      },
+    }],
     usage,
-  };
-
-  recordUsageAsync(meta, usage, body.model || config.llm.model);
-  return { text, message };
+  });
+  recordUsageAsync(meta, usage, body.model);
+  return { text, completion };
 }

@@ -1,13 +1,13 @@
 # Worxstream AI Agent
 
-An AI-powered assistant that uses Claude with MCP (Model Context Protocol) to interact with your Worxstream APIs.
+An AI-powered assistant that uses an OpenAI-compatible hosted LLM with MCP (Model Context Protocol) tools to interact with Worxstream APIs.
 
 ## 🏗️ Architecture
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  React Frontend │────▶│  Express + MCP  │────▶│   Claude API    │
-│   (Streaming)   │     │     Server      │     │   (Anthropic)   │
+│  React Frontend │────▶│  Express + MCP  │────▶│  Hosted LLM     │
+│   (Streaming)   │     │     Server      │     │ (OpenAI API)    │
 └─────────────────┘     └────────┬────────┘     └─────────────────┘
                                 │
                                 │ MCP Tool Execution
@@ -35,16 +35,15 @@ cd client && npm install
 Create a `.env` file in the root directory:
 
 ```env
-# Anthropic API Key (get from https://console.anthropic.com/)
-ANTHROPIC_API_KEY=sk-ant-xxxxx
+# OpenAI-compatible endpoint; the base URL must include /v1
+LLM_BASE_URL=http://127.0.0.1:8000/v1
+LLM_MODEL=openai/gpt-oss-120b
+LLM_API_KEY=not-needed
+LLM_STRICT_TOOL_CALLS=true
 
 # Worxstream API Configuration
 WORXSTREAM_BASE_URL=https://api.worxstream.io
 WORXSTREAM_API_TOKEN=your_access_token_here
-
-# Default company/user IDs
-DEFAULT_COMPANY_ID=1
-DEFAULT_USER_ID=1
 
 # Server Port
 PORT=3000
@@ -75,7 +74,7 @@ worxstreamAgent/
 │   ├── config/
 │   │   └── index.js              # Configuration
 │   ├── agent/
-│   │   └── systemPrompt.js       # Claude system prompt
+│   │   └── systemPrompt.js       # Agent system prompt
 │   ├── mcp/
 │   │   ├── server.js             # MCP server instance
 │   │   └── tools/                # MCP tool definitions
@@ -260,7 +259,7 @@ export function registerAllTools(server) {
 
 ## 🔐 Security Notes
 
-- Never expose your `ANTHROPIC_API_KEY` to the frontend
+- Never expose your `LLM_API_KEY` to the frontend
 - Add authentication to the `/api/chat` endpoint in production
 - Validate and sanitize all user inputs
 - Consider rate limiting for the chat endpoint
@@ -276,8 +275,14 @@ export function registerAllTools(server) {
 
 ## 🆘 Troubleshooting
 
-**"ANTHROPIC_API_KEY is required"**
-- Make sure you have a `.env` file with your API key
+**"LLM_BASE_URL is required"**
+- Set an OpenAI-compatible base URL ending in `/v1` in `.env`
+
+**The model writes tool calls as text or never calls tools**
+- For vLLM with gpt-oss, start the server with automatic tool calling and the OpenAI parser, for example:
+  `vllm serve openai/gpt-oss-120b --served-model-name openai/gpt-oss-120b --enable-auto-tool-choice --tool-call-parser openai`
+- Keep `LLM_STRICT_TOOL_CALLS=true`. If an older non-vLLM gateway rejects the OpenAI `strict` field, set it to `false` and upgrade the gateway.
+- Verify the model's chat template supports assistant `tool_calls` and `tool` role messages.
 
 **"API calls failing"**
 - Check your `WORXSTREAM_API_TOKEN` is valid

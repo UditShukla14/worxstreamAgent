@@ -109,7 +109,7 @@ class AgentTracker {
    * @param {string} requestId
    * @param {string} agentKey
    * @param {number} routerDurationMs
-   * @param {object|null} [routerUsage] - { input_tokens, output_tokens } from Claude router call
+   * @param {object|null} [routerUsage] - OpenAI Chat Completions usage
    */
   routerResolved(requestId, agentKey, routerDurationMs, routerUsage = null) {
     const entry = this.activeRequests.get(requestId);
@@ -120,9 +120,10 @@ class AgentTracker {
     entry.status = 'agent_running';
     if (routerUsage) {
       entry.routerTokens = {
-        input_tokens: routerUsage.input_tokens || 0,
-        output_tokens: routerUsage.output_tokens || 0,
-        total_tokens: (routerUsage.input_tokens || 0) + (routerUsage.output_tokens || 0),
+        input_tokens: routerUsage.prompt_tokens || 0,
+        output_tokens: routerUsage.completion_tokens || 0,
+        total_tokens: routerUsage.total_tokens
+          || (routerUsage.prompt_tokens || 0) + (routerUsage.completion_tokens || 0),
       };
       this.global.totalTokens += entry.routerTokens.total_tokens;
     }

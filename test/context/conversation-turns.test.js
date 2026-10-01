@@ -21,17 +21,15 @@ describe('conversation turns', () => {
       transcript: [
         {
           role: 'assistant',
-          content: [{ type: 'tool_use', id: '1', name: 'list_customers', input: {} }],
+          content: null,
+          tool_calls: [{ id: '1', type: 'function', function: { name: 'list_customers', arguments: '{}' } }],
         },
         {
-          role: 'user',
-          content: [{
-            type: 'tool_result',
-            tool_use_id: '1',
-            content: '{"data":[{"customer_id":3001,"name":"Acme"}]}',
-          }],
+          role: 'tool',
+          tool_call_id: '1',
+          content: '{"data":[{"customer_id":3001,"name":"Acme"}]}',
         },
-        { role: 'assistant', content: [{ type: 'text', text: 'Found Acme' }] },
+        { role: 'assistant', content: 'Found Acme' },
       ],
       log: { tools: [{ tool: 'list_customers', input: '{}', ok: true }] },
     }];
@@ -40,7 +38,7 @@ describe('conversation turns', () => {
     assert.equal(prior[0].role, 'user');
     assert.equal(prior[1].role, 'assistant');
     assert.ok(prior[1].agent_transcript?.length > 0);
-    assert.ok(!JSON.stringify(prior[1].content).includes('tool_use'));
+    assert.ok(!JSON.stringify(prior[1].content).includes('tool_calls'));
 
     const expanded = expandStoredMessagesForAgent(prior);
     assert.ok(JSON.stringify(expanded).includes('list_customers'));

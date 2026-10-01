@@ -1,5 +1,5 @@
 /**
- * Append-only Anthropic usage ledger — one document per Messages API call.
+ * Append-only hosted-LLM usage ledger — one document per Chat Completions call.
  */
 
 import mongoose from 'mongoose';

@@ -1,9 +1,9 @@
 /**
- * ConversationTurn — one user request + agent response (Claude/ChatGPT-style).
+ * ConversationTurn — one user request + agent response.
  *
  * Separates:
  * - user / ui     → chat display
- * - transcript    → Anthropic tool loop for next-turn agent memory
+ * - transcript    → native OpenAI tool loop for next-turn agent memory
  * - log           → tools, plan, usage, status (observability)
  *
  * Conversation.messages stays the UI timeline; turns are the source of truth
@@ -32,7 +32,7 @@ const conversationTurnSchema = new mongoose.Schema({
   },
 
   /**
-   * Anthropic-style messages for this turn only (tool_use / tool_result / text).
+   * OpenAI messages for this turn only (assistant.tool_calls / tool / text).
    * Does not include the user text (stored in `user`) or UI formatter output.
    */
   transcript: {

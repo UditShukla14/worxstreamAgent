@@ -1,16 +1,16 @@
 /**
- * OpenAI-compatible replacement for Anthropic tool_search_tool_bm25.
+ * Compact tool selector for the hosted OpenAI-compatible model.
  *
- * Pattern (same idea as Claude tool search / the agent router):
+ * Pattern (compact schema selection before the native OpenAI tool loop):
  *  1) One small LLM call sees a compact catalog (name + short description only)
  *  2) Returns JSON array of tool names needed for this turn
- *  3) Caller loads full input_schemas only for those names
+ *  3) Caller loads full OpenAI function schemas only for those names
  *
  * Keyword fallback if the LLM call fails or returns nothing usable.
  */
 
 import { config } from '../config/index.js';
-import { createMessage } from '../llm/client.js';
+import { createMessage, getResponseText } from '../llm/client.js';
 
 const ALWAYS_INCLUDE = [
   'resolve_entity',
@@ -142,7 +142,7 @@ export function selectToolsForTurn(tools, queryText, opts = {}) {
 }
 
 /**
- * One LLM call to choose tools (Anthropic tool-search equivalent for vLLM).
+ * One LLM call to choose tools before loading full schemas.
  *
  * @param {Array<{ name: string, description?: string, title?: string }>} catalog
  * @param {string} queryText
@@ -158,7 +158,7 @@ export async function selectToolsViaLlm(catalog, queryText, opts = {}) {
   const intent = detectToolIntent(queryText);
   const catalogText = buildToolCatalogText(list);
 
-  const system = `You are Nova's tool picker for Worxstream (same role as Claude tool_search).
+  const system = `You are Nova's tool picker for Worxstream.
 Given the user request and the tool catalog, return ONLY a JSON array of tool names to load for this turn.
 
 Rules:
@@ -176,8 +176,7 @@ ${catalogText}`;
       model: config.llm.model,
       max_tokens: Math.max(256, config.llm.maxTokens?.router ?? 100, 320),
       temperature: 0,
-      system,
-      messages: [{
+      messages: [{ role: 'system', content: system }, {
         role: 'user',
         content: String(queryText || '').trim() || 'Select tools for a general Worxstream lookup.',
       }],
@@ -187,7 +186,7 @@ ${catalogText}`;
       agentKey: 'nova_tool_search',
     });
 
-    const raw = stripJsonCodeFence(response.content?.[0]?.text || '');
+    const raw = stripJsonCodeFence(getResponseText(response));
     let names;
     try {
       names = JSON.parse(raw);

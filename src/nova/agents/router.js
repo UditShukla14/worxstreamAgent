@@ -7,7 +7,7 @@
  */
 
 import { config } from '../../config/index.js';
-import { createMessage } from '../../llm/client.js';
+import { createMessage, getResponseText } from '../../llm/client.js';
 import { BaseAgent } from './BaseAgent.js';
 import { AGENT_DEFINITIONS, getAgentKeys, getAgentDescriptionsForRouter } from './agentDefinitions.js';
 import { buildOrchestratorMessages, logContextUsage } from '../../utils/conversationHistory.js';
@@ -88,11 +88,10 @@ export async function resolveAgentKeys(message, conversationContext = '', priorM
   const routeResponse = await createMessage({
     model: config.llm.model,
     max_tokens: config.llm.maxTokens?.router ?? 100,
-    system,
-    messages,
+    messages: [{ role: 'system', content: system }, ...messages],
   }, { ...usageMeta, phase: 'router', agentKey: 'router' });
 
-  const routeText = stripJsonCodeFence(routeResponse.content[0]?.text?.trim());
+  const routeText = stripJsonCodeFence(getResponseText(routeResponse).trim());
   let agentKeys;
   try {
     agentKeys = JSON.parse(routeText);

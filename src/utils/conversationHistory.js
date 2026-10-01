@@ -15,7 +15,7 @@ import { sanitizeTranscriptMessageForApi } from '../nova/agents/agentTranscript.
 const VALID_ROLES = new Set(['user', 'assistant']);
 
 /**
- * Normalize stored Mongo message content to a plain string for Anthropic.
+ * Normalize stored Mongo message content to plain text.
  */
 export function messageContentToString(content) {
   if (content == null) return '';
@@ -55,12 +55,12 @@ function renderToolActivity(activity) {
 }
 
 /**
- * Expand Mongo messages into Anthropic history.
- * Prefer agent_transcript (tool_use / tool_result / raw text) when present;
+ * Expand Mongo messages into native OpenAI history.
+ * Prefer agent_transcript (assistant tool_calls / tool results / raw text) when present;
  * fall back to UI content + compact tool_activity for older turns.
  *
  * @param {Array<{ role: string, content: unknown, tool_activity?: object[], agent_transcript?: object[] }>} stored
- * @returns {Array<{ role: 'user' | 'assistant', content: string | object[] }>}
+ * @returns {Array<object>}
  */
 export function expandStoredMessagesForAgent(stored) {
   if (!Array.isArray(stored)) return [];

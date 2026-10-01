@@ -6,7 +6,7 @@
  */
 
 import { config } from '../../config/index.js';
-import { createMessage } from '../../llm/client.js';
+import { createMessage, getResponseText } from '../../llm/client.js';
 import { buildOrchestratorMessages, logContextUsage } from '../../utils/conversationHistory.js';
 
 const DIRECT_RE = /^(hi|hello|hey|thanks|thank you|thx|ok|okay|yo|good morning|good afternoon|good evening)[\s!.?]*$/i;
@@ -143,11 +143,10 @@ export async function getExecutionPlan({
   const response = await createMessage({
     model: config.llm.model,
     max_tokens: Math.max(maxTokens, 320),
-    system: systemPrompt,
-    messages,
+    messages: [{ role: 'system', content: systemPrompt }, ...messages],
   }, { ...usageMeta, phase: 'execution_plan', agentKey: 'execution_plan' });
 
-  const text = response.content?.find((b) => b.type === 'text')?.text?.trim() || '';
+  const text = getResponseText(response).trim();
   const stripped = stripJsonCodeFence(text);
   try {
     return normalizeExecutionPlan(JSON.parse(stripped));

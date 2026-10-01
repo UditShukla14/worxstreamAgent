@@ -4,14 +4,19 @@
  *
  * Each specialist agent is an instance of BaseAgent constructed from
  * an AGENT_DEFINITIONS entry. The tool registry in src/mcp/server.js
- * stays completely unchanged. Message/tool shapes stay Anthropic-like
- * internally; src/llm/client.js converts to OpenAI for the backend.
+ * stays unchanged while the runtime uses OpenAI messages and function tools.
  */
 
 import { config } from '../../config/index.js';
-import { createMessage, streamMessage } from '../../llm/client.js';
+import {
+  createMessage,
+  streamMessage,
+  getAssistantMessage,
+  getResponseText,
+} from '../../llm/client.js';
+import { parseToolArguments } from '../../llm/toolArguments.js';
 import { usageMetaFromContext } from '../../analytics/usageMeta.js';
-import { getAnthropicTools, executeMcpTool } from '../../mcp/server.js';
+import { getOpenAITools, executeMcpTool } from '../../mcp/server.js';
 import { rex } from './AgentTracker.js';
 import { getSoulSystemPrompt } from './soul.js';
 import { getToolIndex } from '../../mcp/toolIndex.js';
@@ -86,7 +91,7 @@ export class BaseAgent {
     this.extraTools = Array.isArray(definition.extraTools) ? definition.extraTools : [];
     /** When true, getTools() exposes all non-governance product tools (Claude/OpenAI-style). */
     this.orchestrator = definition.orchestrator === true;
-    /** Opt-in wider tool discovery; falls back to global config.llm.useToolSearch. */
+    /** Opt-in dynamic tool selection for wide domain catalogs. */
     this.useToolSearch = definition.useToolSearch === true
       ? true
       : definition.useToolSearch === false
@@ -118,7 +123,7 @@ export class BaseAgent {
 
   /**
    * Returns this agent's tools from the shared MCP registry.
-   * Orchestrator Nova: one LLM tool-search call (Anthropic BM25 equivalent),
+   * Orchestrator Nova: one compact LLM tool-selection call,
    * then full schemas only for the selected names.
    *
    * @param {string} [hintText] - user message + plan text
@@ -154,7 +159,7 @@ export class BaseAgent {
       });
       const allowList = ranked.map((t) => t.name);
       console.log(`  🪛 [${this.name}] tool search (${source}): ${allowList.length}/${catalog.length} → [${allowList.join(', ')}]`);
-      return getAnthropicTools(allowList);
+      return getOpenAITools(allowList, { strict: config.llm.strictToolCalls });
     }
 
     const domainKeys = (this.domains || [this.domain || this.agentKey])
@@ -182,7 +187,7 @@ export class BaseAgent {
       return [];
     }
 
-    return getAnthropicTools([...allowSet]);
+    return getOpenAITools([...allowSet], { strict: config.llm.strictToolCalls });
   }
 
   /**
@@ -215,50 +220,51 @@ export class BaseAgent {
       const params = {
         model: config.llm.model,
         max_tokens: config.llm.maxTokens?.agent ?? 4096,
-        system: this.systemPrompt,
         messages,
       };
 
       if (tools.length > 0) {
         params.tools = tools;
-        params.tool_choice = { type: 'auto' };
+        params.tool_choice = 'auto';
+        params.parallel_tool_calls = false;
       }
 
       response = await createMessage(params, this._usageMeta(context));
+      const assistant = getAssistantMessage(response);
+      const finishReason = response.choices?.[0]?.finish_reason;
 
       if (response.usage) {
-        totalInputTokens += response.usage.input_tokens || 0;
-        totalOutputTokens += response.usage.output_tokens || 0;
+        totalInputTokens += response.usage.prompt_tokens || 0;
+        totalOutputTokens += response.usage.completion_tokens || 0;
       }
 
-      if (response.stop_reason === 'tool_use') {
-        const toolUseBlocks = response.content.filter(b => b.type === 'tool_use');
-        messages.push({ role: 'assistant', content: response.content });
+      if (finishReason === 'tool_calls' || assistant.tool_calls?.length) {
+        const toolCalls = assistant.tool_calls || [];
+        messages.push(assistant);
 
-        const toolResults = [];
-        for (const block of toolUseBlocks) {
-          console.log(`  🔧 [${this.name}] → ${block.name}`);
+        for (const call of toolCalls) {
+          const name = call.function?.name || '';
+          const input = parseToolArguments(call.function?.arguments);
+          console.log(`  🔧 [${this.name}] → ${name}`);
           const toolStart = Date.now();
-          const result = await executeMcpTool(block.name, block.input, { agent: this.name, userMessage: message });
+          const result = await executeMcpTool(name, input, { agent: this.name, userMessage: message });
           const toolDuration = Date.now() - toolStart;
           toolsUsed.push({
-            name: block.name,
-            input: block.input,
+            name,
+            input,
             success: result.success,
             durationMs: toolDuration,
             ...(result.success === false && result.error ? { error: String(result.error).slice(0, 300) } : {}),
           });
           if (context._rexRequestId) {
-            rex.toolCall(context._rexRequestId, block.name, toolDuration, result.success);
+            rex.toolCall(context._rexRequestId, name, toolDuration, result.success);
           }
-          toolResults.push({
-            type: 'tool_result',
-            tool_use_id: block.id,
+          messages.push({
+            role: 'tool',
+            tool_call_id: call.id,
             content: JSON.stringify(result),
-            ...(result.success === false ? { is_error: true } : {}),
           });
         }
-        messages.push({ role: 'user', content: toolResults });
         continue;
       }
 
@@ -266,15 +272,14 @@ export class BaseAgent {
       break;
     }
 
-    const textBlocks = response.content.filter(b => b.type === 'text');
-    const finalText = textBlocks.map(b => b.text).join('\n');
+    const finalText = getResponseText(response);
 
     console.log(`✅ [${this.name}] done (${iterations} iteration(s), ${toolsUsed.length} tool call(s), ${totalInputTokens + totalOutputTokens} tokens)`);
 
     return {
       agent: this.name,
       response: finalText,
-      rawContent: response.content,
+      rawContent: getAssistantMessage(response),
       toolsUsed,
       usage: {
         input_tokens: totalInputTokens,
@@ -309,7 +314,7 @@ export class BaseAgent {
     const history = Array.isArray(context._conversationHistory)
       ? context._conversationHistory.filter((m) => m && (m.role === 'user' || m.role === 'assistant'))
       : [];
-    const historyLength = history.length;
+    const historyLength = history.length + 1; // includes the native system message
     const messages = this._buildInitialMessages(message, context);
 
     const maxSlices = Math.max(
@@ -368,12 +373,12 @@ export class BaseAgent {
         const params = {
           model: config.llm.model,
           max_tokens: config.llm.maxTokens?.agent ?? 4096,
-          system: this.systemPrompt,
           messages,
         };
         if (tools.length > 0) {
           params.tools = tools;
-          params.tool_choice = { type: 'auto' };
+          params.tool_choice = 'auto';
+          params.parallel_tool_calls = false;
         }
 
         // Rotate Claude-style keywords over SSE while waiting on the LLM.
@@ -397,7 +402,7 @@ export class BaseAgent {
         let response;
         try {
           if (streamText) {
-            const { message: streamed } = await streamMessage(
+            const { completion: streamed } = await streamMessage(
               params,
               this._usageMeta(context),
               (delta) => {
@@ -415,48 +420,46 @@ export class BaseAgent {
         }
 
         if (response.usage) {
-          totalInputTokens += response.usage.input_tokens || 0;
-          totalOutputTokens += response.usage.output_tokens || 0;
+          totalInputTokens += response.usage.prompt_tokens || 0;
+          totalOutputTokens += response.usage.completion_tokens || 0;
         }
 
-        if (response.stop_reason === 'max_tokens') {
-          console.log(`  ⚠️ [${this.name}] stop_reason=max_tokens — continuing…`);
-          if (response.content?.length) {
-            messages.push({ role: 'assistant', content: response.content });
-          }
-          const partial = (response.content || [])
-            .filter((b) => b.type === 'text')
-            .map((b) => b.text)
-            .join('\n');
+        const assistant = getAssistantMessage(response);
+        const finishReason = response.choices?.[0]?.finish_reason;
+
+        if (finishReason === 'length') {
+          console.log(`  ⚠️ [${this.name}] finish_reason=length — continuing…`);
+          if (assistant.content) messages.push(assistant);
+          const partial = getResponseText(response);
           if (partial) lastRawText = `${lastRawText}${partial}`;
           messages.push({ role: 'user', content: TRUNCATED_CONTINUE_NOTE });
           continue;
         }
 
-        if (response.stop_reason === 'tool_use') {
-          const toolUseBlocks = response.content.filter((b) => b.type === 'tool_use');
-          messages.push({ role: 'assistant', content: response.content });
+        if (finishReason === 'tool_calls' || assistant.tool_calls?.length) {
+          const toolCalls = assistant.tool_calls || [];
+          messages.push(assistant);
 
-          const toolResults = [];
-          for (const block of toolUseBlocks) {
-            console.log(`  🔧 [${this.name}] → ${block.name}`);
-            const originalInput = block.input || {};
-            const normalizedInput = block.name?.startsWith('list_')
+          for (const call of toolCalls) {
+            const name = call.function?.name || '';
+            console.log(`  🔧 [${this.name}] → ${name}`);
+            const originalInput = parseToolArguments(call.function?.arguments);
+            const normalizedInput = name.startsWith('list_')
               ? normalizeListInput(originalInput)
               : originalInput;
-            onEvent({ type: 'tool_use', tool: block.name, input: normalizedInput });
+            onEvent({ type: 'tool_use', tool: name, input: normalizedInput });
 
             if (
               shouldConfirmWrites(context)
-              && isWriteTool(block.name)
-              && !usesAgentChatConfirm(block.name)
-              && !context._approvedConfirmations?.includes(block.id)
+              && isWriteTool(name)
+              && !usesAgentChatConfirm(name)
+              && !context._approvedConfirmations?.includes(call.id)
             ) {
-              console.log(`  ⏸️ [${this.name}] ${block.name} gated — awaiting write confirmation`);
+              console.log(`  ⏸️ [${this.name}] ${name} gated — awaiting write confirmation`);
               const confirmationId = await storePendingConfirm(
                 context._planRef || {},
                 {
-                  tool: block.name,
+                  tool: name,
                   input: normalizedInput,
                   agentKey: this.agentKey,
                   userMessage: message,
@@ -466,7 +469,7 @@ export class BaseAgent {
               onEvent({
                 type: 'confirmation_required',
                 confirmationId,
-                tool: block.name,
+                tool: name,
                 input: normalizedInput,
               });
               return finish({
@@ -477,7 +480,7 @@ export class BaseAgent {
             }
 
             if (
-              block.name === 'send_sms'
+              name === 'send_sms'
               && draftedSmsThisRun
               && !isSmsChatConfirmMessage(message)
             ) {
@@ -488,31 +491,30 @@ export class BaseAgent {
                   'Do not call send_sms in the same turn as draft_sms. '
                   + 'Show To/From/Body to the user and wait for their next message confirming.',
               };
-              toolsUsed.push({ name: block.name, input: normalizedInput, success: false, error: blocked.error });
+              toolsUsed.push({ name, input: normalizedInput, success: false, error: blocked.error });
               toolResultPayloads.push(blocked);
-              onEvent({ type: 'tool_result', tool: block.name, success: false });
-              toolResults.push({
-                type: 'tool_result',
-                tool_use_id: block.id,
+              onEvent({ type: 'tool_result', tool: name, success: false });
+              messages.push({
+                role: 'tool',
+                tool_call_id: call.id,
                 content: JSON.stringify(blocked),
-                is_error: true,
               });
               continue;
             }
 
             const toolStart = Date.now();
-            const result = await executeMcpTool(block.name, normalizedInput, {
+            const result = await executeMcpTool(name, normalizedInput, {
               agent: this.name,
               userMessage: message,
             });
             const toolDuration = Date.now() - toolStart;
 
-            if (block.name === 'draft_sms' && result?.success !== false) {
+            if (name === 'draft_sms' && result?.success !== false) {
               draftedSmsThisRun = true;
             }
 
             toolsUsed.push({
-              name: block.name,
+              name,
               input: normalizedInput,
               success: result.success,
               ...(result.success === false && result.error
@@ -520,28 +522,23 @@ export class BaseAgent {
                 : {}),
             });
             toolResultPayloads.push(result);
-            onEvent({ type: 'tool_result', tool: block.name, success: result.success });
+            onEvent({ type: 'tool_result', tool: name, success: result.success });
             if (context._rexRequestId) {
-              rex.toolCall(context._rexRequestId, block.name, toolDuration, result.success);
+              rex.toolCall(context._rexRequestId, name, toolDuration, result.success);
             }
 
-            toolResults.push({
-              type: 'tool_result',
-              tool_use_id: block.id,
+            messages.push({
+              role: 'tool',
+              tool_call_id: call.id,
               content: JSON.stringify(result),
-              ...(result.success === false ? { is_error: true } : {}),
             });
           }
-          messages.push({ role: 'user', content: toolResults });
           continue;
         }
 
         // Completed with text (or empty end_turn)
-        const textBlocks = (response.content || []).filter((b) => b.type === 'text');
-        const rawText = textBlocks.map((b) => b.text).join('\n');
-        if (response.content?.length) {
-          messages.push({ role: 'assistant', content: response.content });
-        }
+        const rawText = getResponseText(response);
+        if (assistant.content) messages.push(assistant);
         lastRawText = rawText || lastRawText;
         console.log(
           `✅ [${this.name}] done (slice ${slice}/${maxSlices}, ${totalRounds} round(s), `
@@ -566,7 +563,7 @@ export class BaseAgent {
   }
 
   /**
-   * Anthropic messages array: prior turns (if any) + this turn's user prompt.
+   * OpenAI messages array: system prompt + prior turns + this user prompt.
    * @param {string} message
    * @param {object} context
    * @param {Array<{ role: string, content: string }>} [context._conversationHistory]
@@ -578,9 +575,9 @@ export class BaseAgent {
       : [];
 
     if (history.length > 0) {
-      return [...history, { role: 'user', content: turnPrompt }];
+      return [{ role: 'system', content: this.systemPrompt }, ...history, { role: 'user', content: turnPrompt }];
     }
-    return [{ role: 'user', content: turnPrompt }];
+    return [{ role: 'system', content: this.systemPrompt }, { role: 'user', content: turnPrompt }];
   }
 
   /**

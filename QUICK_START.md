@@ -36,7 +36,9 @@ nano .env
 ```
 
 Fill in:
-- `ANTHROPIC_API_KEY=sk-ant-...`
+- `LLM_BASE_URL=http://127.0.0.1:8000/v1`
+- `LLM_MODEL=openai/gpt-oss-120b`
+- `LLM_API_KEY=not-needed` (or your hosted gateway key)
 - `WORXSTREAM_BASE_URL=https://api.worxstream.io`
 - `WORXSTREAM_API_TOKEN=your_token`
 - `DEFAULT_COMPANY_ID=1`
@@ -79,4 +81,3 @@ docker-compose logs -f
 - Set up SSL certificate (optional)
 
 See `DEPLOYMENT.md` for detailed instructions.
-

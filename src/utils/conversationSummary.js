@@ -3,7 +3,7 @@
  */
 
 import { config } from '../config/index.js';
-import { createMessage } from '../llm/client.js';
+import { createMessage, getResponseText } from '../llm/client.js';
 import { normalizeStoredMessages, messageContentToString } from './conversationHistory.js';
 
 /**
@@ -90,15 +90,16 @@ export async function maybeRefreshSummary({
   const response = await createMessage({
     model: config.llm.model,
     max_tokens: 512,
-    system:
-      'Compress this Worxstream coworker conversation into at most 400 tokens.\n'
+    messages: [{
+      role: 'system',
+      content: 'Compress this Worxstream coworker conversation into at most 400 tokens.\n'
       + 'Use these sections when applicable (omit empty ones):\n'
       + '- Goal / open task\n'
       + '- Active entities (name → id; keep customer_id and other IDs verbatim)\n'
       + '- Decisions & outcomes\n'
       + '- Failures / constraints to avoid repeating\n'
       + 'Prefer facts and IDs over prose. Bullet points only.',
-    messages: [
+    },
       {
         role: 'user',
         content: [
@@ -110,7 +111,7 @@ export async function maybeRefreshSummary({
     ],
   }, { ...usageMeta, phase: 'summary', agentKey: 'summary' });
 
-  const summary = response.content?.find((b) => b.type === 'text')?.text?.trim() || '';
+  const summary = getResponseText(response).trim();
   if (!summary) return null;
   return { summary, throughTurn: total };
 }

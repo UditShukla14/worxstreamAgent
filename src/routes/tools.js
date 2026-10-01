@@ -3,7 +3,7 @@
  */
 
 import { Router } from 'express';
-import { getAnthropicTools, getAvailableTools } from '../mcp/server.js';
+import { getOpenAITools, getAvailableTools } from '../mcp/server.js';
 import { getToolIndex } from '../mcp/toolIndex.js';
 
 const router = Router();
@@ -12,14 +12,14 @@ const router = Router();
  * Get available tools
  */
 router.get('/', (req, res) => {
-  const tools = getAnthropicTools();
+  const tools = getOpenAITools();
   
   res.json({
     success: true,
     count: tools.length,
     tools: tools.map((tool) => ({
-      name: tool.name,
-      description: tool.description,
+      name: tool.function.name,
+      description: tool.function.description,
     })),
   });
 });

@@ -1,110 +1,44 @@
-Added a nova manager agent definition
+# Nova orchestration
 
-In src/agents/agentDefinitions.js I introduced a nova entry with:
-name: nova_orchestrator
-description: “Manager agent that orchestrates other agents for cross-domain requests; does not call external MCP tools directly.”
-tools: empty [] (Nova never calls MCP tools itself).
-systemPrompt: describes Nova’s job: look at the user message, conversation context, router-suggested agent keys, and the catalog of specialist agents, then output a pure JSON plan:
-{"mode": "single" | "sequential", "agents": ["customer", "estimate"], "reason": "..."}
-No final user answer, just the plan.
-Nova planning helper in the backend
+Nova is the coworker orchestrator for Worxstream. It routes a request to the
+appropriate specialist agents, selects a compact set of MCP tools, executes
+those tools, and streams a single response through `/api/agents/stream`.
 
-In src/routes/agents.js I added getNovaPlan(message, conversationContext, routing):
-Builds a compact list of all specialist agents (from AGENT_DEFINITIONS, excluding nova itself) as - key: description.
-Takes routing.agentKeys from the existing router as strong hints.
-Calls Anthropic with:
-system: Nova’s system prompt from AGENT_DEFINITIONS.nova.systemPrompt.
-user content: conversation context (if any), user message, router-suggested keys, and the agent catalog, with a clear instruction to return only the JSON plan.
-Parses the response text as JSON and normalizes to:
-{ mode: 'single' | 'sequential', agents: string[], reason?: string }
-Returns null on parse/validation errors so we can fall back cleanly.
-Reworked /api/agents/stream to use Nova for orchestration
+## Native hosted-LLM protocol
 
-In src/routes/agents.js, the streaming handler now works as follows:
+All model calls use the OpenAI Chat Completions protocol exposed by the hosted
+LLM configured through `LLM_BASE_URL`, `LLM_MODEL`, and `LLM_API_KEY`.
 
-Step 1 – Existing router still runs first
+- System instructions are sent as `role: "system"` messages.
+- MCP tools are sent as OpenAI `type: "function"` definitions.
+- The model requests tools through `assistant.tool_calls`.
+- Tool results are returned as `role: "tool"` messages with `tool_call_id`.
+- Tool arguments are parsed and validated against their Zod schemas before a
+  handler can run.
+- Tool calls run sequentially (`parallel_tool_calls: false`) so confirmation,
+  ordering, and audit behavior stay deterministic.
 
-resolveAgentKeys(message, contextPrompt) is called as before, giving:
-routing.type: 'conversation' | 'single' | 'multi'
-routing.agentKeys: the low-level router’s chosen agents.
-routing.routerUsage: token usage for metrics.
-Step 2 – Conversational-only fallback (unchanged in behavior)
+There is no Anthropic message or tool-schema translation layer.
 
-If routing.type === 'conversation' (router says “no agent needed”):
-Still logs via Rex and streams a plain Claude response (no MCP tools).
-Persists the turn in Conversation scoped by (company_id, user_id, conversation_id).
-Returns.
-Step 3 – Nova decides the orchestration plan
+## Frontend contract
 
-For non-conversational requests:
+The frontend continues to consume the existing SSE event contract:
 
-Calls getNovaPlan(message, contextPrompt, routing).
-Computes a fallback plan from router if Nova fails:
-fallbackMode: 'single' when router chose one agent, 'sequential' when router chose multiple.
-fallbackAgents: routing.agentKeys (if any).
-Chooses:
-mode = novaPlan.mode || fallbackMode
-plannedAgentsRaw = novaPlan.agents || fallbackAgents
-Filters plannedAgentsRaw against known agent keys (getAgentKeys()), excluding nova itself, to get plannedAgents.
-If plannedAgents ends up empty (Nova + router both unusable), it falls back to a conversational stream and persists that, so you never get stuck.
+- `status`
+- `agent_selected`
+- `tool_use`
+- `tool_result`
+- `text`
+- `done`
+- `error`
 
-Sets primaryKey = plannedAgents[0] and calls rex.routerResolved(requestId, primaryKey, routerDuration, routing.routerUsage) so Rex metrics still show a primary agent.
+The internal native OpenAI transcript is not included in normal conversation
+responses. It is available only from the turn-audit endpoint when requested
+with `?transcript=1`.
 
-Step 4 – Execute Nova’s plan with SSE and context chaining
+## Hosted vLLM requirements
 
-Single-agent mode (mode === 'single' or only one plannedAgents entry):
-
-Gets that agent via getAgentInstance(primaryKey).
-Emits agent_selected + status SSE events.
-Calls agent.runWithEvents(message, { _rexRequestId, _conversationContext: contextPrompt }, sse), exactly as before.
-Tracks:
-allToolsUsed (aggregating toolsUsed),
-allToolResultPayloads (for context),
-agentRawTexts (the raw text from the agent).
-Runs updateContext(convId, primaryKey, toolsUsed, toolResultPayloads) so future turns know IDs / last agent.
-Sequential multi-agent mode (mode === 'sequential' and 2–3 plannedAgents):
-
-Iterates in order over plannedAgents:
-For each key:
-Looks up the agent; if missing, logs and skips.
-Emits agent_selected + status SSE for that agent.
-Builds a chained context string:
-Start with contextPrompt if present.
-If a previous agent ran, append:
-[Context from previousAgentName]: previousRawText
-Calls agent.runWithEvents(message, { _rexRequestId, _conversationContext: chainedContext, fromAgent: previousAgentName }, sse).
-Accumulates:
-allToolsUsed.push(...toolsUsed),
-allToolResultPayloads.push(...toolResultPayloads),
-agentRawTexts.push(rawText).
-Calls updateContext(convId, key, toolsUsed, toolResultPayloads) after each agent, so the global conversation context keeps all numeric IDs/search info.
-Updates previousRawText and previousAgentName for the next agent.
-At the end, it builds combinedRawText = agentRawTexts.join('\n\n').trim().
-
-Step 5 – Format output, then persist (same text as streamed)
-
-Emits status SSE with STATUS_LABEL_FORMATTING.
-Calls formatOutputStreaming(message, combinedRawText, res), which streams XML to the client and returns the full formatted string.
-
-Persists the whole turn for the given (company_id, user_id, conversation_id):
-
-Fetches existing doc from Conversation with those keys.
-Appends:
-{ role: 'user', content: message }
-{ role: 'assistant', content: formattedForUi } (the formatter output — not combinedRawText — so chat history matches what the user saw live).
-Upserts back with updated_at set to new Date().
-
-Emits a final done SSE event:
-agent: a comma-separated list of all agents Nova used.
-toolsUsed: merged list of tool calls (name, input, success) across all agents.
-Completes Rex metrics and ends the stream.
-Resulting behavior
-For a cross-domain request like your example (“customer from previous session… need estimate details”), the flow is now:
-Low-level router likely suggests ["customer", "estimate"].
-Nova receives that suggestion plus all agent descriptions and the user message.
-Nova can choose {"mode": "sequential", "agents": ["customer", "estimate"], ...}.
-Backend then:
-Runs the Customer agent first (to resolve the customer correctly).
-Feeds its output as context into the Estimate agent.
-Combines both agents’ raw text and formats into a single coherent answer for the user.
-All of this happens behind the same /api/agents/stream endpoint, so the frontend does not need to change.
+The model server must expose `/v1/chat/completions` and have automatic tool
+choice enabled with the parser appropriate for the deployed model. For the
+configured GPT-OSS model, use the OpenAI tool-call parser described in the
+README deployment example.

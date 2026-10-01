@@ -48,7 +48,7 @@ describe('coworker orchestrator mode', () => {
     const tools = await agent.getTools('estimate report for the last 2 weeks');
     assert.ok(tools.length > 0, 'orchestrator should have tools');
     assert.ok(tools.length <= 40, 'tool search should cap schemas per turn');
-    const names = tools.map((t) => t.name).filter(Boolean);
+    const names = tools.map((t) => t.function?.name).filter(Boolean);
     const serialized = JSON.stringify(tools);
     assert.ok(!serialized.includes('get_relevant_policies'));
     assert.ok(!serialized.includes('invoke_agent'));

@@ -33,28 +33,25 @@ describe('agent transcript (P1)', () => {
       { role: 'user', content: 'Session context…\nUser request: find Acme' },
       {
         role: 'assistant',
-        content: [{ type: 'tool_use', id: 't1', name: 'list_customers', input: { filter: { search: 'Acme' } } }],
+        content: null,
+        tool_calls: [{ id: 't1', type: 'function', function: { name: 'list_customers', arguments: '{"filter":{"search":"Acme"}}' } }],
       },
       {
-        role: 'user',
-        content: [{
-          type: 'tool_result',
-          tool_use_id: 't1',
-          content: JSON.stringify({ data: [{ id: 2001, customer_id: 3001, name: 'Acme' }] }),
-        }],
+        role: 'tool',
+        tool_call_id: 't1',
+        content: JSON.stringify({ data: [{ id: 2001, customer_id: 3001, name: 'Acme' }] }),
       },
       {
         role: 'assistant',
-        content: [{ type: 'text', text: 'Found Acme.' }],
+        content: 'Found Acme.',
       },
     ];
     const transcript = extractTurnAgentTranscript(live, history.length);
     assert.equal(transcript[0].role, 'assistant');
-    assert.equal(transcript[0].content[0].name, 'list_customers');
-    assert.equal(transcript[1].role, 'user');
-    assert.equal(transcript[1].content[0].type, 'tool_result');
-    assert.ok(transcript[1].content[0].content.includes('customer_id'));
-    assert.equal(transcript[2].content[0].text, 'Found Acme.');
+    assert.equal(transcript[0].tool_calls[0].function.name, 'list_customers');
+    assert.equal(transcript[1].role, 'tool');
+    assert.ok(transcript[1].content.includes('customer_id'));
+    assert.equal(transcript[2].content, 'Found Acme.');
   });
 
   it('expands stored agent_transcript so follow-ups see tool JSON', () => {
@@ -66,19 +63,17 @@ describe('agent transcript (P1)', () => {
         agent_transcript: [
           {
             role: 'assistant',
-            content: [{ type: 'tool_use', id: 't1', name: 'list_customers', input: {} }],
+            content: null,
+            tool_calls: [{ id: 't1', type: 'function', function: { name: 'list_customers', arguments: '{}' } }],
           },
           {
-            role: 'user',
-            content: [{
-              type: 'tool_result',
-              tool_use_id: 't1',
-              content: '{"data":[{"customer_id":30000000037,"name":"Acme"}]}',
-            }],
+            role: 'tool',
+            tool_call_id: 't1',
+            content: '{"data":[{"customer_id":30000000037,"name":"Acme"}]}',
           },
           {
             role: 'assistant',
-            content: [{ type: 'text', text: 'Found Acme (customer_id 30000000037).' }],
+            content: 'Found Acme (customer_id 30000000037).',
           },
         ],
       },
@@ -87,9 +82,9 @@ describe('agent transcript (P1)', () => {
     assert.equal(expanded[0].role, 'user');
     assert.equal(expanded[0].content, 'find Acme');
     assert.equal(expanded[1].role, 'assistant');
-    assert.equal(expanded[1].content[0].type, 'tool_use');
-    assert.equal(expanded[2].content[0].type, 'tool_result');
-    assert.ok(expanded[2].content[0].content.includes('30000000037'));
+    assert.equal(expanded[1].tool_calls[0].function.name, 'list_customers');
+    assert.equal(expanded[2].role, 'tool');
+    assert.ok(expanded[2].content.includes('30000000037'));
     // UI XML must not be the agent memory when transcript exists
     assert.ok(!JSON.stringify(expanded).includes('<table>'));
   });
@@ -115,7 +110,7 @@ describe('agent transcript (P1)', () => {
         role: 'assistant',
         content: 'UI',
         agent_transcript: [
-          { role: 'assistant', content: [{ type: 'text', text: 'Found Acme id=3001' }] },
+          { role: 'assistant', content: 'Found Acme id=3001' },
         ],
       },
     ];
@@ -129,7 +124,7 @@ describe('agent transcript (P1)', () => {
   });
 
   it('compactTranscriptMessage drops empty content', () => {
-    assert.equal(compactTranscriptMessage({ role: 'assistant', content: [] }), null);
+    assert.equal(compactTranscriptMessage({ role: 'assistant', content: null }), null);
     assert.ok(compactTranscriptMessage({ role: 'assistant', content: 'ok' }));
   });
 });

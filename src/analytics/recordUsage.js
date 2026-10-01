@@ -1,5 +1,5 @@
 /**
- * Persist Anthropic usage for billing analytics (fire-and-forget).
+ * Persist OpenAI-compatible usage for billing analytics (fire-and-forget).
  * One event per API call; daily rollups by company, user, agent, and model.
  */
 
@@ -31,7 +31,7 @@ export function resolveBillingAgentKey(meta = {}) {
 
 /**
  * @param {object} meta
- * @param {import('./usageNormalize.js').AnthropicUsage|null|undefined} usage
+ * @param {import('./usageNormalize.js').OpenAIUsage|null|undefined} usage
  * @param {string} [model]
  */
 export async function recordUsage(meta = {}, usage = null, model) {

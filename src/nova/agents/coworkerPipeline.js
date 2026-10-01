@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { config } from '../../config/index.js';
-import { createMessage, streamMessage } from '../../llm/client.js';
+import { createMessage, streamMessage, getResponseText } from '../../llm/client.js';
 import Conversation from '../models/Conversation.js';
 import {
   AGENT_DEFINITIONS,
@@ -221,10 +221,12 @@ async function selfCheckCompletion(userMessage, rawText, usageMeta = {}) {
   const response = await createMessage({
     model: config.llm.model,
     max_tokens: 192,
-    system: `You are a strict completion checker.\nReturn ONLY strict JSON: {"done": boolean, "next_instruction": string|null}.`,
-    messages: [{ role: 'user', content: `User request:\n${userMessage}\n\nAgent raw output:\n${String(rawText || '').slice(0, SELF_CHECK_MAX_CHARS)}` }],
+    messages: [
+      { role: 'system', content: `You are a strict completion checker.\nReturn ONLY strict JSON: {"done": boolean, "next_instruction": string|null}.` },
+      { role: 'user', content: `User request:\n${userMessage}\n\nAgent raw output:\n${String(rawText || '').slice(0, SELF_CHECK_MAX_CHARS)}` },
+    ],
   }, { ...usageMeta, phase: 'self_check', agentKey: 'self_check' });
-  const text = response.content?.find((b) => b.type === 'text')?.text?.trim() || '';
+  const text = getResponseText(response).trim();
   try {
     const parsed = JSON.parse(text);
     return {
@@ -276,11 +278,10 @@ export async function getNovaPlan(message, conversationContext, routing, priorMe
     const response = await createMessage({
       model: config.llm.model,
       max_tokens: config.llm.maxTokens?.nova ?? 256,
-      system: novaSystem,
-      messages: novaMessages,
+      messages: [{ role: 'system', content: novaSystem }, ...novaMessages],
     }, { ...usageMeta, phase: 'nova_plan', agentKey: 'nova_plan' });
 
-    const text = response.content[0]?.text?.trim() || '';
+    const text = getResponseText(response).trim();
     const plan = JSON.parse(stripJsonCodeFence(text));
     if (!plan?.agents || !plan.mode) return null;
     const mode = plan.mode === 'sequential' ? 'sequential' : plan.mode === 'parallel' ? 'parallel' : 'single';
@@ -315,8 +316,7 @@ async function runGeneralChat({
       {
         model: config.llm.model,
         max_tokens: config.llm.maxTokens?.conversation ?? 8192,
-        system: GENERAL_CHAT_SYSTEM,
-        messages: generalMessages,
+        messages: [{ role: 'system', content: GENERAL_CHAT_SYSTEM }, ...generalMessages],
       },
       { ...usageMeta, phase: 'general_chat', agentKey: 'general_chat' },
       (delta) => deltaBuf.push(delta),
@@ -328,10 +328,9 @@ async function runGeneralChat({
   const response = await createMessage({
     model: config.llm.model,
     max_tokens: config.llm.maxTokens?.conversation ?? 4096,
-    system: GENERAL_CHAT_SYSTEM,
-    messages: generalMessages,
+    messages: [{ role: 'system', content: GENERAL_CHAT_SYSTEM }, ...generalMessages],
   }, { ...usageMeta, phase: 'general_chat', agentKey: 'general_chat' });
-  return response.content[0]?.text || '';
+  return getResponseText(response);
 }
 
 /**
@@ -1010,8 +1009,10 @@ export async function runCoworkerTurn({
           {
             model: config.llm.model,
             max_tokens: config.llm.maxTokens?.agent ?? 4096,
-            system: presentSystem,
-            messages: [{ role: 'user', content: presentUser }],
+            messages: [
+              { role: 'system', content: presentSystem },
+              { role: 'user', content: presentUser },
+            ],
           },
           { ...usageMeta, phase: 'nova_present', agentKey: 'nova' },
           (delta) => deltaBuf.push(delta),
@@ -1022,10 +1023,12 @@ export async function runCoworkerTurn({
         const response = await createMessage({
           model: config.llm.model,
           max_tokens: config.llm.maxTokens?.agent ?? 4096,
-          system: presentSystem,
-          messages: [{ role: 'user', content: presentUser }],
+          messages: [
+            { role: 'system', content: presentSystem },
+            { role: 'user', content: presentUser },
+          ],
         }, { ...usageMeta, phase: 'nova_present', agentKey: 'nova' });
-        const text = response.content?.find((b) => b.type === 'text')?.text || response.content?.[0]?.text || '';
+        const text = getResponseText(response);
         if (text?.trim()) formattedForUi = text;
       }
     } catch (err) {

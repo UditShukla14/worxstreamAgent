@@ -30,7 +30,12 @@ export function isWriteTool(toolName) {
   const caps = inferCapabilitiesFromToolName(toolName);
   if (caps.safety === 'write') return true;
   const n = String(toolName || '').toLowerCase();
-  if (n.startsWith('create_') || n.startsWith('update_') || n.startsWith('delete_')) return true;
+  if (
+    n.startsWith('create_')
+    || n.startsWith('update_')
+    || n.startsWith('delete_')
+    || n.startsWith('send_')
+  ) return true;
   // Outbound email still uses the env write gate when COWORKER_CONFIRM_WRITES=true
   if (n === 'send_object_email') return true;
   return false;
