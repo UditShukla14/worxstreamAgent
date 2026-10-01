@@ -63,18 +63,18 @@ describe('coworker orchestrator mode', () => {
     );
   });
 
-  it('pipeline default path is single Nova with UI formatter on by default', () => {
+  it('pipeline default path is single Nova with primary LLM streaming (no OutputFormatter)', () => {
     const src = readFileSync(pipelinePath, 'utf8');
     assert.ok(src.includes("type: 'orchestrator'"));
-    assert.ok(src.includes("options.formatOutput !== false"));
     assert.ok(src.includes("getAgentInstance('nova')"));
-    assert.ok(src.includes('formatOutputStreaming'));
+    assert.ok(src.includes('_streamAssistantText'));
+    assert.ok(!src.includes('formatOutputStreaming'));
     assert.ok(src.includes('getExecutionPlan'));
   });
 
   it('shared rules are conversation-native with page-wise safety only', () => {
-    assert.ok(COWORKER_SHARED_RULES.includes('Answer naturally from conversation'));
+    assert.ok(COWORKER_SHARED_RULES.includes('professional coworker') || COWORKER_SHARED_RULES.includes('ChatGPT/Claude'));
     assert.ok(!COWORKER_SHARED_RULES.includes('ANSWER PROPORTIONALITY'));
-    assert.ok(COWORKER_SHARED_RULES.includes('ONE page'));
+    assert.ok(COWORKER_SHARED_RULES.includes('limit=25') || COWORKER_SHARED_RULES.includes('ONE page'));
   });
 });

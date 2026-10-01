@@ -14,8 +14,8 @@ const pipelinePath = join(__dirname, '../../src/nova/agents/coworkerPipeline.js'
 describe('llm-native answer contracts (no shape taxonomy)', () => {
   it('coworkerRules has no ANSWER PROPORTIONALITY taxonomy', () => {
     assert.ok(!COWORKER_SHARED_RULES.includes('ANSWER PROPORTIONALITY'));
-    assert.ok(COWORKER_SHARED_RULES.includes('Answer naturally from conversation'));
-    assert.ok(COWORKER_SHARED_RULES.includes('ONE page'));
+    assert.ok(COWORKER_SHARED_RULES.includes('professional coworker') || COWORKER_SHARED_RULES.includes('ChatGPT/Claude'));
+    assert.ok(COWORKER_SHARED_RULES.includes('ONE page') || COWORKER_SHARED_RULES.includes('limit=25'));
   });
 
   it('primary LLM owns presentation — no OutputFormatter pass', () => {
@@ -37,8 +37,9 @@ describe('llm-native answer contracts (no shape taxonomy)', () => {
 
   it('SOUL does not hardcode answer-shape taxonomy', () => {
     const soul = readFileSync(soulPath, 'utf8');
-    assert.ok(soul.includes('hardcoded answer-shape taxonomy') || soul.includes('Respond naturally'));
+    assert.ok(soul.includes('professional') || soul.includes('ChatGPT/Claude'));
     assert.ok(!soul.includes('Answer proportionality'));
+    assert.ok(soul.includes('every returned row') || soul.includes('EVERY returned row') || soul.includes('25 rows'));
   });
 
   it('list policies keep page-wise safety', () => {
