@@ -989,7 +989,10 @@ export async function runCoworkerTurn({
     const presentSystem = [
       AGENT_DEFINITIONS.nova.systemPrompt,
       '',
-      'PRESENTATION ONLY: Do not call tools. Turn the specialist results into the user-facing answer.',
+      'PRESENTATION ONLY: Do not call tools.',
+      'Turn specialist results into a professional org-coworker answer: titled line when useful, then <stats>/<table>/<chart> as appropriate.',
+      'Lists/recent → titled <table> with <th>/<td> for EVERY returned row. Reports → title + <stats> + <table> (+ <chart> if breakdown helps).',
+      'Never markdown pipe tables or raw JSON.',
     ].join('\n');
     const presentUser = [
       contextPrompt ? `Session context:\n${contextPrompt}` : '',

@@ -42,15 +42,21 @@ const CONTINUE_USER_NOTE =
 const TRUNCATED_CONTINUE_NOTE =
   '[Continue] Your previous response was truncated (max_tokens). Continue exactly from where you left off.';
 
-/** Tag reference for orchestrator — shape is the model's judgment. */
+/** Professional UI tags — lists/reports should render as coworker-grade structure. */
 const TABLE_UI_SCHEMA = `
-UI TAGS (use only when they help; you choose mix of prose / stats / table / chart / details / alert):
-<table title="…"><headers><th>…</th></headers><row><td>…</td></row></table>
+PROFESSIONAL UI (org coworker — prefer structured tags so the product renders cards/tables/charts):
+- List / recent → titled <table> with <headers><th>…</th></headers> and one <row><td>…</td></row> per returned item (markdown pipes do NOT render).
+- Totals / report / overview → short title + <stats> + <table>; add <chart type="pie|bar|line"> when a breakdown helps.
+- One record → <details> or tight prose. Clarifying questions → plain text.
+Example table:
+<table title="Recent invoices (Aug 24 – Sep 23, 2026)">
+<headers><th>Invoice</th><th>Customer</th><th>Amount</th><th>Status</th><th>Created</th></headers>
+<row><td>26-4884</td><td>Acme</td><td>$1,860.00</td><td status="warning">Open</td><td>Sep 23, 2026</td></row>
+</table>
 <stats><stat label="…" value="…" icon="dollar|chart" color="blue|green"/></stats>
-<chart type="pie|bar|line" title="…"><chart-data label="…">…</chart-data></chart>
 <details title="…"><item label="…">value</item></details>
 <alert type="success|error|warning|info">…</alert>
-Tables require <th>/<td> (markdown pipes do not render). If you show a fetched page as a table, include every returned row.
+If you show a fetched page as a table, include every returned row. Prefer human labels and $ amounts.
 `.trim();
 
 /** User turn that means "send the SMS draft I already saw". */
