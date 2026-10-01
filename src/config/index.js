@@ -201,10 +201,13 @@ export const config = {
     specialistMessagesActive: parseInt(process.env.SPECIALIST_CONTEXT_MESSAGES_ACTIVE || '12', 10),
     pendingConfirmTtlSeconds: parseInt(process.env.COWORKER_PENDING_CONFIRM_TTL || '300', 10),
     /**
-     * Chat is always Nova coworker (one agent + MCP tools for the authenticated
-     * company). Legacy COWORKER_MODE=specialists is ignored.
+     * Chat turn mode:
+     * - orchestrator (default): Nova plans → specialists run tools → Nova presents to UI
+     * - direct: single Nova with MCP tools (no specialist fan-out)
      */
-    mode: 'coworker',
+    mode: (process.env.COWORKER_MODE || 'orchestrator').toLowerCase() === 'direct'
+      ? 'direct'
+      : 'orchestrator',
     /**
      * LLM execution plan before the tool loop (default on).
      * Set COWORKER_EXECUTION_PLAN=false to skip the planner call.

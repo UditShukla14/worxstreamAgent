@@ -41,7 +41,7 @@ export function registerReportTools() {
       inputSchema: {
         from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('Start date in YYYY-MM-DD format'),
         to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('End date in YYYY-MM-DD format'),
-        line_items: z.boolean().optional().describe('Include line items (default false for summary reports; set true for breakdown)'),
+        line_items: z.boolean().optional().describe('Include line items (default true; match Reports UI). Prefer true — compaction strips heavy line detail for the model.'),
         page: z.number().optional().describe('Page number for pagination (default: 1)'),
         per_page: z.number().optional().describe('Items per page (default: 50)'),
         assign_employee: z.number().optional().describe('Filter by assigned employee ID'),
@@ -60,11 +60,11 @@ export function registerReportTools() {
     async (params) => {
       const { companyId, userId } = getWorxstreamContext();
       
-      // Ensure proper data types and correct field names for estimate API
+      // Match apps/web reportService: snake_case `line_items` (not camelCase lineItems).
       const processedParams = {
         from_date: params.from_date,
         to_date: params.to_date,
-        lineItems: params.line_items === true,
+        line_items: params.line_items !== false,
         page: params.page ? Number(params.page) : 1,
         per_page: params.per_page ? Number(params.per_page) : 50,
         assign_employee: params.assign_employee ? Number(params.assign_employee) : undefined,
@@ -128,11 +128,11 @@ export function registerReportTools() {
     async (params) => {
       const { companyId, userId } = getWorxstreamContext();
       
-      // Ensure proper data types and correct field names for invoice API
+      // Ensure proper data types — match apps/web: snake_case `line_items`
       const processedParams = {
         from_date: params.from_date,
         to_date: params.to_date,
-        lineItems: params.line_items !== undefined ? Boolean(params.line_items) : true,
+        line_items: params.line_items !== false,
         page: params.page ? Number(params.page) : 1,
         per_page: params.per_page ? Number(params.per_page) : 50,
         assign_employee: params.assign_employee ? Number(params.assign_employee) : undefined,

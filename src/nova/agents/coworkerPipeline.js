@@ -1,11 +1,11 @@
-/**
- * Unified coworker turn pipeline — stream and JSON entry points share this spine.
- */
-
 import { randomUUID } from 'crypto';
 import { config } from '../../config/index.js';
+import { createMessage, streamMessage } from '../../llm/client.js';
 import Conversation from '../models/Conversation.js';
 import {
+  AGENT_DEFINITIONS,
+  getAgentKeys,
+  getStatusLabelForAgent,
   STATUS_LABEL_PLANNING,
 } from './agentDefinitions.js';
 import { startActivityKeywordRotation } from './activityKeywords.js';
@@ -14,7 +14,8 @@ import {
   getExecutionPlan,
   planToTaskState,
 } from './executionPlan.js';
-import { getAgentInstance } from './router.js';
+import { resolveAgentKeys, getAgentInstance } from './router.js';
+import { createDeltaCoalesceBuffer } from './streamSectionBuffer.js';
 import { rex } from './AgentTracker.js';
 import {
   buildContextPrompt,
@@ -25,10 +26,11 @@ import {
   saveContext,
 } from './ConversationContext.js';
 import { mergeWorkingSet } from './workingMemory.js';
-import { clearPlanState } from './PlanState.js';
+import { clearPlanState, getPlanState, setPlanState } from './PlanState.js';
 import { getCurrentDateTimeContext } from '../../utils/dateContext.js';
 import {
   buildOrchestratorMessages,
+  buildSpecialistHistory,
   logContextUsage,
   messageContentToString,
 } from '../../utils/conversationHistory.js';
@@ -46,6 +48,8 @@ import {
   listConversationTurns,
   turnsToPriorMessages,
 } from './conversationTurns.js';
+
+const GENERAL_CHAT_SYSTEM = 'You are a helpful assistant for Worxstream, a business management platform. Be concise and helpful.';
 
 /** User asks to resume a mid-task agent run. */
 function isContinueMessage(message) {
@@ -210,6 +214,126 @@ async function persistConversation({
   return { summary, throughTurn };
 }
 
+/** Cap raw output sent to the self-check — checking completeness doesn't need full payloads. */
+const SELF_CHECK_MAX_CHARS = 4000;
+
+async function selfCheckCompletion(userMessage, rawText, usageMeta = {}) {
+  const response = await createMessage({
+    model: config.llm.model,
+    max_tokens: 192,
+    system: `You are a strict completion checker.\nReturn ONLY strict JSON: {"done": boolean, "next_instruction": string|null}.`,
+    messages: [{ role: 'user', content: `User request:\n${userMessage}\n\nAgent raw output:\n${String(rawText || '').slice(0, SELF_CHECK_MAX_CHARS)}` }],
+  }, { ...usageMeta, phase: 'self_check', agentKey: 'self_check' });
+  const text = response.content?.find((b) => b.type === 'text')?.text?.trim() || '';
+  try {
+    const parsed = JSON.parse(text);
+    return {
+      done: Boolean(parsed?.done),
+      next_instruction: parsed?.next_instruction == null ? null : String(parsed.next_instruction),
+    };
+  } catch {
+    return { done: true, next_instruction: null };
+  }
+}
+
+export async function getNovaPlan(message, conversationContext, routing, priorMessages = [], usageMeta = {}) {
+  try {
+    const suggestedKeys = routing.agentKeys || [];
+    const lines = [];
+    for (const [key, def] of Object.entries(AGENT_DEFINITIONS)) {
+      if (key === 'nova') continue;
+      lines.push(`- ${key}: ${def.description}`);
+    }
+    const userPromptParts = [];
+    if (conversationContext) userPromptParts.push(`Conversation context:\n${conversationContext}`);
+    userPromptParts.push(
+      `User message:\n${message}`,
+      '',
+      `Router-suggested agents: [${suggestedKeys.length ? suggestedKeys.join(', ') : 'none'}]`,
+      '',
+      'Available agents:',
+      lines.join('\n'),
+      '',
+      'Return ONLY JSON: { mode, agents, reason }.',
+    );
+
+    const novaSystem = [
+      'You are Nova, the Worxstream coworker orchestrator.',
+      'Given the user message and available specialist agents, return ONLY JSON:',
+      '{ "mode": "single"|"sequential"|"parallel", "agents": ["agent_key", ...], "reason": "..." }',
+      'Pick the fewest specialists needed. Prefer "reports" for report/analytics/overview asks.',
+      'Prefer "estimate" for estimate CRUD/list; "invoice" for invoices; etc.',
+      'Never invent agent keys that are not in the catalog.',
+    ].join(' ');
+    // Planning is a control call: recent turns suffice, full history only adds latency.
+    const novaMessages = buildOrchestratorMessages({
+      priorMessages: priorMessages.slice(-6),
+      currentUserContent: userPromptParts.join('\n'),
+      systemPrompt: novaSystem,
+    });
+    logContextUsage('Nova context', novaMessages, novaSystem);
+
+    const response = await createMessage({
+      model: config.llm.model,
+      max_tokens: config.llm.maxTokens?.nova ?? 256,
+      system: novaSystem,
+      messages: novaMessages,
+    }, { ...usageMeta, phase: 'nova_plan', agentKey: 'nova_plan' });
+
+    const text = response.content[0]?.text?.trim() || '';
+    const plan = JSON.parse(stripJsonCodeFence(text));
+    if (!plan?.agents || !plan.mode) return null;
+    const mode = plan.mode === 'sequential' ? 'sequential' : plan.mode === 'parallel' ? 'parallel' : 'single';
+    return { mode, agents: plan.agents.map(String), reason: plan.reason || '' };
+  } catch (error) {
+    console.error('❌ Nova plan error:', error);
+    return null;
+  }
+}
+
+async function runGeneralChat({
+  message,
+  contextPrompt,
+  priorMessages,
+  sse,
+  stream,
+  usageMeta = {},
+}) {
+  const generalPrompt = contextPrompt ? `${contextPrompt}\n\nUser message: ${message}` : message;
+  const generalMessages = buildOrchestratorMessages({
+    priorMessages,
+    currentUserContent: generalPrompt,
+    systemPrompt: GENERAL_CHAT_SYSTEM,
+  });
+  logContextUsage('General chat context', generalMessages, GENERAL_CHAT_SYSTEM);
+
+  if (stream) {
+    const deltaBuf = createDeltaCoalesceBuffer((chunk) => {
+      if (chunk) sse({ type: 'text', content: chunk });
+    }, { maxDelayMs: 40, maxChars: 96 });
+    const { text } = await streamMessage(
+      {
+        model: config.llm.model,
+        max_tokens: config.llm.maxTokens?.conversation ?? 8192,
+        system: GENERAL_CHAT_SYSTEM,
+        messages: generalMessages,
+      },
+      { ...usageMeta, phase: 'general_chat', agentKey: 'general_chat' },
+      (delta) => deltaBuf.push(delta),
+    );
+    deltaBuf.flush();
+    return text;
+  }
+
+  const response = await createMessage({
+    model: config.llm.model,
+    max_tokens: config.llm.maxTokens?.conversation ?? 4096,
+    system: GENERAL_CHAT_SYSTEM,
+    messages: generalMessages,
+  }, { ...usageMeta, phase: 'general_chat', agentKey: 'general_chat' });
+  return response.content[0]?.text || '';
+}
+
 /**
  * @param {object} params
  * @param {string} params.message
@@ -306,172 +430,291 @@ export async function runCoworkerTurn({
     };
   }
 
-  if (options.agentKeys?.length || options.mode === 'specialists') {
-    console.warn(
-      '⚠️ Chat is Nova coworker-only; ignoring specialist agentKeys/mode and running Nova with full company tools.',
-    );
-  }
+  const useDirectNova = config.coworker?.mode === 'direct'
+    || options.mode === 'direct';
 
-  // ── Nova coworker: one LLM + MCP tools for the authenticated company ──
-  const nova = getAgentInstance('nova');
-  if (!nova) throw new Error('Nova coworker is not initialized');
-
-  const openTask = redisCtx.workingSet?.taskState;
-  const resumingContinue = isContinueMessage(message)
-    && openTask
-    && ['in_progress', 'waiting_continue'].includes(String(openTask.status || ''));
-
-  let planBlock = '';
-  let continueBlock = '';
-  let executionPlan = null;
-  const wantPlan =
-    config.coworker?.executionPlan !== false
-    && options.skipExecutionPlan !== true
-    && !resumingContinue;
-
-  if (resumingContinue) {
-    continueBlock = [
-      '[Resume task]',
-      `Goal: ${openTask.goal || 'open task'}`,
-      `Status: ${openTask.status}`,
-      Array.isArray(openTask.next) && openTask.next.length
-        ? `Next: ${openTask.next.slice(0, 5).join('; ')}`
-        : '',
-      'Continue without re-planning. Use prior tool results in conversation history. Ask only if truly ambiguous.',
-    ].filter(Boolean).join('\n');
-    setStatus('Continuing your request…');
-    sse({
-      type: 'task_progress',
-      status: 'resuming',
-      goal: openTask.goal || null,
-    });
-    await saveContext(ctxRef, {
-      ...redisCtx,
-      workingSet: mergeWorkingSet(redisCtx.workingSet, {
-        taskState: { ...openTask, status: 'in_progress', updatedAt: Date.now() },
-      }),
-    });
-  }
-
-  if (wantPlan) {
-    setStatus(STATUS_LABEL_PLANNING);
-    try {
-      executionPlan = await getExecutionPlan({
-        message,
-        conversationContext: contextPrompt,
-        priorMessages,
-        usageMeta,
-      });
-    } catch (err) {
-      console.warn('⚠️ Execution plan failed; continuing without plan:', err?.message || err);
-      executionPlan = null;
+  if (useDirectNova) {
+    if (options.agentKeys?.length || options.mode === 'specialists') {
+      console.warn(
+        '⚠️ Chat is Nova coworker-only; ignoring specialist agentKeys/mode and running Nova with full company tools.',
+      );
     }
 
-    if (executionPlan?.mode === 'clarify' && executionPlan.ask) {
-      const askText = executionPlan.ask;
+    // ── Nova coworker: one LLM + MCP tools for the authenticated company ──
+    const nova = getAgentInstance('nova');
+    if (!nova) throw new Error('Nova coworker is not initialized');
+
+    const openTask = redisCtx.workingSet?.taskState;
+    const resumingContinue = isContinueMessage(message)
+      && openTask
+      && ['in_progress', 'waiting_continue'].includes(String(openTask.status || ''));
+
+    let planBlock = '';
+    let continueBlock = '';
+    let executionPlan = null;
+    const wantPlan =
+      config.coworker?.executionPlan !== false
+      && options.skipExecutionPlan !== true
+      && !resumingContinue;
+
+    if (resumingContinue) {
+      continueBlock = [
+        '[Resume task]',
+        `Goal: ${openTask.goal || 'open task'}`,
+        `Status: ${openTask.status}`,
+        Array.isArray(openTask.next) && openTask.next.length
+          ? `Next: ${openTask.next.slice(0, 5).join('; ')}`
+          : '',
+        'Continue without re-planning. Use prior tool results in conversation history. Ask only if truly ambiguous.',
+      ].filter(Boolean).join('\n');
+      setStatus('Continuing your request…');
+      sse({
+        type: 'task_progress',
+        status: 'resuming',
+        goal: openTask.goal || null,
+      });
+      await saveContext(ctxRef, {
+        ...redisCtx,
+        workingSet: mergeWorkingSet(redisCtx.workingSet, {
+          taskState: { ...openTask, status: 'in_progress', updatedAt: Date.now() },
+        }),
+      });
+    }
+
+    if (wantPlan) {
+      setStatus(STATUS_LABEL_PLANNING);
+      try {
+        executionPlan = await getExecutionPlan({
+          message,
+          conversationContext: contextPrompt,
+          priorMessages,
+          usageMeta,
+        });
+      } catch (err) {
+        console.warn('⚠️ Execution plan failed; continuing without plan:', err?.message || err);
+        executionPlan = null;
+      }
+
+      if (executionPlan?.mode === 'clarify' && executionPlan.ask) {
+        const askText = executionPlan.ask;
+        if (stopActivityKeywords) {
+          stopActivityKeywords();
+          stopActivityKeywords = null;
+        }
+        sse({ type: 'plan', plan: executionPlan });
+        sse({ type: 'agent_selected', agent: 'nova' });
+        if (options.streamFormatter) {
+          sse({ type: 'text', content: askText });
+        }
+        await persistConversation({
+          company_id,
+          user_id,
+          conversation_id: convId,
+          priorMessages,
+          message,
+          assistantContent: askText,
+          toolsUsed: [],
+          conversation_summary: convState.conversation_summary,
+          summary_through_turn: convState.summary_through_turn,
+          requestId,
+          plan: executionPlan,
+          agentKey: 'nova',
+          agents: ['nova'],
+          status: 'plan_clarify',
+          mode: 'coworker',
+        });
+        await saveContext(ctxRef, {
+          ...redisCtx,
+          workingSet: mergeWorkingSet(redisCtx.workingSet, {
+            executionPlan,
+            sessionGoal: executionPlan.goal || redisCtx.workingSet?.sessionGoal,
+          }),
+        });
+        sse({ type: 'done', agent: 'nova', toolsUsed: [], plan_clarify: true });
+        return {
+          conversation_id: convId,
+          type: 'plan_clarify',
+          response: askText,
+          formattedText: askText,
+          plan: executionPlan,
+          toolsUsed: [],
+        };
+      }
+
+      if (executionPlan?.mode === 'execute') {
+        planBlock = formatExecutionPlanForPrompt(executionPlan);
+        sse({ type: 'plan', plan: executionPlan });
+        const taskState = planToTaskState(executionPlan);
+        await saveContext(ctxRef, {
+          ...redisCtx,
+          workingSet: mergeWorkingSet(redisCtx.workingSet, {
+            executionPlan,
+            taskState,
+            sessionGoal: executionPlan.goal || message.slice(0, 200),
+          }),
+        });
+      }
+    }
+
+    // Managed conversation window (same pattern as ChatGPT/Claude tool chat).
+    const orchestratorHistory = buildOrchestratorMessages({
+      priorMessages,
+      currentUserContent: '',
+      systemPrompt: nova.systemPrompt || '',
+    });
+    if (priorMessages.length > 0) {
+      logContextUsage('Coworker context', orchestratorHistory, nova.systemPrompt);
+    }
+
+    const orchContextPrompt = [contextPrompt, planBlock, continueBlock].filter(Boolean).join('\n\n');
+
+    const orchRunContext = {
+      _conversationHistory: orchestratorHistory,
+      _planRef: planRef,
+      _approvedConfirmations: options.approvedConfirmations || [],
+      _skipWriteConfirm: options.skipWriteConfirm,
+      ...tenantRunFields,
+    };
+
+    sse({ type: 'agent_selected', agent: 'nova' });
+    // Stop turn-level keywords; BaseAgent rotates during each createMessage wait.
+    if (stopActivityKeywords) {
+      stopActivityKeywords();
+      stopActivityKeywords = null;
+    }
+
+    const allToolsUsed = [];
+    let workflowTree = null;
+    const agentStart = Date.now();
+    const result = await nova.runWithEvents(
+      message,
+      {
+        _rexRequestId: requestId,
+        _conversationContext: orchContextPrompt,
+        _streamAssistantText: Boolean(options.streamAssistantText ?? options.streamFormatter),
+        _executionPlanText: planBlock || '',
+        ...orchRunContext,
+      },
+      sse,
+    );
+    if (requestId) rex.agentFinished(requestId, nova.name, Date.now() - agentStart, result.usage ?? null);
+
+    if (result.needsConfirmation) {
       if (stopActivityKeywords) {
         stopActivityKeywords();
         stopActivityKeywords = null;
       }
-      sse({ type: 'plan', plan: executionPlan });
-      sse({ type: 'agent_selected', agent: 'nova' });
-      if (options.streamFormatter) {
-        sse({ type: 'text', content: askText });
-      }
-      await persistConversation({
-        company_id,
-        user_id,
-        conversation_id: convId,
-        priorMessages,
-        message,
-        assistantContent: askText,
+      sse({
+        type: 'done',
+        agent: 'nova',
         toolsUsed: [],
-        conversation_summary: convState.conversation_summary,
-        summary_through_turn: convState.summary_through_turn,
-        requestId,
-        plan: executionPlan,
-        agentKey: 'nova',
-        agents: ['nova'],
-        status: 'plan_clarify',
-        mode: 'coworker',
+        pending_confirmation: true,
+        confirmationId: result.confirmationId,
       });
-      await saveContext(ctxRef, {
-        ...redisCtx,
-        workingSet: mergeWorkingSet(redisCtx.workingSet, {
-          executionPlan,
-          sessionGoal: executionPlan.goal || redisCtx.workingSet?.sessionGoal,
-        }),
-      });
-      sse({ type: 'done', agent: 'nova', toolsUsed: [], plan_clarify: true });
       return {
         conversation_id: convId,
-        type: 'plan_clarify',
-        response: askText,
-        formattedText: askText,
-        plan: executionPlan,
+        type: 'pending_confirmation',
+        confirmationId: result.confirmationId,
         toolsUsed: [],
       };
     }
 
-    if (executionPlan?.mode === 'execute') {
-      planBlock = formatExecutionPlanForPrompt(executionPlan);
-      sse({ type: 'plan', plan: executionPlan });
-      const taskState = planToTaskState(executionPlan);
+    allToolsUsed.push(...(result.toolsUsed || []));
+    (result.toolsUsed || []).forEach((t, i) => {
+      if (t.name === 'get_workflow_object_tree' && t.success !== false) {
+        const payload = result.toolResultPayloads?.[i];
+        const tree = payload?.data?.data ?? payload?.data ?? null;
+        if (tree && (Array.isArray(tree) ? tree.length > 0 : typeof tree === 'object')) {
+          workflowTree = tree;
+        }
+      }
+    });
+
+    await updateContext(ctxRef, 'nova', result.toolsUsed, result.toolResultPayloads, {
+      message,
+      assistantSummary: result.rawText?.slice(0, 300),
+    });
+
+    // Primary LLM owns presentation. Text already streamed when _streamAssistantText was set.
+    let formattedForUi = result.rawText || '';
+    const alreadyStreamed = Boolean(options.streamAssistantText ?? options.streamFormatter);
+    if (!alreadyStreamed && options.streamFormatter && formattedForUi) {
+      sse({ type: 'text', content: formattedForUi });
+    }
+
+    if (workflowTree && !/<workflow[\s>]/i.test(formattedForUi || '')) {
+      const treeJson = JSON.stringify(workflowTree);
+      if (treeJson.length <= 60000) {
+        const workflowXml = `\n\n<workflow>${treeJson}</workflow>`;
+        formattedForUi = `${formattedForUi || ''}${workflowXml}`;
+        if (options.streamFormatter) {
+          sse({ type: 'text', content: workflowXml });
+        }
+      }
+    }
+
+    await persistConversation({
+      company_id,
+      user_id,
+      conversation_id: convId,
+      priorMessages,
+      message,
+      assistantContent: formattedForUi,
+      toolsUsed: allToolsUsed,
+      conversation_summary: convState.conversation_summary,
+      summary_through_turn: convState.summary_through_turn,
+      requestId,
+      agentTranscript: result.agentTranscript,
+      plan: executionPlan,
+      usage: result.usage || null,
+      agentKey: 'nova',
+      agents: ['nova'],
+      status: result.needsContinue ? 'waiting_continue' : 'completed',
+      mode: 'coworker',
+    });
+
+    await updateContext(ctxRef, 'nova', allToolsUsed, [], {
+      message,
+      assistantSummary: (formattedForUi || '').slice(0, 500),
+    });
+
+    if (result.needsContinue) {
+      const latest = await getContext(ctxRef);
+      const prevTask = latest.workingSet?.taskState || planToTaskState(executionPlan) || {
+        goal: message.slice(0, 200),
+        next: [],
+        completed: [],
+      };
       await saveContext(ctxRef, {
-        ...redisCtx,
-        workingSet: mergeWorkingSet(redisCtx.workingSet, {
-          executionPlan,
-          taskState,
-          sessionGoal: executionPlan.goal || message.slice(0, 200),
+        ...latest,
+        workingSet: mergeWorkingSet(latest.workingSet, {
+          taskState: {
+            ...prevTask,
+            status: 'waiting_continue',
+            updatedAt: Date.now(),
+          },
+        }),
+      });
+      sse({
+        type: 'task_progress',
+        status: 'waiting_continue',
+        goal: prevTask.goal || null,
+      });
+    } else if (executionPlan?.mode === 'execute' || resumingContinue) {
+      const latest = await getContext(ctxRef);
+      await saveContext(ctxRef, {
+        ...latest,
+        workingSet: mergeWorkingSet(latest.workingSet, {
+          taskState: {
+            ...(latest.workingSet?.taskState || planToTaskState(executionPlan) || {}),
+            status: 'done',
+            next: [],
+            updatedAt: Date.now(),
+          },
         }),
       });
     }
-  }
 
-  // Managed conversation window (same pattern as ChatGPT/Claude tool chat).
-  const orchestratorHistory = buildOrchestratorMessages({
-    priorMessages,
-    currentUserContent: '',
-    systemPrompt: nova.systemPrompt || '',
-  });
-  if (priorMessages.length > 0) {
-    logContextUsage('Coworker context', orchestratorHistory, nova.systemPrompt);
-  }
-
-  const orchContextPrompt = [contextPrompt, planBlock, continueBlock].filter(Boolean).join('\n\n');
-
-  const orchRunContext = {
-    _conversationHistory: orchestratorHistory,
-    _planRef: planRef,
-    _approvedConfirmations: options.approvedConfirmations || [],
-    _skipWriteConfirm: options.skipWriteConfirm,
-    ...tenantRunFields,
-  };
-
-  sse({ type: 'agent_selected', agent: 'nova' });
-  // Stop turn-level keywords; BaseAgent rotates during each createMessage wait.
-  if (stopActivityKeywords) {
-    stopActivityKeywords();
-    stopActivityKeywords = null;
-  }
-
-  const allToolsUsed = [];
-  let workflowTree = null;
-  const agentStart = Date.now();
-  const result = await nova.runWithEvents(
-    message,
-    {
-      _rexRequestId: requestId,
-      _conversationContext: orchContextPrompt,
-      _streamAssistantText: Boolean(options.streamAssistantText ?? options.streamFormatter),
-      _executionPlanText: planBlock || '',
-      ...orchRunContext,
-    },
-    sse,
-  );
-  if (requestId) rex.agentFinished(requestId, nova.name, Date.now() - agentStart, result.usage ?? null);
-
-  if (result.needsConfirmation) {
     if (stopActivityKeywords) {
       stopActivityKeywords();
       stopActivityKeywords = null;
@@ -479,54 +722,335 @@ export async function runCoworkerTurn({
     sse({
       type: 'done',
       agent: 'nova',
-      toolsUsed: [],
-      pending_confirmation: true,
-      confirmationId: result.confirmationId,
+      toolsUsed: allToolsUsed.map((t) => t.name),
+      ...(executionPlan ? { plan: executionPlan } : {}),
+      ...(result.needsContinue ? { waiting_continue: true } : {}),
     });
+
     return {
       conversation_id: convId,
-      type: 'pending_confirmation',
-      confirmationId: result.confirmationId,
+      type: 'coworker',
+      response: formattedForUi,
+      formattedText: formattedForUi,
+      plan: executionPlan || undefined,
+      toolsUsed: allToolsUsed,
+      agents: ['nova'],
+      ...(result.needsContinue ? { waiting_continue: true } : {}),
+    };
+  }
+
+  // ── Nova orchestrator → specialists → Nova presents ──
+  const specialistHistory = buildSpecialistHistory(priorMessages, {
+    workingSet: redisCtx.workingSet,
+  });
+  if (priorMessages.length > 0) {
+    logContextUsage('Specialist context', specialistHistory);
+  }
+
+  const specialistRunContext = {
+    _conversationHistory: specialistHistory,
+    _planRef: planRef,
+    _approvedConfirmations: options.approvedConfirmations || [],
+    _skipWriteConfirm: options.skipWriteConfirm,
+    ...tenantRunFields,
+  };
+
+  let routing;
+  if (options.agentKeys?.length) {
+    routing = {
+      type: options.agentKeys.length === 1 ? 'single' : 'multi',
+      agentKeys: options.agentKeys,
+      routerUsage: null,
+    };
+  } else {
+    const routerStart = Date.now();
+    routing = await resolveAgentKeys(message, contextPrompt, priorMessages, usageMeta);
+    if (requestId) rex.routerResolved?.(requestId, routing.agentKeys?.[0] || 'general', Date.now() - routerStart, routing.routerUsage);
+  }
+
+  if (routing.type === 'conversation') {
+    const text = await runGeneralChat({
+      message,
+      contextPrompt,
+      priorMessages,
+      sse,
+      stream: Boolean(options.streamFormatter),
+      usageMeta,
+    });
+    sse({ type: 'done', agent: 'general', toolsUsed: [] });
+    await persistConversation({
+      company_id,
+      user_id,
+      conversation_id: convId,
+      priorMessages,
+      message,
+      assistantContent: text,
+      toolsUsed: [],
+      conversation_summary: convState.conversation_summary,
+      summary_through_turn: convState.summary_through_turn,
+      requestId,
+      agentKey: 'general',
+      agents: ['general'],
+      status: 'completed',
+      mode: 'orchestrator',
+    });
+    await updateContext(ctxRef, 'general', [], [], { message, assistantSummary: text });
+    return {
+      conversation_id: convId,
+      type: 'conversation',
+      response: text,
+      formattedText: text,
+      agents: ['general'],
       toolsUsed: [],
     };
   }
 
-  allToolsUsed.push(...(result.toolsUsed || []));
-  (result.toolsUsed || []).forEach((t, i) => {
-    if (t.name === 'get_workflow_object_tree' && t.success !== false) {
-      const payload = result.toolResultPayloads?.[i];
-      const tree = payload?.data?.data ?? payload?.data ?? null;
-      if (tree && (Array.isArray(tree) ? tree.length > 0 : typeof tree === 'object')) {
-        workflowTree = tree;
+  // Nova planning only adds value when multiple agents are in play; for a
+  // single-agent route the plan is trivially that agent — skip the LLM call.
+  const novaPlan = options.mode
+    ? { mode: options.mode, agents: options.agentKeys || routing.agentKeys }
+    : routing.type === 'single'
+      ? { mode: 'single', agents: routing.agentKeys }
+      : await getNovaPlan(message, contextPrompt, routing, priorMessages, usageMeta);
+
+  const fallbackMode = routing.type === 'single' ? 'single' : 'sequential';
+  const mode = novaPlan?.mode || options.mode || fallbackMode;
+  const plannedAgentsRaw = novaPlan?.agents?.length
+    ? novaPlan.agents
+    : (options.agentKeys || routing.agentKeys || []);
+
+  const validAgentSet = new Set(getAgentKeys().filter((k) => k !== 'nova'));
+  const plannedAgents = plannedAgentsRaw.filter((k) => validAgentSet.has(k));
+
+  if (plannedAgents.length === 0) {
+    const text = await runGeneralChat({
+      message,
+      contextPrompt,
+      priorMessages,
+      sse,
+      stream: Boolean(options.streamFormatter),
+      usageMeta,
+    });
+    sse({ type: 'done', agent: 'general', toolsUsed: [] });
+    await persistConversation({
+      company_id,
+      user_id,
+      conversation_id: convId,
+      priorMessages,
+      message,
+      assistantContent: text,
+      toolsUsed: [],
+      conversation_summary: convState.conversation_summary,
+      summary_through_turn: convState.summary_through_turn,
+      requestId,
+      agentKey: 'general',
+      agents: ['general'],
+      status: 'completed',
+      mode: 'orchestrator',
+    });
+    return {
+      conversation_id: convId,
+      type: 'conversation',
+      response: text,
+      formattedText: text,
+      agents: ['general'],
+      toolsUsed: [],
+    };
+  }
+
+  const primaryKey = plannedAgents[0];
+  const allToolsUsed = [];
+  // Object tree from get_workflow_object_tree — embedded as a <workflow> tag
+  // AFTER formatting so the JSON never round-trips through the formatter LLM.
+  let workflowTree = null;
+  const planState = await getPlanState(planRef);
+  const maxSelfCheckLoops = config.agentRuntime?.maxSelfCheckLoops ?? 1;
+  /** Merged agent transcripts from specialist runs (for next-turn tool memory). */
+  let specialistAgentTranscript = [];
+
+  const runAgentsOnce = async (overrideMessage = null) => {
+    const msg = overrideMessage || message;
+    allToolsUsed.length = 0;
+    specialistAgentTranscript = [];
+    const agentRawTexts = [];
+
+    const runSingle = async (key, chainedContext) => {
+      const agent = getAgentInstance(key);
+      if (!agent) throw new Error(`Agent "${key}" not found`);
+      sse({ type: 'agent_selected', agent: key });
+      setStatus(getStatusLabelForAgent(key));
+      const agentStart = Date.now();
+      const result = await agent.runWithEvents(
+        msg,
+        {
+          _rexRequestId: requestId,
+          _conversationContext: chainedContext || contextPrompt,
+          _streamAssistantText: false, // specialists gather data; Nova presents to UI
+          ...specialistRunContext,
+        },
+        sse,
+      );
+      if (requestId) rex.agentFinished(requestId, agent.name, Date.now() - agentStart, result.usage ?? null);
+      if (result.needsConfirmation) {
+        return { needsConfirmation: true, confirmationId: result.confirmationId, toolsUsed: result.toolsUsed };
+      }
+      allToolsUsed.push(...(result.toolsUsed || []));
+      if (Array.isArray(result.agentTranscript) && result.agentTranscript.length > 0) {
+        specialistAgentTranscript.push(...result.agentTranscript);
+      }
+      (result.toolsUsed || []).forEach((t, i) => {
+        if (t.name === 'get_workflow_object_tree' && t.success !== false) {
+          const payload = result.toolResultPayloads?.[i];
+          // httpClient wraps the API body: payload.data = { success, data: [tree], status }
+          const tree = payload?.data?.data ?? payload?.data ?? null;
+          if (tree && (Array.isArray(tree) ? tree.length > 0 : typeof tree === 'object')) {
+            workflowTree = tree;
+          }
+        }
+      });
+      await updateContext(ctxRef, key, result.toolsUsed, result.toolResultPayloads, {
+        message: msg,
+        assistantSummary: result.rawText?.slice(0, 300),
+      });
+      return { rawText: result.rawText };
+    };
+
+    if (mode === 'single' || plannedAgents.length === 1) {
+      const out = await runSingle(primaryKey, contextPrompt);
+      if (out.needsConfirmation) return out;
+      agentRawTexts.push(out.rawText || '');
+    } else if (mode === 'parallel') {
+      const settled = await Promise.all(plannedAgents.map((key) => runSingle(key, contextPrompt)));
+      for (const out of settled) {
+        if (out?.needsConfirmation) return out;
+        agentRawTexts.push(out?.rawText || '');
+      }
+    } else {
+      let previousRawText = '';
+      let previousAgentName = '';
+      for (const key of plannedAgents) {
+        const parts = [];
+        if (contextPrompt) parts.push(contextPrompt);
+        if (previousRawText) {
+          parts.push(
+            'Use shared context from the prior agent; do not repeat identical API calls.',
+            `[Context from ${previousAgentName}]: ${previousRawText}`,
+          );
+        }
+        const chained = parts.join('\n\n');
+        const out = await runSingle(key, chained);
+        if (out.needsConfirmation) return out;
+        agentRawTexts.push(out.rawText || '');
+        previousRawText = out.rawText || '';
+        previousAgentName = getAgentInstance(key)?.name || key;
       }
     }
-  });
 
-  await updateContext(ctxRef, 'nova', result.toolsUsed, result.toolResultPayloads, {
-    message,
-    assistantSummary: result.rawText?.slice(0, 300),
-  });
+    return { combinedRawText: agentRawTexts.join('\n\n').trim() };
+  };
 
-  // Primary LLM owns presentation (no OutputFormatter). Text already streamed
-  // when _streamAssistantText was set.
-  let formattedForUi = result.rawText || '';
-  const alreadyStreamed = Boolean(options.streamAssistantText ?? options.streamFormatter);
+  let runResult = await runAgentsOnce();
+  if (runResult.needsConfirmation) {
+    sse({
+      type: 'done',
+      agent: primaryKey,
+      toolsUsed: [],
+      pending_confirmation: true,
+      confirmationId: runResult.confirmationId,
+    });
+    return {
+      conversation_id: convId,
+      type: 'pending_confirmation',
+      confirmationId: runResult.confirmationId,
+      toolsUsed: [],
+    };
+  }
+
+  let combinedRawText = runResult.combinedRawText || '';
+  let attempts = planState.attempts || 0;
+  for (let i = 0; i < Math.max(0, maxSelfCheckLoops); i++) {
+    const check = await selfCheckCompletion(message, combinedRawText, usageMeta);
+    if (check.done || !check.next_instruction) break;
+    attempts += 1;
+    await setPlanState(planRef, { attempts });
+    runResult = await runAgentsOnce(`${message}\n\n${check.next_instruction}`);
+    if (runResult.needsConfirmation) {
+      sse({ type: 'done', agent: plannedAgents.join(', '), pending_confirmation: true });
+      return { conversation_id: convId, type: 'pending_confirmation', confirmationId: runResult.confirmationId };
+    }
+    combinedRawText = runResult.combinedRawText || combinedRawText;
+  }
+
+  // Specialists gather tool results; Nova presents the final answer to the frontend (no tools).
+  setStatus('Preparing your response…');
+  let formattedForUi = combinedRawText || '';
+  const wantStream = Boolean(options.streamAssistantText ?? options.streamFormatter);
+  if (combinedRawText?.trim()) {
+    const presentSystem = [
+      AGENT_DEFINITIONS.nova.systemPrompt,
+      '',
+      'PRESENTATION ONLY: Do not call tools. Turn the specialist results into the user-facing answer.',
+    ].join('\n');
+    const presentUser = [
+      contextPrompt ? `Session context:\n${contextPrompt}` : '',
+      `User request:\n${message}`,
+      '',
+      '[Specialist results]',
+      combinedRawText.slice(0, 60000),
+    ].filter(Boolean).join('\n\n');
+    try {
+      if (wantStream) {
+        const deltaBuf = createDeltaCoalesceBuffer((chunk) => {
+          if (chunk) sse({ type: 'text', content: chunk });
+        }, { maxDelayMs: 40, maxChars: 96 });
+        const { text } = await streamMessage(
+          {
+            model: config.llm.model,
+            max_tokens: config.llm.maxTokens?.agent ?? 4096,
+            system: presentSystem,
+            messages: [{ role: 'user', content: presentUser }],
+          },
+          { ...usageMeta, phase: 'nova_present', agentKey: 'nova' },
+          (delta) => deltaBuf.push(delta),
+        );
+        deltaBuf.flush();
+        if (text?.trim()) formattedForUi = text;
+      } else {
+        const response = await createMessage({
+          model: config.llm.model,
+          max_tokens: config.llm.maxTokens?.agent ?? 4096,
+          system: presentSystem,
+          messages: [{ role: 'user', content: presentUser }],
+        }, { ...usageMeta, phase: 'nova_present', agentKey: 'nova' });
+        const text = response.content?.find((b) => b.type === 'text')?.text || response.content?.[0]?.text || '';
+        if (text?.trim()) formattedForUi = text;
+      }
+    } catch (err) {
+      console.warn('⚠️ Nova presentation failed; using specialist text:', err?.message || err);
+      if (wantStream && formattedForUi) {
+        sse({ type: 'text', content: formattedForUi });
+      }
+    }
+  }
+  const alreadyStreamed = wantStream;
   if (!alreadyStreamed && options.streamFormatter && formattedForUi) {
     sse({ type: 'text', content: formattedForUi });
   }
 
+  // Deterministic <workflow> embedding: the React Flow tree renders from this
+  // JSON; appending it server-side guarantees byte-exact data in the UI.
   if (workflowTree && !/<workflow[\s>]/i.test(formattedForUi || '')) {
     const treeJson = JSON.stringify(workflowTree);
     if (treeJson.length <= 60000) {
       const workflowXml = `\n\n<workflow>${treeJson}</workflow>`;
       formattedForUi = `${formattedForUi || ''}${workflowXml}`;
-      if (options.streamFormatter) {
+      if (alreadyStreamed || options.streamFormatter) {
         sse({ type: 'text', content: workflowXml });
       }
     }
   }
 
-  await persistConversation({
+  const persisted = await persistConversation({
     company_id,
     user_id,
     conversation_id: convId,
@@ -537,78 +1061,34 @@ export async function runCoworkerTurn({
     conversation_summary: convState.conversation_summary,
     summary_through_turn: convState.summary_through_turn,
     requestId,
-    agentTranscript: result.agentTranscript,
-    plan: executionPlan,
-    usage: result.usage || null,
-    agentKey: 'nova',
-    agents: ['nova'],
-    status: result.needsContinue ? 'waiting_continue' : 'completed',
-    mode: 'coworker',
+    agentTranscript: specialistAgentTranscript,
+    plan: novaPlan || null,
+    agentKey: primaryKey,
+    agents: plannedAgents,
+    status: 'completed',
+    mode: 'orchestrator',
   });
 
-  await updateContext(ctxRef, 'nova', allToolsUsed, [], {
+  await updateContext(ctxRef, primaryKey, allToolsUsed, [], {
     message,
     assistantSummary: (formattedForUi || '').slice(0, 500),
   });
 
-  if (result.needsContinue) {
-    const latest = await getContext(ctxRef);
-    const prevTask = latest.workingSet?.taskState || planToTaskState(executionPlan) || {
-      goal: message.slice(0, 200),
-      next: [],
-      completed: [],
-    };
-    await saveContext(ctxRef, {
-      ...latest,
-      workingSet: mergeWorkingSet(latest.workingSet, {
-        taskState: {
-          ...prevTask,
-          status: 'waiting_continue',
-          updatedAt: Date.now(),
-        },
-      }),
-    });
-    sse({
-      type: 'task_progress',
-      status: 'waiting_continue',
-      goal: prevTask.goal || null,
-    });
-  } else if (executionPlan?.mode === 'execute' || resumingContinue) {
-    const latest = await getContext(ctxRef);
-    await saveContext(ctxRef, {
-      ...latest,
-      workingSet: mergeWorkingSet(latest.workingSet, {
-        taskState: {
-          ...(latest.workingSet?.taskState || planToTaskState(executionPlan) || {}),
-          status: 'done',
-          next: [],
-          updatedAt: Date.now(),
-        },
-      }),
-    });
-  }
-
-  if (stopActivityKeywords) {
-    stopActivityKeywords();
-    stopActivityKeywords = null;
-  }
   sse({
     type: 'done',
-    agent: 'nova',
-    toolsUsed: allToolsUsed.map((t) => t.name),
-    ...(executionPlan ? { plan: executionPlan } : {}),
-    ...(result.needsContinue ? { waiting_continue: true } : {}),
+    agent: plannedAgents.join(', '),
+    toolsUsed: allToolsUsed.map((t) => ({ name: t.name, input: t.input, success: t.success })),
   });
 
   return {
     conversation_id: convId,
-    type: 'coworker',
+    type: mode,
+    agents: plannedAgents,
     response: formattedForUi,
     formattedText: formattedForUi,
-    plan: executionPlan || undefined,
+    rawText: combinedRawText,
     toolsUsed: allToolsUsed,
-    agents: ['nova'],
-    ...(result.needsContinue ? { waiting_continue: true } : {}),
+    conversation_summary: persisted.summary,
   };
 }
 

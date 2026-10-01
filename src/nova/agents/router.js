@@ -19,7 +19,7 @@ export function initializeAgentInstances() {
   for (const [key, def] of Object.entries(AGENT_DEFINITIONS)) {
     agentInstances.set(key, new BaseAgent(key, def));
   }
-  console.log(`🤖 Initialized ${agentInstances.size} agents (Nova coworker + domain defs)`);
+  console.log(`🤖 Initialized ${agentInstances.size} coworker agents (Nova orchestrator + specialists)`);
 }
 
 export function getAgentInstance(key) {
