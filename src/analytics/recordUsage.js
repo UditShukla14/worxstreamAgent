@@ -50,11 +50,11 @@ export async function recordUsage(meta = {}, usage = null, model) {
 
     const phase = LLM_USAGE_PHASES.includes(meta.phase) ? meta.phase : 'agent';
     const agentKey = resolveBillingAgentKey({ ...meta, phase });
-    const rates = config.anthropic.pricing;
+    const rates = config.llm.pricing;
     const billed = normalizeUsageWithCost(usage, rates);
     const now = new Date();
     const date = utcDateKey(now);
-    const modelId = String(model || meta.model || config.anthropic.model);
+    const modelId = String(model || meta.model || config.llm.model);
 
     const eventDoc = {
       company_id: companyId,

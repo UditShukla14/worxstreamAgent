@@ -10,7 +10,7 @@
  */
 
 import { config } from '../../config/index.js';
-import { createMessage, streamMessage } from '../../llm/anthropicClient.js';
+import { createMessage, streamMessage } from '../../llm/client.js';
 import {
   createDeltaCoalesceBuffer,
   resolveFormatterMaxTokens,
@@ -128,7 +128,7 @@ const FORMATTER_CONTINUE_LIMIT = 3;
 export async function formatOutput(userMessage, rawOutput, usageMeta = {}) {
   const maxTokens = resolveFormatterMaxTokens(
     rawOutput,
-    config.anthropic.maxTokens?.formatter ?? 16384,
+    config.llm.maxTokens?.formatter ?? 16384,
   );
 
   const messages = [
@@ -141,7 +141,7 @@ export async function formatOutput(userMessage, rawOutput, usageMeta = {}) {
   let full = '';
   for (let pass = 0; pass < FORMATTER_CONTINUE_LIMIT; pass++) {
     const response = await createMessage({
-      model: config.anthropic.model,
+      model: config.llm.model,
       max_tokens: maxTokens,
       system: FORMATTER_PROMPT,
       messages,
@@ -179,7 +179,7 @@ export async function formatOutputStreaming(userMessage, rawOutput, res, usageMe
   const sse = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
   const maxTokens = resolveFormatterMaxTokens(
     rawOutput,
-    config.anthropic.maxTokens?.formatter ?? 16384,
+    config.llm.maxTokens?.formatter ?? 16384,
   );
 
   // Coalesce token deltas into ~40ms / ~96-char frames — same feel as ChatGPT/Claude,
@@ -199,7 +199,7 @@ export async function formatOutputStreaming(userMessage, rawOutput, res, usageMe
   for (let pass = 0; pass < FORMATTER_CONTINUE_LIMIT; pass++) {
     const { text, message } = await streamMessage(
       {
-        model: config.anthropic.model,
+        model: config.llm.model,
         max_tokens: maxTokens,
         system: FORMATTER_PROMPT,
         messages,

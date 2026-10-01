@@ -94,7 +94,7 @@ export async function getOverview({ from, to, limit = 20 } = {}) {
   return {
     from: range.from,
     to: range.to,
-    model: config.anthropic.model,
+    model: config.llm.model,
     totals: sumRows(totalRows),
     companies,
     agents: mapBreakdown(agentRows, 'agent_key').map(({ agent_key, ...rest }) => ({
@@ -169,7 +169,7 @@ export async function getCompanyUsage(companyId, { from, to, groupBy } = {}) {
     company_id: cid,
     from: range.from,
     to: range.to,
-    model: config.anthropic.model,
+    model: config.llm.model,
     totals: sumRows(companyRows),
     users,
     agents: mapBreakdown(agentRows, 'agent_key').map(({ agent_key, ...rest }) => ({
@@ -232,7 +232,7 @@ export async function getUserUsage(companyId, userId, { from, to } = {}) {
     user_id: uid,
     from: range.from,
     to: range.to,
-    model: config.anthropic.model,
+    model: config.llm.model,
     totals: sumRows(rows),
     agents: mapBreakdown(agentRows, 'agent_key').map(({ agent_key, ...rest }) => ({
       agent_key,

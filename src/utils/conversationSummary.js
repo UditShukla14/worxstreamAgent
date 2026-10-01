@@ -3,7 +3,7 @@
  */
 
 import { config } from '../config/index.js';
-import { createMessage } from '../llm/anthropicClient.js';
+import { createMessage } from '../llm/client.js';
 import { normalizeStoredMessages, messageContentToString } from './conversationHistory.js';
 
 /**
@@ -88,7 +88,7 @@ export async function maybeRefreshSummary({
   const focus = formatSessionHintsForSummary(sessionHints || {});
 
   const response = await createMessage({
-    model: config.anthropic.model,
+    model: config.llm.model,
     max_tokens: 512,
     system:
       'Compress this Worxstream coworker conversation into at most 400 tokens.\n'

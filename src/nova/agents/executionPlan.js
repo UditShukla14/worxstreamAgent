@@ -6,7 +6,7 @@
  */
 
 import { config } from '../../config/index.js';
-import { createMessage } from '../../llm/anthropicClient.js';
+import { createMessage } from '../../llm/client.js';
 import { buildOrchestratorMessages, logContextUsage } from '../../utils/conversationHistory.js';
 
 const DIRECT_RE = /^(hi|hello|hey|thanks|thank you|thx|ok|okay|yo|good morning|good afternoon|good evening)[\s!.?]*$/i;
@@ -138,9 +138,9 @@ export async function getExecutionPlan({
   });
   logContextUsage('Execution plan context', messages, systemPrompt);
 
-  const maxTokens = config.anthropic.maxTokens?.nova ?? 256;
+  const maxTokens = config.llm.maxTokens?.nova ?? 256;
   const response = await createMessage({
-    model: config.anthropic.model,
+    model: config.llm.model,
     max_tokens: Math.max(maxTokens, 320),
     system: systemPrompt,
     messages,

@@ -6,7 +6,7 @@
  */
 
 import { config } from '../../config/index.js';
-import { createMessage } from '../../llm/anthropicClient.js';
+import { createMessage } from '../../llm/client.js';
 import { usageMetaFromContext } from '../../analytics/usageMeta.js';
 import { getAnthropicTools, executeMcpTool } from '../../mcp/server.js';
 import { getToolIndex } from '../../mcp/toolIndex.js';
@@ -92,8 +92,8 @@ export class GovernanceAgent {
       iterations++;
 
       const params = {
-        model: config.anthropic.model,
-        max_tokens: config.anthropic.maxTokens?.agent ?? 4096,
+        model: config.llm.model,
+        max_tokens: config.llm.maxTokens?.agent ?? 4096,
         system: this.systemPrompt,
         messages,
       };

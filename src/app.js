@@ -109,7 +109,7 @@ async function startServer() {
       if (url) {
         console.log(`🌐 Public URL: ${url}`);
       }
-      console.log(`🤖 Using model: ${config.anthropic.model}`);
+      console.log(`🤖 Using model: ${config.llm.model} @ ${config.llm.baseUrl}`);
       console.log(`🔧 Available MCP tools: ${getAvailableTools().length}`);
       console.log(`🤖 Nova coworker agents: ${agentKeys.length} (${agentKeys.join(', ')})`);
       console.log(`🛡️  Control Tower governance: ${governanceKeys.length} (${governanceKeys.join(', ')})`);

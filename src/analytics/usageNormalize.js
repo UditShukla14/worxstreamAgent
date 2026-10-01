@@ -1,5 +1,7 @@
 /**
- * Normalize Anthropic response.usage into billing fields + USD cost.
+ * Normalize LLM response.usage into billing fields + USD cost.
+ * Accepts Anthropic-shaped fields (input_tokens/output_tokens) after
+ * OpenAI→Anthropic mapping in src/llm/client.js.
  * Estimates in tokenCounter.js are NEVER used for billing.
  */
 

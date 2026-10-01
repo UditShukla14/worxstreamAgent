@@ -15,7 +15,8 @@ router.get('/', (req, res) => {
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
-    model: config.anthropic.model,
+    model: config.llm.model,
+    llm_base_url: config.llm.baseUrl,
     tools_count: getAvailableTools().length,
   });
 });

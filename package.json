@@ -2,7 +2,7 @@
   "name": "@worxstream/agent",
   "version": "1.0.0",
   "private": true,
-  "description": "AI Agent with Claude that uses Worxstream APIs as tools",
+  "description": "AI Agent with OpenAI-compatible LLM that uses Worxstream APIs as tools",
   "main": "src/index.js",
   "type": "module",
   "engines": {
@@ -17,7 +17,6 @@
     "test": "node --test test/**/*.test.js"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.52.0",
     "@modelcontextprotocol/sdk": "^1.24.3",
     "axios": "^1.7.2",
     "cors": "^2.8.5",

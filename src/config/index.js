@@ -43,92 +43,87 @@ function buildRedisUrlFromEnv() {
   return `${scheme}://${auth}${host}:${port}`;
 }
 
-/** Single Anthropic model for all calls — dateless ID, not a dated snapshot. */
-const DEFAULT_MODEL = 'claude-sonnet-4-6';
-
-/** Retired snapshot IDs → main model (auto-migrated at startup). */
-const RETIRED_MODEL_MAP = {
-  'claude-sonnet-4-20250514': DEFAULT_MODEL,
-  'claude-opus-4-20250514': DEFAULT_MODEL,
-  'claude-sonnet-4-0': DEFAULT_MODEL,
-  'claude-opus-4-0': DEFAULT_MODEL,
-  'claude-3-7-sonnet-20250219': DEFAULT_MODEL,
-  'claude-3-5-haiku-20241022': DEFAULT_MODEL,
-  'claude-3-haiku-20240307': DEFAULT_MODEL,
-};
-
-/** Pre-4.6 models use YYYYMMDD suffixes; those IDs expire when Anthropic retires the snapshot. */
-const DATED_SNAPSHOT_RE = /-\d{8}$/;
-
-/** Dateless model IDs that support tool_search_tool_bm25 (on-demand tool loading). */
-const TOOL_SEARCH_SUPPORTED_MODELS = [
-  'claude-sonnet-4-6',
-  'claude-opus-4-6',
-  'claude-opus-4-8',
-  'claude-sonnet-4-5',
-  'claude-opus-4-5',
-  'claude-haiku-4-5',
-];
+/** Default self-hosted model id (vLLM --served-model-name). */
+const DEFAULT_LLM_MODEL = 'openai/gpt-oss-120b';
 
 /**
- * Resolve ANTHROPIC_MODEL: reject dated snapshots and map retired IDs to the main model.
- * @param {string|undefined} envValue
+ * Read int env with optional legacy Anthropic_* fallback during migration.
+ * @param {string} primary
+ * @param {string} legacy
+ * @param {string} fallback
  */
-function resolveAnthropicModel(envValue) {
-  let modelId = (envValue || '').trim() || DEFAULT_MODEL;
-  if (RETIRED_MODEL_MAP[modelId]) {
-    console.warn(
-      `⚠️  ANTHROPIC_MODEL "${modelId}" is retired; using "${DEFAULT_MODEL}". Update the env var.`
-    );
-    return DEFAULT_MODEL;
-  }
-  if (DATED_SNAPSHOT_RE.test(modelId)) {
-    console.warn(
-      `⚠️  ANTHROPIC_MODEL "${modelId}" is a dated snapshot; using "${DEFAULT_MODEL}". Set ANTHROPIC_MODEL to a dateless ID.`
-    );
-    return DEFAULT_MODEL;
-  }
-  return modelId;
+function envInt(primary, legacy, fallback) {
+  const raw = process.env[primary] || process.env[legacy] || fallback;
+  return parseInt(raw, 10);
 }
 
-const anthropicModel = resolveAnthropicModel(process.env.ANTHROPIC_MODEL);
-const useToolSearchEnv = process.env.ANTHROPIC_USE_TOOL_SEARCH;
+/**
+ * @param {string} primary
+ * @param {string} legacy
+ * @param {string} fallback
+ */
+function envFloat(primary, legacy, fallback) {
+  const raw = process.env[primary] || process.env[legacy] || fallback;
+  return parseFloat(raw);
+}
+
+const llmBaseUrl = (process.env.LLM_BASE_URL || '').trim().replace(/\/$/, '');
+const llmModel = (process.env.LLM_MODEL || DEFAULT_LLM_MODEL).trim() || DEFAULT_LLM_MODEL;
 
 export const config = {
-  anthropic: {
-    apiKey: process.env.ANTHROPIC_API_KEY,
-    /** Sonnet 4.6 for all agent, router, formatter, and summary calls; override with ANTHROPIC_MODEL. */
-    model: anthropicModel,
-    /** Enabled when model supports tool search; set ANTHROPIC_USE_TOOL_SEARCH=false/true to override. */
-    useToolSearch: useToolSearchEnv === 'false' ? false : useToolSearchEnv === 'true' ? true : TOOL_SEARCH_SUPPORTED_MODELS.includes(anthropicModel),
+  /**
+   * OpenAI-compatible inference (DigitalOcean vLLM / gpt-oss, etc.).
+   * Anthropic Messages API is no longer used.
+   */
+  llm: {
+    /** Base URL including /v1, e.g. http://10.x.x.x:8000/v1 or http://127.0.0.1:8000/v1 */
+    baseUrl: llmBaseUrl,
+    /** API key for gateways that require one; vLLM often accepts any non-empty string. */
+    apiKey: (process.env.LLM_API_KEY || 'not-needed').trim(),
+    model: llmModel,
     /**
-     * Centralized token limits. These are intentionally conservative defaults
-     * and can be tuned via env without touching code.
+     * Anthropic tool_search is unavailable on OpenAI-compatible backends.
+     * Always false — BaseAgent loads full allow-lists (or domain buckets).
      */
+    useToolSearch: false,
+    timeoutMs: parseInt(process.env.LLM_TIMEOUT_MS || '120000', 10),
+    maxRetries: parseInt(process.env.LLM_MAX_RETRIES || '1', 10),
     maxTokens: {
-      /** For specialist agent runs (tool loop). Reports/large answers need headroom. */
-      agent: parseInt(process.env.ANTHROPIC_MAX_TOKENS_AGENT || '8192', 10),
-      /** For OutputFormatter pass — large reports expand into XML tables/charts. */
-      formatter: parseInt(process.env.ANTHROPIC_MAX_TOKENS_FORMATTER || '16384', 10),
-      /** For router key selection. */
-      router: parseInt(process.env.ANTHROPIC_MAX_TOKENS_ROUTER || '100', 10),
-      /** For Nova orchestration plan. */
-      nova: parseInt(process.env.ANTHROPIC_MAX_TOKENS_NOVA || '256', 10),
-      /** For conversational fallback streaming in agents/stream and legacy flows. */
-      conversation: parseInt(process.env.ANTHROPIC_MAX_TOKENS_CONVERSATION || '8192', 10),
-      /** For conversation-only (non-stream) replies. */
-      conversationShort: parseInt(process.env.ANTHROPIC_MAX_TOKENS_CONVERSATION_SHORT || '1024', 10),
+      agent: envInt('LLM_MAX_TOKENS_AGENT', 'ANTHROPIC_MAX_TOKENS_AGENT', '8192'),
+      formatter: envInt('LLM_MAX_TOKENS_FORMATTER', 'ANTHROPIC_MAX_TOKENS_FORMATTER', '16384'),
+      router: envInt('LLM_MAX_TOKENS_ROUTER', 'ANTHROPIC_MAX_TOKENS_ROUTER', '100'),
+      nova: envInt('LLM_MAX_TOKENS_NOVA', 'ANTHROPIC_MAX_TOKENS_NOVA', '256'),
+      conversation: envInt('LLM_MAX_TOKENS_CONVERSATION', 'ANTHROPIC_MAX_TOKENS_CONVERSATION', '8192'),
+      conversationShort: envInt(
+        'LLM_MAX_TOKENS_CONVERSATION_SHORT',
+        'ANTHROPIC_MAX_TOKENS_CONVERSATION_SHORT',
+        '1024',
+      ),
     },
     /**
-     * USD per 1M tokens — defaults match Claude Sonnet list prices.
-     * Override when WorxStream markup / new model pricing is decided.
+     * USD per 1M tokens for usage analytics. Self-hosted default is $0
+     * (GPU billed separately). Override if you want internal chargeback.
      */
     pricing: {
-      inputPerMillion: parseFloat(process.env.ANTHROPIC_PRICE_INPUT_PER_MTOK || '3'),
-      outputPerMillion: parseFloat(process.env.ANTHROPIC_PRICE_OUTPUT_PER_MTOK || '15'),
-      cacheWritePerMillion: parseFloat(process.env.ANTHROPIC_PRICE_CACHE_WRITE_PER_MTOK || '3.75'),
-      cacheReadPerMillion: parseFloat(process.env.ANTHROPIC_PRICE_CACHE_READ_PER_MTOK || '0.30'),
+      inputPerMillion: envFloat('LLM_PRICE_INPUT_PER_MTOK', 'ANTHROPIC_PRICE_INPUT_PER_MTOK', '0'),
+      outputPerMillion: envFloat('LLM_PRICE_OUTPUT_PER_MTOK', 'ANTHROPIC_PRICE_OUTPUT_PER_MTOK', '0'),
+      cacheWritePerMillion: envFloat(
+        'LLM_PRICE_CACHE_WRITE_PER_MTOK',
+        'ANTHROPIC_PRICE_CACHE_WRITE_PER_MTOK',
+        '0',
+      ),
+      cacheReadPerMillion: envFloat(
+        'LLM_PRICE_CACHE_READ_PER_MTOK',
+        'ANTHROPIC_PRICE_CACHE_READ_PER_MTOK',
+        '0',
+      ),
     },
+  },
+  /**
+   * @deprecated Use config.llm — alias kept so leftover imports do not crash mid-migrate.
+   */
+  get anthropic() {
+    return this.llm;
   },
   /** Platform-ops key for /api/admin/* (token usage billing). */
   admin: {
@@ -284,8 +279,8 @@ export function validateConfig() {
   const errors = [];
   const isProduction = process.env.NODE_ENV === 'production';
 
-  if (!config.anthropic.apiKey) {
-    errors.push('ANTHROPIC_API_KEY is required');
+  if (!config.llm.baseUrl) {
+    errors.push('LLM_BASE_URL is required (OpenAI-compatible base, e.g. http://127.0.0.1:8000/v1)');
   }
   if (!config.worxstream.baseUrl) {
     errors.push('WORXSTREAM_BASE_URL is required');

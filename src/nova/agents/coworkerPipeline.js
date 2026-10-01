@@ -4,7 +4,7 @@
 
 import { randomUUID } from 'crypto';
 import { config } from '../../config/index.js';
-import { createMessage, streamMessage } from '../../llm/anthropicClient.js';
+import { createMessage, streamMessage } from '../../llm/client.js';
 import Conversation from '../models/Conversation.js';
 import {
   AGENT_DEFINITIONS,
@@ -225,7 +225,7 @@ const SELF_CHECK_MAX_CHARS = 4000;
 
 async function selfCheckCompletion(userMessage, rawText, usageMeta = {}) {
   const response = await createMessage({
-    model: config.anthropic.model,
+    model: config.llm.model,
     max_tokens: 192,
     system: `You are a strict completion checker.\nReturn ONLY strict JSON: {"done": boolean, "next_instruction": string|null}.`,
     messages: [{ role: 'user', content: `User request:\n${userMessage}\n\nAgent raw output:\n${String(rawText || '').slice(0, SELF_CHECK_MAX_CHARS)}` }],
@@ -273,8 +273,8 @@ export async function getNovaPlan(message, conversationContext, routing, priorMe
     logContextUsage('Nova context', novaMessages, novaSystem);
 
     const response = await createMessage({
-      model: config.anthropic.model,
-      max_tokens: config.anthropic.maxTokens?.nova ?? 256,
+      model: config.llm.model,
+      max_tokens: config.llm.maxTokens?.nova ?? 256,
       system: novaSystem,
       messages: novaMessages,
     }, { ...usageMeta, phase: 'nova_plan', agentKey: 'nova_plan' });
@@ -312,8 +312,8 @@ async function runGeneralChat({
     }, { maxDelayMs: 40, maxChars: 96 });
     const { text } = await streamMessage(
       {
-        model: config.anthropic.model,
-        max_tokens: config.anthropic.maxTokens?.conversation ?? 8192,
+        model: config.llm.model,
+        max_tokens: config.llm.maxTokens?.conversation ?? 8192,
         system: GENERAL_CHAT_SYSTEM,
         messages: generalMessages,
       },
@@ -325,8 +325,8 @@ async function runGeneralChat({
   }
 
   const response = await createMessage({
-    model: config.anthropic.model,
-    max_tokens: config.anthropic.maxTokens?.conversation ?? 4096,
+    model: config.llm.model,
+    max_tokens: config.llm.maxTokens?.conversation ?? 4096,
     system: GENERAL_CHAT_SYSTEM,
     messages: generalMessages,
   }, { ...usageMeta, phase: 'general_chat', agentKey: 'general_chat' });

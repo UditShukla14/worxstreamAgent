@@ -1,16 +1,17 @@
 /**
- * BaseAgent — reusable agent class that wraps an Anthropic Claude call
+ * BaseAgent — reusable agent class that wraps an OpenAI-compatible LLM call
  * with a focused system prompt and a filtered subset of MCP tools.
  *
  * Each specialist agent is an instance of BaseAgent constructed from
  * an AGENT_DEFINITIONS entry. The tool registry in src/mcp/server.js
- * stays completely unchanged.
+ * stays completely unchanged. Message/tool shapes stay Anthropic-like
+ * internally; src/llm/client.js converts to OpenAI for the backend.
  */
 
 import { config } from '../../config/index.js';
-import { createMessage } from '../../llm/anthropicClient.js';
+import { createMessage } from '../../llm/client.js';
 import { usageMetaFromContext } from '../../analytics/usageMeta.js';
-import { getAnthropicTools, getAnthropicToolsForToolSearch, executeMcpTool } from '../../mcp/server.js';
+import { getAnthropicTools, executeMcpTool } from '../../mcp/server.js';
 import { rex } from './AgentTracker.js';
 import { getSoulSystemPrompt } from './soul.js';
 import { getToolIndex } from '../../mcp/toolIndex.js';
@@ -65,7 +66,7 @@ export class BaseAgent {
     this.extraTools = Array.isArray(definition.extraTools) ? definition.extraTools : [];
     /** When true, getTools() exposes all non-governance product tools (Claude/OpenAI-style). */
     this.orchestrator = definition.orchestrator === true;
-    /** Opt-in wider tool discovery; falls back to global config.anthropic.useToolSearch. */
+    /** Opt-in wider tool discovery; falls back to global config.llm.useToolSearch. */
     this.useToolSearch = definition.useToolSearch === true
       ? true
       : definition.useToolSearch === false
@@ -100,9 +101,6 @@ export class BaseAgent {
    */
   getTools() {
     const index = getToolIndex();
-    const toolSearchOn = this.useToolSearch !== null
-      ? this.useToolSearch
-      : config.anthropic.useToolSearch;
 
     if (this.orchestrator) {
       const allowList = index.tools
@@ -117,10 +115,6 @@ export class BaseAgent {
       if (allowList.length === 0) {
         console.error(`❌ [${this.name}] orchestrator has no product tools registered`);
         return [];
-      }
-      // Always prefer tool-search for wide catalogs (token-efficient, Claude/OpenAI-style).
-      if (toolSearchOn || allowList.length > 40) {
-        return getAnthropicToolsForToolSearch(allowList);
       }
       return getAnthropicTools(allowList);
     }
@@ -150,13 +144,7 @@ export class BaseAgent {
       return [];
     }
 
-    const allowList = [...allowSet];
-
-    if (toolSearchOn) {
-      return getAnthropicToolsForToolSearch(allowList);
-    }
-
-    return getAnthropicTools(allowList);
+    return getAnthropicTools([...allowSet]);
   }
 
   /**
@@ -184,8 +172,8 @@ export class BaseAgent {
       iterations++;
 
       const params = {
-        model: config.anthropic.model,
-        max_tokens: config.anthropic.maxTokens?.agent ?? 4096,
+        model: config.llm.model,
+        max_tokens: config.llm.maxTokens?.agent ?? 4096,
         system: this.systemPrompt,
         messages,
       };
@@ -330,8 +318,8 @@ export class BaseAgent {
         totalRounds++;
 
         const params = {
-          model: config.anthropic.model,
-          max_tokens: config.anthropic.maxTokens?.agent ?? 4096,
+          model: config.llm.model,
+          max_tokens: config.llm.maxTokens?.agent ?? 4096,
           system: this.systemPrompt,
           messages,
         };
