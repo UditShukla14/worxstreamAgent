@@ -15,11 +15,12 @@ import { getAnthropicTools, executeMcpTool } from '../../mcp/server.js';
 import { rex } from './AgentTracker.js';
 import { getSoulSystemPrompt } from './soul.js';
 import { getToolIndex } from '../../mcp/toolIndex.js';
+import { selectToolsViaLlm } from '../../mcp/selectToolsForTurn.js';
 import {
   normalizeListInput,
 } from './policies/listPolicies.js';
 import { startActivityKeywordRotation } from './activityKeywords.js';
-import { appendPlaybookToPrompt, getPlaybookExtrasFragment } from './playbooks.js';
+import { appendPlaybookToPrompt } from './playbooks.js';
 import {
   isWriteTool,
   shouldConfirmWrites,
@@ -40,6 +41,17 @@ const CONTINUE_USER_NOTE =
 
 const TRUNCATED_CONTINUE_NOTE =
   '[Continue] Your previous response was truncated (max_tokens). Continue exactly from where you left off.';
+
+/** Compact UI contract for orchestrator (full charts live in reports playbook). */
+const TABLE_UI_SCHEMA = `
+LIST / REPORT TABLES (required cell tags — markdown pipes will not render):
+<table title="Showing 25 of N">
+<headers><th>Col</th><th>Col</th></headers>
+<row><td>…</td><td status="warning">…</td></row>
+</table>
+KPIs: <stats><stat label="…" value="…" icon="chart" color="blue"/></stats>
+Charts when asked: <chart type="bar|line|pie" …> per reports-charts shapes.
+`.trim();
 
 /** User turn that means "send the SMS draft I already saw". */
 function isSmsChatConfirmMessage(message) {
@@ -83,13 +95,10 @@ export class BaseAgent {
       : withShared;
     const resumeNote = '\n\nIf [Session focus] shows a failed last action, attempt recovery (correct IDs/parameters) before asking the user to repeat.';
     const lookupNote = '\n\nID RESOLUTION: NEVER ask the user for an internal ID (user, customer, contact, product, vendor, tax, job, project...). When the user gives a name, call the resolve_entity tool (entity_type + the name) — or a domain lookup tool you have — to get the ID yourself. Only ask the user when the lookup finds nothing or returns multiple ambiguous matches (then show the matching names, never raw IDs).';
-    // Domain playbooks only for specialists; orchestrator discovers via tools + shared rules.
-    // Chart/table XML shapes still help orchestrator Nova (same as ChatGPT structured blocks).
-    const chartTableShapes = this.orchestrator
-      ? getPlaybookExtrasFragment('reports')
-      : '';
+    // Domain playbooks only for specialists; orchestrator gets a compact UI schema
+    // (full reports-charts.md is too large for 65k-context self-hosted models).
     this.systemPrompt = this.orchestrator
-      ? base + resumeNote + lookupNote + (chartTableShapes ? `\n\n[UI XML shapes]\n${chartTableShapes}` : '')
+      ? `${base}${resumeNote}${lookupNote}\n\n[UI XML shapes]\n${TABLE_UI_SCHEMA}`
       : appendPlaybookToPrompt(base + resumeNote + lookupNote, definition.domain);
   }
 
@@ -103,25 +112,42 @@ export class BaseAgent {
 
   /**
    * Returns this agent's tools from the shared MCP registry.
-   * Orchestrator Nova: all product tools (excludes governance) with tool-search when enabled.
+   * Orchestrator Nova: one LLM tool-search call (Anthropic BM25 equivalent),
+   * then full schemas only for the selected names.
+   *
+   * @param {string} [hintText] - user message + plan text
+   * @param {object} [usageMeta] - billing attribution for the picker call
+   * @returns {Promise<Array>}
    */
-  getTools() {
+  async getTools(hintText = '', usageMeta = {}) {
     const index = getToolIndex();
 
     if (this.orchestrator) {
-      const allowList = index.tools
+      const catalog = index.tools
         .filter((t) => {
           const domain = t?.capabilities?.domain;
           if (domain === 'governance') return false;
           const name = t.name;
           if (name === 'invoke_agent' || name === 'get_relevant_policies') return false;
           return true;
-        })
-        .map((t) => t.name);
-      if (allowList.length === 0) {
+        });
+      if (catalog.length === 0) {
         console.error(`❌ [${this.name}] orchestrator has no product tools registered`);
         return [];
       }
+      const maxTools = Number.isFinite(config.coworker?.maxToolsPerTurn)
+        ? config.coworker.maxToolsPerTurn
+        : 40;
+      const { tools: ranked, source } = await selectToolsViaLlm(catalog, hintText, {
+        maxTools,
+        usageMeta: {
+          ...usageMeta,
+          phase: 'tool_search',
+          agentKey: this.agentKey,
+        },
+      });
+      const allowList = ranked.map((t) => t.name);
+      console.log(`  🪛 [${this.name}] tool search (${source}): ${allowList.length}/${catalog.length} → [${allowList.join(', ')}]`);
       return getAnthropicTools(allowList);
     }
 
@@ -163,7 +189,10 @@ export class BaseAgent {
    * @returns {Promise<AgentResult>}
    */
   async run(message, context = {}) {
-    const tools = this.getTools();
+    const toolHint = [message, context._executionPlanText, context._planText]
+      .filter(Boolean)
+      .join('\n');
+    const tools = await this.getTools(toolHint, this._usageMeta(context));
     const messages = this._buildInitialMessages(message, context);
 
     let response;
@@ -266,7 +295,11 @@ export class BaseAgent {
    * @returns {Promise<{ rawText: string, toolsUsed: object[], toolResultPayloads: object[] }>}
    */
   async runWithEvents(message, context = {}, onEvent = () => {}) {
-    const tools = this.getTools();
+    const toolHint = [message, context._executionPlanText, context._planText]
+      .filter(Boolean)
+      .join('\n');
+    onEvent({ type: 'status', label: 'Selecting tools…' });
+    const tools = await this.getTools(toolHint, this._usageMeta(context));
     const history = Array.isArray(context._conversationHistory)
       ? context._conversationHistory.filter((m) => m && (m.role === 'user' || m.role === 'assistant'))
       : [];

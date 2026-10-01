@@ -43,23 +43,18 @@ describe('coworker orchestrator mode', () => {
     assert.equal(isChildAgentKey('nova'), false);
   });
 
-  it('orchestrator getTools exposes product tools and excludes governance', () => {
+  it('orchestrator getTools uses LLM tool search (or fallback) and excludes governance', async () => {
     const agent = new BaseAgent('nova', AGENT_DEFINITIONS.nova);
-    const tools = agent.getTools();
+    const tools = await agent.getTools('estimate report for the last 2 weeks');
     assert.ok(tools.length > 0, 'orchestrator should have tools');
-    const names = tools
-      .map((t) => t.name || t?.input_examples?.[0]?.name)
-      .filter(Boolean);
-    // Tool-search wrappers may defer names; allow either deferred catalog or explicit names.
+    assert.ok(tools.length <= 40, 'tool search should cap schemas per turn');
+    const names = tools.map((t) => t.name).filter(Boolean);
     const serialized = JSON.stringify(tools);
     assert.ok(!serialized.includes('get_relevant_policies'));
     assert.ok(!serialized.includes('invoke_agent'));
     assert.ok(
-      names.includes('resolve_entity')
-      || serialized.includes('resolve_entity')
-      || serialized.includes('tool_search')
-      || tools.some((t) => t.type === 'tool_search' || t.name === 'tool_search'),
-      'expected tool-search or resolve_entity in orchestrator tools',
+      names.includes('generate_estimate_report') || names.includes('resolve_entity'),
+      `expected generate_estimate_report or resolve_entity, got: ${names.slice(0, 12).join(', ')}`,
     );
   });
 

@@ -587,6 +587,7 @@ export async function runCoworkerTurn({
         _rexRequestId: requestId,
         _conversationContext: orchContextPrompt,
         _streamAssistantText: Boolean(options.streamAssistantText ?? options.streamFormatter),
+        _executionPlanText: planBlock || '',
         ...orchRunContext,
       },
       sse,

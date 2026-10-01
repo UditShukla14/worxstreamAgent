@@ -37,11 +37,11 @@ export function registerReportTools() {
     'generate_estimate_report',
     {
       title: 'Generate Estimate Report',
-      description: 'Generates a comprehensive estimate report with optional filtering and pagination. Includes totals, line items, status details, and performance metrics.',
+      description: 'USE FOR estimate reports/analytics/last N days|weeks|months (not list_estimates). Generates estimate report totals, status metrics, and optional line items. Requires from_date and to_date (YYYY-MM-DD). Set line_items=false for summary/KPI reports; true only when line-level breakdown is needed.',
       inputSchema: {
         from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('Start date in YYYY-MM-DD format'),
         to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('End date in YYYY-MM-DD format'),
-        line_items: z.boolean().optional().describe('Include line items in response (default: true)'),
+        line_items: z.boolean().optional().describe('Include line items (default false for summary reports; set true for breakdown)'),
         page: z.number().optional().describe('Page number for pagination (default: 1)'),
         per_page: z.number().optional().describe('Items per page (default: 50)'),
         assign_employee: z.number().optional().describe('Filter by assigned employee ID'),
@@ -64,7 +64,7 @@ export function registerReportTools() {
       const processedParams = {
         from_date: params.from_date,
         to_date: params.to_date,
-        lineItems: params.line_items !== undefined ? Boolean(params.line_items) : true,
+        lineItems: params.line_items === true,
         page: params.page ? Number(params.page) : 1,
         per_page: params.per_page ? Number(params.per_page) : 50,
         assign_employee: params.assign_employee ? Number(params.assign_employee) : undefined,

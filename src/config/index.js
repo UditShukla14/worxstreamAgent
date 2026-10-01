@@ -226,6 +226,11 @@ export const config = {
     scrapeEntityIds: process.env.COWORKER_SCRAPE_ENTITY_IDS === 'true',
     /** Intra-request agent continue slices when tool budget / max_tokens hits (default 3). */
     maxContinueSlices: parseInt(process.env.AGENT_CONTINUE_SLICES || '3', 10),
+    /**
+     * Orchestrator: max MCP tool schemas per turn (local retrieval). Full catalog
+     * (~260 tools) exceeds gpt-oss 65k context. Default 40.
+     */
+    maxToolsPerTurn: parseInt(process.env.COWORKER_MAX_TOOLS_PER_TURN || '40', 10),
   },
   /** Telnyx Messaging — used by MCP SMS tools (draft_sms / send_sms). Server-only. */
   telnyx: {
