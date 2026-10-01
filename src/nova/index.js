@@ -1,5 +1,5 @@
 /**
- * Nova coworker public API — chat agents + MCP specialists.
+ * Nova coworker public API — chat is always Nova + MCP tools for the company.
  * Control Tower lives under src/governance.
  */
 

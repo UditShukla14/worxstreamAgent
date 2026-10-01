@@ -46,7 +46,7 @@ const conversationTurnSchema = new mongoose.Schema({
       enum: ['completed', 'clarify', 'plan_clarify', 'pending_confirmation', 'waiting_continue', 'error'],
       default: 'completed',
     },
-    mode: { type: String, default: 'orchestrator' },
+    mode: { type: String, default: 'coworker' },
     agent_key: { type: String, default: 'nova' },
     agents: { type: [String], default: undefined },
     plan: { type: mongoose.Schema.Types.Mixed, default: undefined },

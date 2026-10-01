@@ -42,15 +42,15 @@ const CONTINUE_USER_NOTE =
 const TRUNCATED_CONTINUE_NOTE =
   '[Continue] Your previous response was truncated (max_tokens). Continue exactly from where you left off.';
 
-/** Compact UI contract for orchestrator (full charts live in reports playbook). */
+/** Tag reference for orchestrator — shape is the model's judgment. */
 const TABLE_UI_SCHEMA = `
-LIST / REPORT TABLES (required cell tags — markdown pipes will not render):
-<table title="Showing 25 of N">
-<headers><th>Col</th><th>Col</th></headers>
-<row><td>…</td><td status="warning">…</td></row>
-</table>
-KPIs: <stats><stat label="…" value="…" icon="chart" color="blue"/></stats>
-Charts when asked: <chart type="bar|line|pie" …> per reports-charts shapes.
+UI TAGS (use only when they help; you choose mix of prose / stats / table / chart / details / alert):
+<table title="…"><headers><th>…</th></headers><row><td>…</td></row></table>
+<stats><stat label="…" value="…" icon="dollar|chart" color="blue|green"/></stats>
+<chart type="pie|bar|line" title="…"><chart-data label="…">…</chart-data></chart>
+<details title="…"><item label="…">value</item></details>
+<alert type="success|error|warning|info">…</alert>
+Tables require <th>/<td> (markdown pipes do not render). If you show a fetched page as a table, include every returned row.
 `.trim();
 
 /** User turn that means "send the SMS draft I already saw". */

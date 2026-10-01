@@ -37,7 +37,7 @@ export async function appendConversationTurn({
   agentKey = 'nova',
   agents = null,
   status = 'completed',
-  mode = 'orchestrator',
+  mode = 'coworker',
   requestId = null,
   turnIndex = null,
 }) {

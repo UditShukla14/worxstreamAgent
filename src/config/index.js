@@ -201,16 +201,13 @@ export const config = {
     specialistMessagesActive: parseInt(process.env.SPECIALIST_CONTEXT_MESSAGES_ACTIVE || '12', 10),
     pendingConfirmTtlSeconds: parseInt(process.env.COWORKER_PENDING_CONFIRM_TTL || '300', 10),
     /**
-     * Chat turn mode:
-     * - orchestrator (default): one Nova agent + tool search (Claude/OpenAI-style). Skips router/Nova-plan fan-out.
-     * - specialists: legacy router → specialist(s) → formatter path.
+     * Chat is always Nova coworker (one agent + MCP tools for the authenticated
+     * company). Legacy COWORKER_MODE=specialists is ignored.
      */
-    mode: (process.env.COWORKER_MODE || 'orchestrator').toLowerCase() === 'specialists'
-      ? 'specialists'
-      : 'orchestrator',
+    mode: 'coworker',
     /**
-     * Orchestrator: LLM execution plan before the tool loop (default on).
-     * Set COWORKER_EXECUTION_PLAN=false to skip (legacy direct tool chat).
+     * LLM execution plan before the tool loop (default on).
+     * Set COWORKER_EXECUTION_PLAN=false to skip the planner call.
      */
     executionPlan: process.env.COWORKER_EXECUTION_PLAN !== 'false',
     /** Cap each tool_result in stored agent_transcript (default 4000 chars). */
@@ -227,7 +224,7 @@ export const config = {
     /** Intra-request agent continue slices when tool budget / max_tokens hits (default 3). */
     maxContinueSlices: parseInt(process.env.AGENT_CONTINUE_SLICES || '3', 10),
     /**
-     * Orchestrator: max MCP tool schemas per turn (local retrieval). Full catalog
+     * Max MCP tool schemas per turn after LLM tool-search. Full catalog
      * (~260 tools) exceeds gpt-oss 65k context. Default 40.
      */
     maxToolsPerTurn: parseInt(process.env.COWORKER_MAX_TOOLS_PER_TURN || '40', 10),

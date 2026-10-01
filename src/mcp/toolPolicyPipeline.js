@@ -6,6 +6,7 @@
  */
  
 import { normalizeListInput } from '../nova/agents/policies/listPolicies.js';
+import { compactReportToolResult } from './compactReportResult.js';
  
 const LATEST_HINTS = [
   /\blatest\b/i,
@@ -68,13 +69,14 @@ export function beforeToolCall(toolName, input, ctx = {}) {
  */
 export function afterToolCall(toolName, input, result, ctx = {}) {
   if (!result || typeof result !== 'object') return result;
- 
-  // Preserve existing result shape, but ensure success boolean exists when possible.
-  if (typeof result.success !== 'boolean') {
-    return { success: true, data: result };
+
+  let next = result;
+  if (typeof next.success !== 'boolean') {
+    next = { success: true, data: next };
   }
- 
-  return result;
+
+  const compacted = compactReportToolResult(toolName, next);
+  return compacted;
 }
  
 /**

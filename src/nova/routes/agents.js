@@ -8,7 +8,6 @@ import Conversation from '../models/Conversation.js';
 import UserPreferences from '../models/UserPreferences.js';
 import {
   AGENT_DEFINITIONS,
-  getAgentKeys,
 } from '../agents/agentDefinitions.js';
 import { getToolIndex } from '../../mcp/toolIndex.js';
 import { rex } from '../agents/AgentTracker.js';
@@ -356,26 +355,15 @@ router.post('/route', async (req, res) => {
   }
 });
 
-// ── POST /api/agents/multi ───────────────────────────────────────────
+// ── POST /api/agents/multi — deprecated; always Nova coworker ────────
 router.post('/multi', async (req, res) => {
   try {
     const tenant = requireConversationTenant(req, res);
     if (!tenant) return;
-    const { message, agents, mode = 'parallel', conversation_id } = req.body || {};
+    const { message, conversation_id } = req.body || {};
 
     if (!message) {
       return res.status(400).json({ success: false, error: 'message is required' });
-    }
-    if (!Array.isArray(agents) || agents.length === 0) {
-      return res.status(400).json({ success: false, error: 'agents array is required' });
-    }
-
-    const invalidKeys = agents.filter((k) => !getAgentKeys().includes(k));
-    if (invalidKeys.length) {
-      return res.status(400).json({
-        success: false,
-        error: `Unknown agent(s): ${invalidKeys.join(', ')}`,
-      });
     }
 
     const result = await runCoworkerTurn({
@@ -384,8 +372,6 @@ router.post('/multi', async (req, res) => {
       user_id: tenant.user_id,
       conversation_id,
       options: {
-        agentKeys: agents,
-        mode: mode === 'sequential' ? 'sequential' : 'parallel',
         streamFormatter: false,
         skipClarification: false,
       },
@@ -393,11 +379,12 @@ router.post('/multi', async (req, res) => {
 
     res.json({
       success: true,
-      mode,
+      mode: 'coworker',
       conversation_id: result.conversation_id,
       response: result.response,
-      agents_used: agents,
+      agents_used: ['nova'],
       tools_used: result.toolsUsed || [],
+      note: 'Chat is Nova coworker-only; specialist agent lists are ignored.',
     });
   } catch (error) {
     console.error('❌ Multi-agent error:', error);
@@ -405,7 +392,7 @@ router.post('/multi', async (req, res) => {
   }
 });
 
-// ── POST /api/agents/:agentKey — direct specialist (same pipeline) ───
+// ── POST /api/agents/:agentKey — deprecated; always Nova coworker ────
 router.post('/:agentKey', async (req, res) => {
   try {
     const { agentKey } = req.params;
@@ -419,12 +406,6 @@ router.post('/:agentKey', async (req, res) => {
     if (!message) {
       return res.status(400).json({ success: false, error: 'message is required' });
     }
-    if (!getAgentKeys().includes(agentKey)) {
-      return res.status(404).json({
-        success: false,
-        error: `Unknown agent: "${agentKey}"`,
-      });
-    }
 
     const result = await runCoworkerTurn({
       message,
@@ -432,18 +413,18 @@ router.post('/:agentKey', async (req, res) => {
       user_id: tenant.user_id,
       conversation_id,
       options: {
-        agentKeys: [agentKey],
-        mode: 'single',
         streamFormatter: false,
       },
     });
 
     res.json({
       success: true,
-      agent: agentKey,
+      agent: 'nova',
+      requested_agent: agentKey,
       conversation_id: result.conversation_id,
       response: result.response,
       tools_used: result.toolsUsed || [],
+      note: 'Chat is Nova coworker-only; direct specialist keys are ignored.',
     });
   } catch (error) {
     console.error('❌ Agent call error:', error);

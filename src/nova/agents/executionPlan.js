@@ -1,5 +1,5 @@
 /**
- * Lightweight execution plan before Nova's tool loop (orchestrator mode).
+ * Lightweight execution plan before Nova's tool loop (coworker mode).
  *
  * Produces a short goal + steps so Nova executes with intent, not ad-hoc tool spam.
  * Clarification stays: mode=clarify returns an ask and skips tools.
