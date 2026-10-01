@@ -15,8 +15,6 @@ export {
   resolveAgentKeys,
   callAgent,
   BaseAgent,
-  formatOutput,
-  formatOutputStreaming,
   getContext,
   updateContext,
   buildContextPrompt,

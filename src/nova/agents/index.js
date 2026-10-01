@@ -7,7 +7,7 @@
  *   // At startup (after MCP tools are registered):
  *   initializeAgents();
  *
- *   // Unified pipeline (routing + execution + formatting):
+ *   // Unified pipeline (routing + execution; LLM presents tables/charts itself):
  *   const result = await runCoworkerTurn({ message: "list all estimates", ... });
  *
  *   // Direct call:
@@ -26,7 +26,6 @@ export {
   startActivityKeywordRotation,
 } from './activityKeywords.js';
 export { BaseAgent } from './BaseAgent.js';
-export { formatOutput, formatOutputStreaming } from './OutputFormatter.js';
 export {
   getContext,
   updateContext,

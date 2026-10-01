@@ -10,7 +10,6 @@ import {
   AGENT_DEFINITIONS,
   getAgentKeys,
   getStatusLabelForAgent,
-  STATUS_LABEL_FORMATTING,
   STATUS_LABEL_PLANNING,
 } from './agentDefinitions.js';
 import { startActivityKeywordRotation } from './activityKeywords.js';
@@ -20,7 +19,6 @@ import {
   planToTaskState,
 } from './executionPlan.js';
 import { resolveAgentKeys, getAgentInstance } from './router.js';
-import { formatOutput, formatOutputStreaming } from './OutputFormatter.js';
 import { createDeltaCoalesceBuffer } from './streamSectionBuffer.js';
 import { rex } from './AgentTracker.js';
 import {
@@ -588,6 +586,7 @@ export async function runCoworkerTurn({
       {
         _rexRequestId: requestId,
         _conversationContext: orchContextPrompt,
+        _streamAssistantText: Boolean(options.streamAssistantText ?? options.streamFormatter),
         ...orchRunContext,
       },
       sse,
@@ -630,26 +629,12 @@ export async function runCoworkerTurn({
       assistantSummary: result.rawText?.slice(0, 300),
     });
 
-    let combinedRawText = result.rawText || '';
-    // UI formatter (tables/cards/badges) — on by default; set formatOutput:false to skip.
-    let formattedForUi = combinedRawText;
-    const wantFormatter = options.formatOutput !== false;
-    if (wantFormatter) {
-      setStatus(STATUS_LABEL_FORMATTING);
-      if (options.streamFormatter && options.sseStreamRes) {
-        const fmtStart = Date.now();
-        formattedForUi = await formatOutputStreaming(
-          message,
-          combinedRawText,
-          options.sseStreamRes,
-          usageMeta,
-        );
-        if (requestId) rex.formatterFinished(requestId, Date.now() - fmtStart);
-      } else {
-        formattedForUi = await formatOutput(message, combinedRawText, usageMeta);
-      }
-    } else if (options.streamFormatter) {
-      if (combinedRawText) sse({ type: 'text', content: combinedRawText });
+    // Primary LLM owns presentation (no OutputFormatter). Text already streamed
+    // when _streamAssistantText was set.
+    let formattedForUi = result.rawText || '';
+    const alreadyStreamed = Boolean(options.streamAssistantText ?? options.streamFormatter);
+    if (!alreadyStreamed && options.streamFormatter && formattedForUi) {
+      sse({ type: 'text', content: formattedForUi });
     }
 
     if (workflowTree && !/<workflow[\s>]/i.test(formattedForUi || '')) {
@@ -669,7 +654,7 @@ export async function runCoworkerTurn({
       conversation_id: convId,
       priorMessages,
       message,
-      assistantContent: formattedForUi || combinedRawText,
+      assistantContent: formattedForUi,
       toolsUsed: allToolsUsed,
       conversation_summary: convState.conversation_summary,
       summary_through_turn: convState.summary_through_turn,
@@ -740,8 +725,8 @@ export async function runCoworkerTurn({
     return {
       conversation_id: convId,
       type: 'orchestrator',
-      response: combinedRawText,
-      formattedText: formattedForUi || combinedRawText,
+      response: formattedForUi,
+      formattedText: formattedForUi,
       plan: executionPlan || undefined,
       toolsUsed: allToolsUsed,
       agents: ['nova'],
@@ -895,6 +880,7 @@ export async function runCoworkerTurn({
         {
           _rexRequestId: requestId,
           _conversationContext: chainedContext || contextPrompt,
+          _streamAssistantText: Boolean(options.streamAssistantText ?? options.streamFormatter),
           ...specialistRunContext,
         },
         sse,
@@ -990,19 +976,12 @@ export async function runCoworkerTurn({
     combinedRawText = runResult.combinedRawText || combinedRawText;
   }
 
-  setStatus(STATUS_LABEL_FORMATTING);
+  // Primary LLM owns presentation (no OutputFormatter). Text streams from BaseAgent
+  // when streamAssistantText / streamFormatter is set.
   let formattedForUi = combinedRawText;
-  if (options.streamFormatter && options.sseStreamRes) {
-    const fmtStart = Date.now();
-    formattedForUi = await formatOutputStreaming(
-      message,
-      combinedRawText,
-      options.sseStreamRes,
-      usageMeta,
-    );
-    if (requestId) rex.formatterFinished(requestId, Date.now() - fmtStart);
-  } else if (options.formatOutput !== false) {
-    formattedForUi = await formatOutput(message, combinedRawText, usageMeta);
+  const alreadyStreamed = Boolean(options.streamAssistantText ?? options.streamFormatter);
+  if (!alreadyStreamed && options.streamFormatter && formattedForUi) {
+    sse({ type: 'text', content: formattedForUi });
   }
 
   // Deterministic <workflow> embedding: the React Flow tree renders from this
@@ -1012,7 +991,7 @@ export async function runCoworkerTurn({
     if (treeJson.length <= 60000) {
       const workflowXml = `\n\n<workflow>${treeJson}</workflow>`;
       formattedForUi = `${formattedForUi || ''}${workflowXml}`;
-      if (options.streamFormatter && options.sseStreamRes) {
+      if (alreadyStreamed || options.streamFormatter) {
         sse({ type: 'text', content: workflowXml });
       }
     }
@@ -1024,7 +1003,7 @@ export async function runCoworkerTurn({
     conversation_id: convId,
     priorMessages,
     message,
-    assistantContent: formattedForUi || combinedRawText,
+    assistantContent: formattedForUi,
     toolsUsed: allToolsUsed,
     conversation_summary: convState.conversation_summary,
     summary_through_turn: convState.summary_through_turn,

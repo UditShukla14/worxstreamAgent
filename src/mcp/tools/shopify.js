@@ -12,8 +12,75 @@ import { callWorxstreamAPI, normalizeFilter } from '../../services/httpClient.js
 import { getWorxstreamContext } from '../../config/index.js';
 import { getMaxListPageSize } from '../../nova/agents/policies/listPolicies.js';
 
-function asText(result) {
-  return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+function asText(result, { pretty = false } = {}) {
+  return {
+    content: [{
+      type: 'text',
+      text: pretty ? JSON.stringify(result, null, 2) : JSON.stringify(result),
+    }],
+  };
+}
+
+function moneyLabel(value) {
+  if (value == null || value === '') return null;
+  if (typeof value === 'number' || typeof value === 'string') return String(value);
+  if (typeof value === 'object') {
+    const shop = value.shopMoney || value.presentmentMoney || value;
+    if (shop?.amount != null) {
+      const amount = String(shop.amount);
+      return shop.currencyCode ? `${amount} ${shop.currencyCode}` : amount;
+    }
+  }
+  return null;
+}
+
+function customerLabel(row) {
+  if (!row || typeof row !== 'object') return null;
+  const c = row.customer || row.customerInfo || row.customer_info;
+  if (typeof c === 'string' && c.trim()) return c.trim();
+  if (c && typeof c === 'object') {
+    const name = c.displayName || c.name
+      || [c.firstName || c.first_name, c.lastName || c.last_name].filter(Boolean).join(' ');
+    if (name) return String(name);
+    if (c.email) return String(c.email);
+  }
+  return row.email || row.customerEmail || row.customer_email || null;
+}
+
+/** List rows for the agent — columns only (no rowJson / addresses / line items). */
+function compactShopifyOrderListRow(row) {
+  if (!row || typeof row !== 'object') return row;
+  return {
+    id: row.id ?? null,
+    name: row.name || row.orderName || row.order_name || null,
+    created_at: row.createdAtShopify || row.created_at_shopify || row.createdAt || row.created_at || null,
+    customer: customerLabel(row),
+    email: row.email || row.customerEmail || row.customer_email || row.customer?.email || null,
+    total: moneyLabel(row.totalPriceSet || row.currentTotalPriceSet)
+      || (row.totalPrice != null ? String(row.totalPrice) : null)
+      || (row.total_price != null ? String(row.total_price) : null),
+    payment_status: row.displayFinancialStatus || row.financialStatus || row.financial_status || null,
+    fulfillment_status: row.displayFulfillmentStatus || row.fulfillmentStatus || row.fulfillment_status || null,
+    risk_level: row.riskLevel || row.risk_level || null,
+    tags: Array.isArray(row.tags) ? row.tags : (typeof row.tags === 'string' ? row.tags : null),
+  };
+}
+
+function mapListRows(result, rowMapper) {
+  if (!result?.success || !result?.data || typeof result.data !== 'object' || typeof rowMapper !== 'function') {
+    return result;
+  }
+  const apiBody = result.data;
+  const listPayload = apiBody?.data && typeof apiBody.data === 'object' ? apiBody.data : apiBody;
+  if (!Array.isArray(listPayload?.data)) return result;
+
+  const compactRows = listPayload.data.map(rowMapper);
+  const enriched = { ...listPayload, data: compactRows };
+
+  if (apiBody?.data && typeof apiBody.data === 'object' && !Array.isArray(apiBody.data)) {
+    return { ...result, data: { ...apiBody, data: enriched } };
+  }
+  return { ...result, data: enriched };
 }
 
 function attachListPagination(result, effectivePage, effectiveLimit) {
@@ -104,7 +171,8 @@ export function registerShopifyTools() {
       title: 'List Shopify Orders',
       description:
         'List one page of Shopify orders from the DB-backed Sales Channel list (default page=1, limit=25, hard-capped). '
-        + 'Returns pagination.has_more and pagination.next_page — call again for more. Never dump the full tenant set. '
+        + 'Returns compact list columns only (id, name, created_at, customer, total, payment/fulfillment status, tags) '
+        + 'plus pagination.total / returned / has_more / next_page. Call again for more pages — never dump the full tenant set. '
         + 'filter.search is text only. Optional risk_level, tags, and filter.advance for date ranges. '
         + 'Use database row id (not Shopify GID) with get_shopify_order_details / create_shopify_document.',
       inputSchema: {
@@ -146,7 +214,12 @@ export function registerShopifyTools() {
         },
       });
 
-      return asText(attachListPagination(result, effectivePage, effectiveLimit));
+      return asText(
+        mapListRows(
+          attachListPagination(result, effectivePage, effectiveLimit),
+          compactShopifyOrderListRow,
+        ),
+      );
     }
   );
 

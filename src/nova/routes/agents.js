@@ -304,7 +304,8 @@ router.post('/stream', async (req, res) => {
       sse,
       requestId,
       options: {
-        streamFormatter: true,
+        streamAssistantText: true,
+        streamFormatter: true, // alias — streams primary LLM answer (no OutputFormatter)
         sseStreamRes: res,
       },
     });
@@ -338,7 +339,7 @@ router.post('/route', async (req, res) => {
       company_id: tenant.company_id,
       user_id: tenant.user_id,
       conversation_id,
-      options: { streamFormatter: false, formatOutput: true },
+      options: { streamAssistantText: false, streamFormatter: false },
     });
 
     res.json({

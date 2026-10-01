@@ -9,7 +9,7 @@
  */
 
 import { config } from '../../config/index.js';
-import { createMessage } from '../../llm/client.js';
+import { createMessage, streamMessage } from '../../llm/client.js';
 import { usageMetaFromContext } from '../../analytics/usageMeta.js';
 import { getAnthropicTools, executeMcpTool } from '../../mcp/server.js';
 import { rex } from './AgentTracker.js';
@@ -28,6 +28,7 @@ import {
 } from './pendingConfirm.js';
 import { COWORKER_SHARED_RULES, stripDuplicatedSharedRules } from './coworkerRules.js';
 import { extractTurnAgentTranscript } from './agentTranscript.js';
+import { createDeltaCoalesceBuffer } from './streamSectionBuffer.js';
 
 const MAX_TOOL_ITERATIONS = Number.isFinite(config.agentRuntime?.maxToolIterations)
   ? config.agentRuntime.maxToolIterations
@@ -245,13 +246,15 @@ export class BaseAgent {
   }
 
   /**
-   * Run the agent with SSE progress events for tool calls, then return
-   * the raw text output. The caller is responsible for formatting and
-   * streaming the final text to the client (via the OutputFormatter).
+   * Run the agent with SSE progress events for tool calls.
+   * When context._streamAssistantText is true, final answer tokens stream to
+   * the client via onEvent({ type: 'text', content }) — no OutputFormatter.
    *
    * Emits during the tool loop:
    *   { type: 'tool_use',    tool, input }
    *   { type: 'tool_result', tool, success }
+   * And when streaming the assistant answer:
+   *   { type: 'text', content }
    *
    * @param {string} message
    * @param {object} context
@@ -330,13 +333,42 @@ export class BaseAgent {
           params.tool_choice = { type: 'auto' };
         }
 
-        // Rotate Claude-style keywords over SSE while waiting on non-streaming LLM.
+        // Rotate Claude-style keywords over SSE while waiting on the LLM.
+        // Stop keyword rotation as soon as assistant text starts streaming.
         const stopKeywords = startActivityKeywordRotation(onEvent);
+        const streamText = Boolean(context._streamAssistantText);
+        let keywordsStopped = false;
+        const stopKeywordsOnce = () => {
+          if (keywordsStopped) return;
+          keywordsStopped = true;
+          stopKeywords();
+        };
+        const deltaBuf = streamText
+          ? createDeltaCoalesceBuffer((chunk) => {
+            if (!chunk) return;
+            stopKeywordsOnce();
+            onEvent({ type: 'text', content: chunk });
+          }, { maxDelayMs: 40, maxChars: 96 })
+          : null;
+
         let response;
         try {
-          response = await createMessage(params, this._usageMeta(context));
+          if (streamText) {
+            const { message: streamed } = await streamMessage(
+              params,
+              this._usageMeta(context),
+              (delta) => {
+                if (delta) deltaBuf.push(delta);
+              },
+            );
+            response = streamed;
+            deltaBuf.flush();
+          } else {
+            response = await createMessage(params, this._usageMeta(context));
+          }
         } finally {
-          stopKeywords();
+          stopKeywordsOnce();
+          if (deltaBuf) deltaBuf.flush();
         }
 
         if (response.usage) {
