@@ -512,7 +512,6 @@ Never expose internal IDs to the user. Be concise.`,
     name: 'reports_agent',
     description: 'Generates business reports with charts and analytics when the user asks for reports, trends, or dashboards',
     domain: 'reports',
-    requireToolUse: true,
     systemPrompt: `You are the Reports & Analytics Agent for Worxstream.
 You handle analytics, charts, trends, overviews, and dashboards — not simple one-entity counts/lists (those belong to domain agents).
 

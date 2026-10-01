@@ -11,6 +11,7 @@ import { createMessage, getResponseText } from '../../llm/client.js';
 import { BaseAgent } from './BaseAgent.js';
 import { AGENT_DEFINITIONS, getAgentKeys, getAgentDescriptionsForRouter } from './agentDefinitions.js';
 import { buildOrchestratorMessages, logContextUsage } from '../../utils/conversationHistory.js';
+import { detectDomainAgentKeys, isAffirmativeFollowUp } from './intentPolicy.js';
 
 // ── Singleton agent instances ────────────────────────────────────────
 const agentInstances = new Map();
@@ -39,6 +40,7 @@ ${getAgentDescriptionsForRouter()}
 
 Decide from meaning and context (not keyword lists):
 - Greetings / thanks / chit-chat with no task → ["none"]
+- General explanations/how-to questions may route to the relevant specialist, but live company data and actions must never route to "none".
 - Pick the minimum specialist set whose domains cover the ask. Prefer a single entity agent for simple reads/counts/filters on that entity.
 - Use "reports" only when the user clearly wants analytics, charts, trends, overview, or a report — not for a simple count or list of one entity.
 - customer vs contact: organizations/accounts → customer; people/leads → contact.
@@ -49,10 +51,6 @@ Decide from meaning and context (not keyword lists):
 
 /** Recent turns to include when classifying — enough for follow-up references. */
 const ROUTER_HISTORY_MESSAGES = 6;
-
-const FORECAST_REPORT_RE = /\bforecast(?:ing)?\b|\bpredict(?:ive|ion|ed)?\b|\boutlook\b|\bdemand planning\b|\bstock(?:ing)? plan\b|\breorder plan\b/i;
-const REPORT_FOLLOW_UP_RE = /\bforecast\b|\breport\b|\banalysis\b|\boutlook\b|\bpurchase history\b|\binvoice history\b/i;
-const AFFIRMATIVE_RE = /^(yes|yep|yeah|ok|okay|sure|please do|go ahead|do it|pull it|run it)[.!\s]*$/i;
 
 function contentText(content) {
   if (typeof content === 'string') return content;
@@ -70,17 +68,31 @@ function contentText(content) {
  */
 export function detectDeterministicAgentKeys(message, priorMessages = []) {
   const text = String(message || '').trim();
-  if (FORECAST_REPORT_RE.test(text)) return ['reports'];
+  const direct = normalizeDeterministicRoute(detectDomainAgentKeys(text));
+  if (direct.length > 0) return direct;
 
-  if (AFFIRMATIVE_RE.test(text)) {
-    const lastAssistant = [...(priorMessages || [])]
-      .reverse()
-      .find((item) => item?.role === 'assistant');
-    if (lastAssistant && REPORT_FOLLOW_UP_RE.test(contentText(lastAssistant.content))) {
-      return ['reports'];
-    }
+  if (isAffirmativeFollowUp(text)) {
+    const recentIntent = [...(priorMessages || [])]
+      .filter((item) => item?.role === 'user' || item?.role === 'assistant')
+      .slice(-4)
+      .map((item) => contentText(item.content))
+      .join('\n');
+    const followUp = normalizeDeterministicRoute(detectDomainAgentKeys(recentIntent));
+    if (followUp.length > 0) return followUp;
   }
   return null;
+}
+
+function normalizeDeterministicRoute(keys) {
+  const unique = [...new Set(keys || [])];
+  if (unique.includes('reports')) return ['reports'];
+  if (unique.includes('priceComparison')) return ['priceComparison'];
+
+  // Transaction specialists already receive universal lookup tools, so an
+  // entity word such as "customer" should not create a redundant second agent.
+  const lookupDomains = new Set(['customer', 'contact', 'product', 'vendor', 'company', 'address']);
+  const primary = unique.filter((key) => !lookupDomains.has(key));
+  return (primary.length > 0 ? primary : unique).slice(0, 3);
 }
 
 /** Haiku often wraps JSON in markdown fences — strip them before parsing. */

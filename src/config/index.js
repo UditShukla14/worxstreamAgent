@@ -207,7 +207,7 @@ export const config = {
      * Max MCP tool schemas per turn after LLM tool-search. Full catalog
      * (~260 tools) exceeds gpt-oss 65k context. Default 40.
      */
-    maxToolsPerTurn: parseInt(process.env.COWORKER_MAX_TOOLS_PER_TURN || '40', 10),
+    maxToolsPerTurn: parseInt(process.env.COWORKER_MAX_TOOLS_PER_TURN || '16', 10),
   },
   /** Telnyx Messaging — used by MCP SMS tools (draft_sms / send_sms). Server-only. */
   telnyx: {

@@ -52,4 +52,19 @@ describe('selectToolsForTurn (keyword fallback)', () => {
     assert.ok(!names.includes('resolve_entity'), 'Goodman must not be forced into customer resolution');
     assert.ok(!names.includes('draft_sms'), 'forecast selection must not be padded with unrelated tools');
   });
+
+  it('prefers the matching operation and caps the callable surface', () => {
+    const largeCatalog = [
+      ...CATALOG,
+      ...Array.from({ length: 30 }, (_, index) => ({
+        name: `unrelated_tool_${index}`,
+        description: `Unrelated operation ${index}`,
+      })),
+    ];
+    const names = selectToolsForTurn(largeCatalog, 'show my recent invoices', { maxTools: 40 })
+      .map((tool) => tool.name);
+    assert.equal(names[0], 'list_invoices');
+    assert.ok(names.length <= 20);
+    assert.ok(!names.includes('draft_sms'));
+  });
 });

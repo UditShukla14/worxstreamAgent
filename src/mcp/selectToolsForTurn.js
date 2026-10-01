@@ -12,7 +12,10 @@
 import { config } from '../config/index.js';
 import { createMessage, getResponseText } from '../llm/client.js';
 
-const DEFAULT_MAX = 40;
+// Keep the callable surface small enough for reliable selection across hosted
+// models. Callers can override this, but the default follows the <20 guidance.
+const DEFAULT_MAX = 16;
+const HARD_MAX = 20;
 const STOP_TOKENS = new Set([
   'a', 'an', 'and', 'for', 'from', 'give', 'in', 'last', 'me', 'my', 'need',
   'of', 'on', 'or', 'please', 'that', 'the', 'this', 'to', 'want', 'with',
@@ -39,19 +42,47 @@ function tokenize(text) {
     .filter((t) => t.length > 1 && !STOP_TOKENS.has(t));
 }
 
+function normalizeMaxTools(value) {
+  const requested = Number.isFinite(value) ? value : DEFAULT_MAX;
+  return Math.min(HARD_MAX, Math.max(4, requested));
+}
+
 /**
  * @param {string} query
- * @returns {{ wantsReport: boolean, wantsForecast: boolean, entityHints: string[] }}
+ * @returns {{ wantsReport: boolean, wantsForecast: boolean, operationHints: string[], entityHints: string[] }}
  */
 export function detectToolIntent(query) {
   const q = String(query || '').toLowerCase();
   const wantsForecast = /\bforecast(?:ing)?\b|\bpredict(?:ive|ion|ed)?\b|\boutlook\b|\bdemand planning\b|\bstock(?:ing)? plan\b|\breorder plan\b/.test(q);
   const wantsReport = wantsForecast
     || /\breports?\b|\banalytics\b|\bdashboard\b|\boverview\b|\btrends?\b|\bkpis?\b|\bbreakdown\b/.test(q);
+  const operationHints = [];
+  if (/\blist\b|\bshow\b|\bfind\b|\bsearch\b|\brecent\b|\blatest\b/.test(q)) operationHints.push('list');
+  if (/\bcreate\b|\badd\b|\bnew\b/.test(q)) operationHints.push('create');
+  if (/\bupdate\b|\bedit\b|\bchange\b|\bmark\b|\bassign\b/.test(q)) operationHints.push('update');
+  if (/\bdelete\b|\bremove\b|\bcancel\b|\barchive\b/.test(q)) operationHints.push('delete');
+  if (/\bsend\b|\bemail\b|\btext\b|\bdraft\b/.test(q)) operationHints.push('send');
+  if (/\bdetails?\b|\bget\b|\bview\b|\bopen\b/.test(q)) operationHints.push('get');
   const entityHints = [];
+  if (/\bcredit memos?\b/.test(q)) entityHints.push('credit_memo');
+  if (/\bpurchase orders?\b|\bp\.??o\.??s?\b/.test(q)) entityHints.push('purchase_order');
+  if (/\bsales orders?\b/.test(q)) entityHints.push('sales_order');
   if (/\bestimates?\b|\bquotes?\b/.test(q)) entityHints.push('estimate');
   if (/\binvoices?\b/.test(q)) entityHints.push('invoice');
+  if (/\bbills?\b/.test(q)) entityHints.push('bill');
   if (/\bcustomers?\b|\bclients?\b/.test(q)) entityHints.push('customer');
+  if (/\bcontacts?\b|\bleads?\b/.test(q)) entityHints.push('contact');
+  if (/\bproducts?\b|\bskus?\b|\bservices?\b/.test(q)) entityHints.push('product');
+  if (/\binventory\b|\bstock\b|\bwarehouses?\b/.test(q)) entityHints.push('inventory');
+  if (/\bvendors?\b|\bsuppliers?\b/.test(q)) entityHints.push('vendor');
+  if (/\bjobs?\b/.test(q)) entityHints.push('job');
+  if (/\btasks?\b|\bto-?dos?\b/.test(q)) entityHints.push('task');
+  if (/\bprojects?\b/.test(q)) entityHints.push('project');
+  if (/\bemployees?\b|\bpayroll\b|\bhr\b/.test(q)) entityHints.push('employee');
+  if (/\bpayments?\b/.test(q)) entityHints.push('payment');
+  if (/\bworkflows?\b/.test(q)) entityHints.push('workflow');
+  if (/\bcompan(?:y|ies)\b|\bbranches?\b/.test(q)) entityHints.push('company');
+  if (/\baddresses?\b/.test(q)) entityHints.push('address');
   if (/\bsms\b|\btext\b|\bmessage\b/.test(q)) entityHints.push('sms');
   if (/\bshopify\b/.test(q)) entityHints.push('shopify');
   if (/\bcalls?\b|\bvoice\b/.test(q)) entityHints.push('call');
@@ -59,7 +90,7 @@ export function detectToolIntent(query) {
   // A demand forecast is grounded in completed sales/invoice history unless
   // the user explicitly requests estimates as an additional signal.
   if (wantsForecast && !entityHints.includes('invoice')) entityHints.push('invoice');
-  return { wantsReport, wantsForecast, entityHints };
+  return { wantsReport, wantsForecast, operationHints, entityHints };
 }
 
 function requiredToolsForIntent(intent, byName) {
@@ -97,13 +128,13 @@ export function buildToolCatalogText(tools) {
  * Keyword fallback when the picker LLM fails.
  * @param {Array<{ name: string, description?: string, title?: string }>} tools
  * @param {string} queryText
- * @param {{ maxTools?: number }} [opts]
+ * @param {{ maxTools?: number, allowUnscoredFallback?: boolean }} [opts]
  */
 export function selectToolsForTurn(tools, queryText, opts = {}) {
   const list = Array.isArray(tools) ? tools : [];
   if (list.length === 0) return [];
 
-  const maxTools = Math.max(8, Number.isFinite(opts.maxTools) ? opts.maxTools : DEFAULT_MAX);
+  const maxTools = normalizeMaxTools(opts.maxTools);
   const intent = detectToolIntent(queryText);
   const queryTokens = tokenize(queryText);
   const byName = new Map(list.map((t) => [t.name, t]));
@@ -133,6 +164,10 @@ export function selectToolsForTurn(tools, queryText, opts = {}) {
       if (nameLc.includes(entity)) score += 6;
       if (intent.wantsReport && nameLc === `generate_${entity}_report`) score += 30;
     }
+    for (const operation of intent.operationHints) {
+      if (nameLc.startsWith(`${operation}_`) || nameLc.includes(`_${operation}_`)) score += 18;
+      if (operation === 'list' && nameLc.startsWith('generate_') && nameLc.includes('_report')) score -= 15;
+    }
     return score;
   };
 
@@ -150,7 +185,7 @@ export function selectToolsForTurn(tools, queryText, opts = {}) {
 
   // Truly unclassified requests still need a small candidate set. Do not pad
   // a recognized intent with unrelated zero-score schemas.
-  if (selected.size === 0) {
+  if (selected.size === 0 && opts.allowUnscoredFallback !== false) {
     for (const { tool } of scored.slice(0, Math.min(8, maxTools))) selected.add(tool.name);
   }
 
@@ -171,7 +206,7 @@ export function selectToolsForTurn(tools, queryText, opts = {}) {
  */
 export async function selectToolsViaLlm(catalog, queryText, opts = {}) {
   const list = Array.isArray(catalog) ? catalog : [];
-  const maxTools = Math.max(8, Number.isFinite(opts.maxTools) ? opts.maxTools : DEFAULT_MAX);
+  const maxTools = normalizeMaxTools(opts.maxTools);
   const validNames = new Set(list.map((t) => t.name));
   const byName = new Map(list.map((t) => [t.name, t]));
 
@@ -183,6 +218,7 @@ Given the user request and the tool catalog, return ONLY a JSON array of tool na
 
 Rules:
 - Pick the minimum set that can fulfill the request (typically 3–12 names, max ${maxTools}).
+- Any request for live Worxstream data or an action must select the functions needed to read or perform it. Explanations and general knowledge do not need functions.
 - Prefer generate_estimate_report / generate_invoice_report for report/analytics/overview/dashboard asks — NOT list_estimates / list_invoices.
 - Forecast/predictive/outlook/demand-planning asks are reports. Ground them in generate_invoice_report with line_items=true; add generate_estimate_report only when estimates are explicitly requested.
 - A product brand or manufacturer (for example Goodman) is not a customer lookup. Do not select resolve_entity unless the request explicitly identifies a customer/account/client.
@@ -222,6 +258,18 @@ ${catalogText}`;
 
     const selected = new Set();
     for (const name of requiredToolsForIntent(intent, byName)) selected.add(name);
+
+    // Merge deterministic name/description matches before the model's picks.
+    // This prevents provider-specific omissions while keeping the final surface
+    // constrained to this turn's intent.
+    const deterministic = selectToolsForTurn(list, queryText, {
+      maxTools: Math.min(8, maxTools),
+      allowUnscoredFallback: false,
+    });
+    for (const tool of deterministic) {
+      if (selected.size >= maxTools) break;
+      selected.add(tool.name);
+    }
 
     for (const item of names) {
       if (selected.size >= maxTools) break;
