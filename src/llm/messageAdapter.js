@@ -1,9 +1,19 @@
 /**
  * Convert between Anthropic-shaped agent messages/tools (used in BaseAgent,
  * transcripts) and OpenAI chat.completions payloads (vLLM / gpt-oss).
+ *
+ * Anthropic contract preserved for callers:
+ * - content blocks: text | tool_use | tool_result
+ * - tool_result may include is_error
+ * - stop_reason: tool_use | end_turn | max_tokens
+ * - tools use input_schema (mapped to OpenAI parameters)
  */
 
 import { randomUUID } from 'crypto';
+import {
+  validateMessagePairs,
+  removeOrphanedToolResults,
+} from '../utils/validateMessages.js';
 
 /** Anthropic-native tool search — not supported on OpenAI-compatible backends. */
 const ANTHROPIC_ONLY_TOOL_NAMES = new Set([
@@ -11,6 +21,30 @@ const ANTHROPIC_ONLY_TOOL_NAMES = new Set([
   'tool_search_tool_bm25_20251119',
   'tool_search_tool_regex',
 ]);
+
+/**
+ * Flatten Anthropic / OpenAI message content to plain text (ignores reasoning).
+ * @param {unknown} content
+ * @returns {string}
+ */
+export function contentToText(content) {
+  if (content == null) return '';
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((b) => {
+        if (typeof b === 'string') return b;
+        if (!b || typeof b !== 'object') return '';
+        if (b.type === 'reasoning' || b.type === 'thinking') return '';
+        if (b.type === 'text') return String(b.text || '');
+        if (typeof b.text === 'string' && !b.type) return b.text;
+        return '';
+      })
+      .filter(Boolean)
+      .join('');
+  }
+  return String(content);
+}
 
 /**
  * @param {Array<{ name: string, description?: string, input_schema?: object, defer_loading?: boolean }>|undefined} tools
@@ -60,37 +94,18 @@ export function toOpenAIToolChoice(toolChoice) {
 }
 
 /**
- * Flatten Anthropic content blocks / OpenAI content to a string when needed.
- * @param {unknown} content
- */
-function contentToText(content) {
-  if (content == null) return '';
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((b) => {
-        if (!b || typeof b !== 'object') return '';
-        if (b.type === 'text') return String(b.text || '');
-        return '';
-      })
-      .filter(Boolean)
-      .join('\n');
-  }
-  return String(content);
-}
-
-/**
  * @param {string|undefined} system
  * @param {Array<{ role: string, content: unknown }>|undefined} messages
  * @returns {Array<{ role: string, content?: string|null, tool_calls?: object[], tool_call_id?: string }>}
  */
 export function toOpenAIMessages(system, messages) {
+  const cleaned = removeOrphanedToolResults(validateMessagePairs(messages || []));
   const out = [];
   if (system && String(system).trim()) {
     out.push({ role: 'system', content: String(system) });
   }
 
-  for (const msg of messages || []) {
+  for (const msg of cleaned) {
     if (!msg || !msg.role) continue;
     const role = msg.role;
     const content = msg.content;
@@ -115,10 +130,14 @@ export function toOpenAIMessages(system, messages) {
               typeof tr.content === 'string'
                 ? tr.content
                 : JSON.stringify(tr.content ?? '');
+            // Anthropic is_error → still a tool role message; encode error in content.
+            const payload = tr.is_error
+              ? (body.startsWith('{') ? body : JSON.stringify({ error: body, is_error: true }))
+              : body;
             out.push({
               role: 'tool',
               tool_call_id: String(tr.tool_use_id || ''),
-              content: body,
+              content: payload,
             });
           }
           const text = texts.map((t) => t.text || '').filter(Boolean).join('\n');
@@ -196,8 +215,9 @@ export function fromOpenAICompletion(completion) {
   const message = choice?.message || {};
   const content = [];
 
-  if (message.content) {
-    content.push({ type: 'text', text: String(message.content) });
+  const text = contentToText(message.content);
+  if (text) {
+    content.push({ type: 'text', text });
   }
 
   const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
@@ -245,6 +265,7 @@ export function fromOpenAICompletion(completion) {
 
 /**
  * Build OpenAI chat.completions body from Anthropic-shaped agent params.
+ * Validates tool_use / tool_result pairs (Anthropic rules) before conversion.
  * @param {object} params
  * @param {string} defaultModel
  */

@@ -21,6 +21,10 @@ export {
   STATUS_LABEL_THINKING,
   STATUS_LABEL_FORMATTING,
 } from './agentDefinitions.js';
+export {
+  ACTIVITY_KEYWORDS,
+  startActivityKeywordRotation,
+} from './activityKeywords.js';
 export { BaseAgent } from './BaseAgent.js';
 export { formatOutput, formatOutputStreaming } from './OutputFormatter.js';
 export {

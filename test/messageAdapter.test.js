@@ -97,6 +97,47 @@ describe('messageAdapter', () => {
     assert.equal(msg.usage.input_tokens, 10);
   });
 
+  it('maps OpenAI array content parts to Anthropic text blocks', () => {
+    const msg = fromOpenAICompletion({
+      id: 'chatcmpl-2',
+      choices: [
+        {
+          finish_reason: 'stop',
+          message: {
+            role: 'assistant',
+            content: [
+              { type: 'text', text: 'Hello ' },
+              { type: 'text', text: 'world' },
+            ],
+          },
+        },
+      ],
+      usage: { prompt_tokens: 1, completion_tokens: 2 },
+    });
+    assert.equal(msg.stop_reason, 'end_turn');
+    assert.equal(msg.content[0].type, 'text');
+    assert.equal(msg.content[0].text, 'Hello world');
+  });
+
+  it('drops orphaned tool_result blocks before OpenAI conversion', () => {
+    const messages = toOpenAIMessages(undefined, [
+      { role: 'user', content: 'hi' },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'missing',
+            content: 'orphan',
+          },
+        ],
+      },
+    ]);
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].role, 'user');
+    assert.equal(messages[0].content, 'hi');
+  });
+
   it('builds chat body with model and tools', () => {
     const body = buildOpenAIChatBody(
       {

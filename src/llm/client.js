@@ -9,6 +9,7 @@ import { recordUsageAsync } from '../analytics/recordUsage.js';
 import {
   buildOpenAIChatBody,
   fromOpenAICompletion,
+  contentToText,
 } from './messageAdapter.js';
 
 /**
@@ -115,6 +116,12 @@ export async function streamMessage(params, meta = {}, onTextDelta = () => {}) {
   const decoder = new TextDecoder();
   let buffer = '';
 
+  const pushText = (piece) => {
+    if (!piece) return;
+    text += piece;
+    onTextDelta(piece);
+  };
+
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -144,9 +151,13 @@ export async function streamMessage(params, meta = {}, onTextDelta = () => {}) {
       if (!choice) continue;
       if (choice.finish_reason) finishReason = choice.finish_reason;
       const delta = choice.delta || {};
-      if (delta.content) {
-        text += delta.content;
-        onTextDelta(delta.content);
+      // Prefer delta.content; some backends only send choice.message on the final chunk.
+      const deltaText = contentToText(delta.content);
+      if (deltaText) {
+        pushText(deltaText);
+      } else if (!text && choice.message) {
+        const finalText = contentToText(choice.message.content);
+        if (finalText) pushText(finalText);
       }
       if (Array.isArray(delta.tool_calls)) {
         for (const tc of delta.tool_calls) {

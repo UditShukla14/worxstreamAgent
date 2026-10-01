@@ -18,6 +18,7 @@ import { getToolIndex } from '../../mcp/toolIndex.js';
 import {
   normalizeListInput,
 } from './policies/listPolicies.js';
+import { startActivityKeywordRotation } from './activityKeywords.js';
 import { appendPlaybookToPrompt } from './playbooks.js';
 import {
   isWriteTool,
@@ -214,6 +215,7 @@ export class BaseAgent {
             type: 'tool_result',
             tool_use_id: block.id,
             content: JSON.stringify(result),
+            ...(result.success === false ? { is_error: true } : {}),
           });
         }
         messages.push({ role: 'user', content: toolResults });
@@ -328,7 +330,14 @@ export class BaseAgent {
           params.tool_choice = { type: 'auto' };
         }
 
-        const response = await createMessage(params, this._usageMeta(context));
+        // Rotate Claude-style keywords over SSE while waiting on non-streaming LLM.
+        const stopKeywords = startActivityKeywordRotation(onEvent);
+        let response;
+        try {
+          response = await createMessage(params, this._usageMeta(context));
+        } finally {
+          stopKeywords();
+        }
 
         if (response.usage) {
           totalInputTokens += response.usage.input_tokens || 0;
@@ -411,6 +420,7 @@ export class BaseAgent {
                 type: 'tool_result',
                 tool_use_id: block.id,
                 content: JSON.stringify(blocked),
+                is_error: true,
               });
               continue;
             }
@@ -444,6 +454,7 @@ export class BaseAgent {
               type: 'tool_result',
               tool_use_id: block.id,
               content: JSON.stringify(result),
+              ...(result.success === false ? { is_error: true } : {}),
             });
           }
           messages.push({ role: 'user', content: toolResults });

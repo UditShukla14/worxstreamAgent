@@ -176,7 +176,10 @@ export async function formatOutput(userMessage, rawOutput, usageMeta = {}) {
  * @returns {Promise<string>} Complete formatted XML/markdown string
  */
 export async function formatOutputStreaming(userMessage, rawOutput, res, usageMeta = {}) {
-  const sse = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+  const sse = (data) => {
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+    if (typeof res.flush === 'function') res.flush();
+  };
   const maxTokens = resolveFormatterMaxTokens(
     rawOutput,
     config.llm.maxTokens?.formatter ?? 16384,

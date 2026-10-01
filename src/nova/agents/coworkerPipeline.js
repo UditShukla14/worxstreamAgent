@@ -12,8 +12,8 @@ import {
   getStatusLabelForAgent,
   STATUS_LABEL_FORMATTING,
   STATUS_LABEL_PLANNING,
-  STATUS_LABEL_THINKING,
 } from './agentDefinitions.js';
+import { startActivityKeywordRotation } from './activityKeywords.js';
 import {
   formatExecutionPlanForPrompt,
   getExecutionPlan,
@@ -368,7 +368,14 @@ export async function runCoworkerTurn({
   };
 
   sse({ type: 'conversation_id', conversation_id: convId });
-  sse({ type: 'status', label: STATUS_LABEL_THINKING });
+  let stopActivityKeywords = startActivityKeywordRotation(sse);
+  const setStatus = (label) => {
+    if (stopActivityKeywords) {
+      stopActivityKeywords();
+      stopActivityKeywords = null;
+    }
+    if (label) sse({ type: 'status', label });
+  };
 
   // Pre-work runs in parallel: Mongo history, Redis context (after clarification pick),
   // and user preferences are independent of each other.
@@ -400,6 +407,10 @@ export async function runCoworkerTurn({
 
   const clarification = detectClarificationNeeded(redisCtx, message);
   if (clarification?.options?.length && !options.skipClarification) {
+    if (stopActivityKeywords) {
+      stopActivityKeywords();
+      stopActivityKeywords = null;
+    }
     sse({
       type: 'clarification',
       question: clarification.question,
@@ -453,7 +464,7 @@ export async function runCoworkerTurn({
           : '',
         'Continue without re-planning. Use prior tool results in conversation history. Ask only if truly ambiguous.',
       ].filter(Boolean).join('\n');
-      sse({ type: 'status', label: 'Continuing your request…' });
+      setStatus('Continuing your request…');
       sse({
         type: 'task_progress',
         status: 'resuming',
@@ -468,7 +479,7 @@ export async function runCoworkerTurn({
     }
 
     if (wantPlan) {
-      sse({ type: 'status', label: STATUS_LABEL_PLANNING });
+      setStatus(STATUS_LABEL_PLANNING);
       try {
         executionPlan = await getExecutionPlan({
           message,
@@ -483,6 +494,10 @@ export async function runCoworkerTurn({
 
       if (executionPlan?.mode === 'clarify' && executionPlan.ask) {
         const askText = executionPlan.ask;
+        if (stopActivityKeywords) {
+          stopActivityKeywords();
+          stopActivityKeywords = null;
+        }
         sse({ type: 'plan', plan: executionPlan });
         sse({ type: 'agent_selected', agent: 'nova' });
         if (options.streamFormatter) {
@@ -559,7 +574,11 @@ export async function runCoworkerTurn({
     };
 
     sse({ type: 'agent_selected', agent: 'nova' });
-    sse({ type: 'status', label: getStatusLabelForAgent('nova') || STATUS_LABEL_THINKING });
+    // Stop turn-level keywords; BaseAgent rotates during each createMessage wait.
+    if (stopActivityKeywords) {
+      stopActivityKeywords();
+      stopActivityKeywords = null;
+    }
 
     const allToolsUsed = [];
     let workflowTree = null;
@@ -576,6 +595,10 @@ export async function runCoworkerTurn({
     if (requestId) rex.agentFinished(requestId, nova.name, Date.now() - agentStart, result.usage ?? null);
 
     if (result.needsConfirmation) {
+      if (stopActivityKeywords) {
+        stopActivityKeywords();
+        stopActivityKeywords = null;
+      }
       sse({
         type: 'done',
         agent: 'nova',
@@ -612,7 +635,7 @@ export async function runCoworkerTurn({
     let formattedForUi = combinedRawText;
     const wantFormatter = options.formatOutput !== false;
     if (wantFormatter) {
-      sse({ type: 'status', label: STATUS_LABEL_FORMATTING });
+      setStatus(STATUS_LABEL_FORMATTING);
       if (options.streamFormatter && options.sseStreamRes) {
         const fmtStart = Date.now();
         formattedForUi = await formatOutputStreaming(
@@ -702,6 +725,10 @@ export async function runCoworkerTurn({
       });
     }
 
+    if (stopActivityKeywords) {
+      stopActivityKeywords();
+      stopActivityKeywords = null;
+    }
     sse({
       type: 'done',
       agent: 'nova',
@@ -861,7 +888,7 @@ export async function runCoworkerTurn({
       const agent = getAgentInstance(key);
       if (!agent) throw new Error(`Agent "${key}" not found`);
       sse({ type: 'agent_selected', agent: key });
-      sse({ type: 'status', label: getStatusLabelForAgent(key) });
+      setStatus(getStatusLabelForAgent(key));
       const agentStart = Date.now();
       const result = await agent.runWithEvents(
         msg,
@@ -963,7 +990,7 @@ export async function runCoworkerTurn({
     combinedRawText = runResult.combinedRawText || combinedRawText;
   }
 
-  sse({ type: 'status', label: STATUS_LABEL_FORMATTING });
+  setStatus(STATUS_LABEL_FORMATTING);
   let formattedForUi = combinedRawText;
   if (options.streamFormatter && options.sseStreamRes) {
     const fmtStart = Date.now();
