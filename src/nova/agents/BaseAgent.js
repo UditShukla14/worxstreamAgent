@@ -35,6 +35,7 @@ import {
 import { COWORKER_SHARED_RULES, stripDuplicatedSharedRules } from './coworkerRules.js';
 import { extractTurnAgentTranscript } from './agentTranscript.js';
 import { createDeltaCoalesceBuffer } from './streamSectionBuffer.js';
+import { buildToolSelectionHint, initialToolChoice } from './toolChoicePolicy.js';
 
 const MAX_TOOL_ITERATIONS = Number.isFinite(config.agentRuntime?.maxToolIterations)
   ? config.agentRuntime.maxToolIterations
@@ -97,6 +98,8 @@ export class BaseAgent {
       : definition.useToolSearch === false
         ? false
         : null;
+    /** Require company data before the first answer (used by report workflows). */
+    this.requireToolUse = definition.requireToolUse === true;
     const soul = getSoulSystemPrompt();
     const specialistPrompt = stripDuplicatedSharedRules(definition.systemPrompt || '');
     // Orchestrator Nova also gets shared rules (proportionality, dates, IDs).
@@ -200,9 +203,7 @@ export class BaseAgent {
    * @returns {Promise<AgentResult>}
    */
   async run(message, context = {}) {
-    const toolHint = [message, context._executionPlanText, context._planText]
-      .filter(Boolean)
-      .join('\n');
+    const toolHint = buildToolSelectionHint(message, context);
     const tools = await this.getTools(toolHint, this._usageMeta(context));
     const messages = this._buildInitialMessages(message, context);
 
@@ -225,7 +226,9 @@ export class BaseAgent {
 
       if (tools.length > 0) {
         params.tools = tools;
-        params.tool_choice = 'auto';
+        params.tool_choice = toolsUsed.length === 0
+          ? initialToolChoice(this.agentKey, tools, toolHint, this.requireToolUse)
+          : 'auto';
         params.parallel_tool_calls = false;
       }
 
@@ -306,9 +309,7 @@ export class BaseAgent {
    * @returns {Promise<{ rawText: string, toolsUsed: object[], toolResultPayloads: object[] }>}
    */
   async runWithEvents(message, context = {}, onEvent = () => {}) {
-    const toolHint = [message, context._executionPlanText, context._planText]
-      .filter(Boolean)
-      .join('\n');
+    const toolHint = buildToolSelectionHint(message, context);
     onEvent({ type: 'status', label: 'Selecting tools…' });
     const tools = await this.getTools(toolHint, this._usageMeta(context));
     const history = Array.isArray(context._conversationHistory)
@@ -377,7 +378,9 @@ export class BaseAgent {
         };
         if (tools.length > 0) {
           params.tools = tools;
-          params.tool_choice = 'auto';
+          params.tool_choice = toolsUsed.length === 0
+            ? initialToolChoice(this.agentKey, tools, toolHint, this.requireToolUse)
+            : 'auto';
           params.parallel_tool_calls = false;
         }
 

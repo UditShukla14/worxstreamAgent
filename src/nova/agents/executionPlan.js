@@ -25,7 +25,8 @@ Rules:
 - mode=direct: greetings, thanks, chitchat, or acknowledgements with no Worxstream work.
 - mode=clarify: critical info is missing AND cannot be resolved with lookup/list tools (true ambiguity of intent). Prefer execute when resolve_entity / list_* can find names→IDs. ask = one clear question.
 - mode=execute: any data lookup or action — steps are 1–8 short, ordered, tool-oriented actions (e.g. "Resolve customer Acme", "List their invoices page 1").
-- For report/analytics/overview asks: plan steps must use generate_estimate_report / generate_invoice_report (with date bounds), NOT list_estimates / list_invoices.
+- For report/analytics/overview/forecast/predictive/outlook asks: plan steps must use generate_estimate_report / generate_invoice_report (with date bounds), NOT list_estimates / list_invoices. Forecasts default to invoice history with line_items=true; add estimates only when the user requests them.
+- In product/SKU/stocking requests, treat brand/manufacturer names as product filters, not customer names.
 - Never invent IDs, amounts, or tool results.
 - Prefer the fewest steps that fulfill the request.
 - risk=send for SMS/email; write for create/update/delete; otherwise read.`;

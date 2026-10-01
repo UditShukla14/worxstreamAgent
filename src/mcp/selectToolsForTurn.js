@@ -12,14 +12,11 @@
 import { config } from '../config/index.js';
 import { createMessage, getResponseText } from '../llm/client.js';
 
-const ALWAYS_INCLUDE = [
-  'resolve_entity',
-  'draft_sms',
-  'send_sms',
-  'get_sms_status',
-];
-
 const DEFAULT_MAX = 40;
+const STOP_TOKENS = new Set([
+  'a', 'an', 'and', 'for', 'from', 'give', 'in', 'last', 'me', 'my', 'need',
+  'of', 'on', 'or', 'please', 'that', 'the', 'this', 'to', 'want', 'with',
+]);
 
 /**
  * @param {string} text
@@ -39,16 +36,18 @@ function tokenize(text) {
   return String(text || '')
     .toLowerCase()
     .split(/[^a-z0-9_]+/)
-    .filter((t) => t.length > 1);
+    .filter((t) => t.length > 1 && !STOP_TOKENS.has(t));
 }
 
 /**
  * @param {string} query
- * @returns {{ wantsReport: boolean, entityHints: string[] }}
+ * @returns {{ wantsReport: boolean, wantsForecast: boolean, entityHints: string[] }}
  */
 export function detectToolIntent(query) {
   const q = String(query || '').toLowerCase();
-  const wantsReport = /\breports?\b|\banalytics\b|\bdashboard\b|\boverview\b|\btrends?\b|\bkpis?\b|\bbreakdown\b/.test(q);
+  const wantsForecast = /\bforecast(?:ing)?\b|\bpredict(?:ive|ion|ed)?\b|\boutlook\b|\bdemand planning\b|\bstock(?:ing)? plan\b|\breorder plan\b/.test(q);
+  const wantsReport = wantsForecast
+    || /\breports?\b|\banalytics\b|\bdashboard\b|\boverview\b|\btrends?\b|\bkpis?\b|\bbreakdown\b/.test(q);
   const entityHints = [];
   if (/\bestimates?\b|\bquotes?\b/.test(q)) entityHints.push('estimate');
   if (/\binvoices?\b/.test(q)) entityHints.push('invoice');
@@ -57,7 +56,27 @@ export function detectToolIntent(query) {
   if (/\bshopify\b/.test(q)) entityHints.push('shopify');
   if (/\bcalls?\b|\bvoice\b/.test(q)) entityHints.push('call');
   if (/\bdeals?\b|\bpipeline\b/.test(q)) entityHints.push('deal');
-  return { wantsReport, entityHints };
+  // A demand forecast is grounded in completed sales/invoice history unless
+  // the user explicitly requests estimates as an additional signal.
+  if (wantsForecast && !entityHints.includes('invoice')) entityHints.push('invoice');
+  return { wantsReport, wantsForecast, entityHints };
+}
+
+function requiredToolsForIntent(intent, byName) {
+  const names = [];
+  if (intent.wantsReport && byName.has('get_report_filters')) names.push('get_report_filters');
+  if (intent.wantsReport && intent.entityHints.includes('estimate') && byName.has('generate_estimate_report')) {
+    names.push('generate_estimate_report');
+  }
+  if (intent.wantsReport && intent.entityHints.includes('invoice') && byName.has('generate_invoice_report')) {
+    names.push('generate_invoice_report');
+  }
+  if (intent.entityHints.includes('sms')) {
+    for (const name of ['draft_sms', 'send_sms', 'get_sms_status']) {
+      if (byName.has(name)) names.push(name);
+    }
+  }
+  return names;
 }
 
 /**
@@ -103,11 +122,17 @@ export function selectToolsForTurn(tools, queryText, opts = {}) {
       if (nameLc === 'get_report_filters') score += 12;
       if (/^list_(estimates|invoices)$/.test(nameLc)) score -= 20;
     }
+    if (
+      intent.wantsForecast
+      && !intent.entityHints.includes('estimate')
+      && nameLc.includes('estimate')
+    ) {
+      score -= 100;
+    }
     for (const entity of intent.entityHints) {
       if (nameLc.includes(entity)) score += 6;
       if (intent.wantsReport && nameLc === `generate_${entity}_report`) score += 30;
     }
-    if (ALWAYS_INCLUDE.includes(tool.name)) score += 3;
     return score;
   };
 
@@ -116,22 +141,17 @@ export function selectToolsForTurn(tools, queryText, opts = {}) {
     .sort((a, b) => b.score - a.score || a.tool.name.localeCompare(b.tool.name));
 
   const selected = new Set();
-  for (const name of ALWAYS_INCLUDE) {
-    if (byName.has(name)) selected.add(name);
-  }
-  if (intent.wantsReport) {
-    if (intent.entityHints.includes('estimate') && byName.has('generate_estimate_report')) {
-      selected.add('generate_estimate_report');
-    }
-    if (intent.entityHints.includes('invoice') && byName.has('generate_invoice_report')) {
-      selected.add('generate_invoice_report');
-    }
-    if (byName.has('get_report_filters')) selected.add('get_report_filters');
-  }
+  for (const name of requiredToolsForIntent(intent, byName)) selected.add(name);
   for (const { tool, score } of scored) {
     if (selected.size >= maxTools) break;
-    if (score <= 0 && selected.size >= Math.min(12, maxTools)) continue;
+    if (score <= 0) continue;
     selected.add(tool.name);
+  }
+
+  // Truly unclassified requests still need a small candidate set. Do not pad
+  // a recognized intent with unrelated zero-score schemas.
+  if (selected.size === 0) {
+    for (const { tool } of scored.slice(0, Math.min(8, maxTools))) selected.add(tool.name);
   }
 
   const ordered = [];
@@ -164,6 +184,8 @@ Given the user request and the tool catalog, return ONLY a JSON array of tool na
 Rules:
 - Pick the minimum set that can fulfill the request (typically 3–12 names, max ${maxTools}).
 - Prefer generate_estimate_report / generate_invoice_report for report/analytics/overview/dashboard asks — NOT list_estimates / list_invoices.
+- Forecast/predictive/outlook/demand-planning asks are reports. Ground them in generate_invoice_report with line_items=true; add generate_estimate_report only when estimates are explicitly requested.
+- A product brand or manufacturer (for example Goodman) is not a customer lookup. Do not select resolve_entity unless the request explicitly identifies a customer/account/client.
 - Prefer resolve_entity for name→ID lookups.
 - Include get_report_filters when report filters/statuses are unclear.
 - Only use names that appear in the catalog. No markdown fences. No commentary.
@@ -199,23 +221,16 @@ ${catalogText}`;
     }
 
     const selected = new Set();
-    for (const name of ALWAYS_INCLUDE) {
-      if (validNames.has(name)) selected.add(name);
-    }
-    if (intent.wantsReport && validNames.has('get_report_filters')) {
-      selected.add('get_report_filters');
-    }
-    if (intent.wantsReport && intent.entityHints.includes('estimate') && validNames.has('generate_estimate_report')) {
-      selected.add('generate_estimate_report');
-    }
-    if (intent.wantsReport && intent.entityHints.includes('invoice') && validNames.has('generate_invoice_report')) {
-      selected.add('generate_invoice_report');
-    }
+    for (const name of requiredToolsForIntent(intent, byName)) selected.add(name);
 
     for (const item of names) {
       if (selected.size >= maxTools) break;
       const name = String(item || '').trim();
       if (validNames.has(name)) selected.add(name);
+    }
+
+    if (intent.wantsForecast && !intent.entityHints.includes('customer')) {
+      selected.delete('resolve_entity');
     }
 
     // If LLM picked list_* for a report ask, force the generate_* report tool in

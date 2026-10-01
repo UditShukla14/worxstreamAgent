@@ -105,7 +105,7 @@ export function registerReportTools() {
     'generate_invoice_report',
     {
       title: 'Generate Invoice Report',
-      description: 'Generates a comprehensive invoice report with optional filtering and pagination. Includes totals, line items, payment information, and performance metrics.',
+      description: 'USE FOR invoice analytics, historical sales/purchases, product/SKU demand, and conservative forecasts. Requires from_date and to_date (YYYY-MM-DD). Set line_items=true for brand, SKU, product mix, demand, stocking, and forecast analysis. Supports pagination and optional search/filter fields.',
       inputSchema: {
         from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('Start date in YYYY-MM-DD format'),
         to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('End date in YYYY-MM-DD format'),

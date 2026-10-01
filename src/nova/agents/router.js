@@ -50,6 +50,39 @@ Decide from meaning and context (not keyword lists):
 /** Recent turns to include when classifying — enough for follow-up references. */
 const ROUTER_HISTORY_MESSAGES = 6;
 
+const FORECAST_REPORT_RE = /\bforecast(?:ing)?\b|\bpredict(?:ive|ion|ed)?\b|\boutlook\b|\bdemand planning\b|\bstock(?:ing)? plan\b|\breorder plan\b/i;
+const REPORT_FOLLOW_UP_RE = /\bforecast\b|\breport\b|\banalysis\b|\boutlook\b|\bpurchase history\b|\binvoice history\b/i;
+const AFFIRMATIVE_RE = /^(yes|yep|yeah|ok|okay|sure|please do|go ahead|do it|pull it|run it)[.!\s]*$/i;
+
+function contentText(content) {
+  if (typeof content === 'string') return content;
+  if (content == null) return '';
+  try {
+    return JSON.stringify(content);
+  } catch {
+    return String(content);
+  }
+}
+
+/**
+ * Stable high-value routing rules that should not vary across model providers.
+ * The LLM router still handles open-ended domain classification.
+ */
+export function detectDeterministicAgentKeys(message, priorMessages = []) {
+  const text = String(message || '').trim();
+  if (FORECAST_REPORT_RE.test(text)) return ['reports'];
+
+  if (AFFIRMATIVE_RE.test(text)) {
+    const lastAssistant = [...(priorMessages || [])]
+      .reverse()
+      .find((item) => item?.role === 'assistant');
+    if (lastAssistant && REPORT_FOLLOW_UP_RE.test(contentText(lastAssistant.content))) {
+      return ['reports'];
+    }
+  }
+  return null;
+}
+
 /** Haiku often wraps JSON in markdown fences — strip them before parsing. */
 function stripJsonCodeFence(text) {
   const t = String(text || '').trim();
@@ -70,6 +103,12 @@ function stripJsonCodeFence(text) {
  */
 export async function resolveAgentKeys(message, conversationContext = '', priorMessages = [], usageMeta = {}) {
   console.log(`\n🔀 Router analyzing: "${message.substring(0, 100)}${message.length > 100 ? '...' : ''}"`);
+
+  const deterministicKeys = detectDeterministicAgentKeys(message, priorMessages);
+  if (deterministicKeys) {
+    console.log(`🔀 Deterministic route: [${deterministicKeys.join(', ')}]`);
+    return { type: 'single', agentKeys: deterministicKeys, routerUsage: null };
+  }
 
   const userContent = conversationContext
     ? `${conversationContext}\n\nUser message: ${message}`

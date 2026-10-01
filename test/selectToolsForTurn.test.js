@@ -38,4 +38,18 @@ describe('selectToolsForTurn (keyword fallback)', () => {
     assert.ok(names.includes('get_report_filters') || names.includes('resolve_entity'));
     assert.ok(!names.includes('list_estimates') || names.indexOf('generate_estimate_report') < names.indexOf('list_estimates'));
   });
+
+  it('treats a conservative product outlook as an invoice-grounded forecast', () => {
+    const query = 'forecasting outlook for Goodman orders based on last year purchases Oct-Jan, conservative and consider holidays';
+    const intent = detectToolIntent(query);
+    assert.equal(intent.wantsForecast, true);
+    assert.equal(intent.wantsReport, true);
+    assert.ok(intent.entityHints.includes('invoice'));
+
+    const names = selectToolsForTurn(CATALOG, query, { maxTools: 12 }).map((tool) => tool.name);
+    assert.ok(names.includes('generate_invoice_report'));
+    assert.ok(!names.includes('generate_estimate_report'), 'estimates should only be added when requested');
+    assert.ok(!names.includes('resolve_entity'), 'Goodman must not be forced into customer resolution');
+    assert.ok(!names.includes('draft_sms'), 'forecast selection must not be padded with unrelated tools');
+  });
 });
