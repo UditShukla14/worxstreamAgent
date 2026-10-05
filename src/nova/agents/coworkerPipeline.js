@@ -225,7 +225,7 @@ const SELF_CHECK_MAX_CHARS = 4000;
 
 async function selfCheckCompletion(userMessage, rawText, usageMeta = {}) {
   const response = await createMessage({
-    model: config.anthropic.model,
+    model: config.anthropic.fastModel,
     max_tokens: 192,
     system: `You are a strict completion checker.\nReturn ONLY strict JSON: {"done": boolean, "next_instruction": string|null}.`,
     messages: [{ role: 'user', content: `User request:\n${userMessage}\n\nAgent raw output:\n${String(rawText || '').slice(0, SELF_CHECK_MAX_CHARS)}` }],
@@ -273,7 +273,7 @@ export async function getNovaPlan(message, conversationContext, routing, priorMe
     logContextUsage('Nova context', novaMessages, novaSystem);
 
     const response = await createMessage({
-      model: config.anthropic.model,
+      model: config.anthropic.fastModel,
       max_tokens: config.anthropic.maxTokens?.nova ?? 256,
       system: novaSystem,
       messages: novaMessages,
@@ -312,7 +312,7 @@ async function runGeneralChat({
     }, { maxDelayMs: 40, maxChars: 96 });
     const { text } = await streamMessage(
       {
-        model: config.anthropic.model,
+        model: config.anthropic.fastModel,
         max_tokens: config.anthropic.maxTokens?.conversation ?? 8192,
         system: GENERAL_CHAT_SYSTEM,
         messages: generalMessages,
@@ -325,7 +325,7 @@ async function runGeneralChat({
   }
 
   const response = await createMessage({
-    model: config.anthropic.model,
+    model: config.anthropic.fastModel,
     max_tokens: config.anthropic.maxTokens?.conversation ?? 4096,
     system: GENERAL_CHAT_SYSTEM,
     messages: generalMessages,
@@ -608,9 +608,9 @@ export async function runCoworkerTurn({
     });
 
     let combinedRawText = result.rawText || '';
-    // UI formatter (tables/cards/badges) — on by default; set formatOutput:false to skip.
+    // Nova streams presentation tags directly — formatter is opt-in (formatOutput:true).
     let formattedForUi = combinedRawText;
-    const wantFormatter = options.formatOutput !== false;
+    const wantFormatter = options.formatOutput === true;
     if (wantFormatter) {
       sse({ type: 'status', label: STATUS_LABEL_FORMATTING });
       if (options.streamFormatter && options.sseStreamRes) {
@@ -963,19 +963,24 @@ export async function runCoworkerTurn({
     combinedRawText = runResult.combinedRawText || combinedRawText;
   }
 
-  sse({ type: 'status', label: STATUS_LABEL_FORMATTING });
   let formattedForUi = combinedRawText;
-  if (options.streamFormatter && options.sseStreamRes) {
-    const fmtStart = Date.now();
-    formattedForUi = await formatOutputStreaming(
-      message,
-      combinedRawText,
-      options.sseStreamRes,
-      usageMeta,
-    );
-    if (requestId) rex.formatterFinished(requestId, Date.now() - fmtStart);
-  } else if (options.formatOutput !== false) {
-    formattedForUi = await formatOutput(message, combinedRawText, usageMeta);
+  const wantFormatter = options.formatOutput === true;
+  if (wantFormatter) {
+    sse({ type: 'status', label: STATUS_LABEL_FORMATTING });
+    if (options.streamFormatter && options.sseStreamRes) {
+      const fmtStart = Date.now();
+      formattedForUi = await formatOutputStreaming(
+        message,
+        combinedRawText,
+        options.sseStreamRes,
+        usageMeta,
+      );
+      if (requestId) rex.formatterFinished(requestId, Date.now() - fmtStart);
+    } else {
+      formattedForUi = await formatOutput(message, combinedRawText, usageMeta);
+    }
+  } else if (options.streamFormatter) {
+    if (combinedRawText) sse({ type: 'text', content: combinedRawText });
   }
 
   // Deterministic <workflow> embedding: the React Flow tree renders from this
@@ -985,7 +990,7 @@ export async function runCoworkerTurn({
     if (treeJson.length <= 60000) {
       const workflowXml = `\n\n<workflow>${treeJson}</workflow>`;
       formattedForUi = `${formattedForUi || ''}${workflowXml}`;
-      if (options.streamFormatter && options.sseStreamRes) {
+      if (options.streamFormatter) {
         sse({ type: 'text', content: workflowXml });
       }
     }

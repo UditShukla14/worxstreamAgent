@@ -9,6 +9,7 @@ export const LLM_USAGE_PHASES = [
   'router',
   'formatter',
   'nova_plan',
+  'execution_plan',
   'self_check',
   'summary',
   'general_chat',

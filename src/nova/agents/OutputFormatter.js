@@ -141,7 +141,7 @@ export async function formatOutput(userMessage, rawOutput, usageMeta = {}) {
   let full = '';
   for (let pass = 0; pass < FORMATTER_CONTINUE_LIMIT; pass++) {
     const response = await createMessage({
-      model: config.anthropic.model,
+      model: config.anthropic.fastModel,
       max_tokens: maxTokens,
       system: FORMATTER_PROMPT,
       messages,
@@ -199,7 +199,7 @@ export async function formatOutputStreaming(userMessage, rawOutput, res, usageMe
   for (let pass = 0; pass < FORMATTER_CONTINUE_LIMIT; pass++) {
     const { text, message } = await streamMessage(
       {
-        model: config.anthropic.model,
+        model: config.anthropic.fastModel,
         max_tokens: maxTokens,
         system: FORMATTER_PROMPT,
         messages,

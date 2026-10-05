@@ -86,7 +86,7 @@ export async function resolveAgentKeys(message, conversationContext = '', priorM
   logContextUsage('Router context', messages, system);
 
   const routeResponse = await createMessage({
-    model: config.anthropic.model,
+    model: config.anthropic.fastModel,
     max_tokens: config.anthropic.maxTokens?.router ?? 100,
     system,
     messages,

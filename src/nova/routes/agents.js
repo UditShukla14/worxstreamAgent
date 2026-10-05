@@ -301,6 +301,7 @@ router.post('/stream', async (req, res) => {
       requestId,
       options: {
         streamFormatter: true,
+        formatOutput: false,
         sseStreamRes: res,
       },
     });
@@ -334,7 +335,7 @@ router.post('/route', async (req, res) => {
       company_id: tenant.company_id,
       user_id: tenant.user_id,
       conversation_id,
-      options: { streamFormatter: false, formatOutput: true },
+      options: { streamFormatter: false, formatOutput: false },
     });
 
     res.json({
@@ -382,6 +383,7 @@ router.post('/multi', async (req, res) => {
         agentKeys: agents,
         mode: mode === 'sequential' ? 'sequential' : 'parallel',
         streamFormatter: false,
+        formatOutput: false,
         skipClarification: false,
       },
     });
@@ -430,6 +432,7 @@ router.post('/:agentKey', async (req, res) => {
         agentKeys: [agentKey],
         mode: 'single',
         streamFormatter: false,
+        formatOutput: false,
       },
     });
 

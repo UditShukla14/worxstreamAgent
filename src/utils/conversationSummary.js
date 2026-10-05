@@ -88,7 +88,7 @@ export async function maybeRefreshSummary({
   const focus = formatSessionHintsForSummary(sessionHints || {});
 
   const response = await createMessage({
-    model: config.anthropic.model,
+    model: config.anthropic.fastModel,
     max_tokens: 512,
     system:
       'Compress this Worxstream coworker conversation into at most 400 tokens.\n'

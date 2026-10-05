@@ -43,19 +43,21 @@ function buildRedisUrlFromEnv() {
   return `${scheme}://${auth}${host}:${port}`;
 }
 
-/** Single Anthropic model for all calls — dateless ID, not a dated snapshot. */
+/** Main model for agent tool loops — dateless ID, not a dated snapshot. */
 const DEFAULT_MODEL = 'claude-sonnet-4-6';
+/** Cheap model for control calls (plan, router, summary, formatter). */
+const DEFAULT_FAST_MODEL = 'claude-haiku-4-5';
 
-/** Retired snapshot IDs → main model (auto-migrated at startup). */
-const RETIRED_MODEL_MAP = {
-  'claude-sonnet-4-20250514': DEFAULT_MODEL,
-  'claude-opus-4-20250514': DEFAULT_MODEL,
-  'claude-sonnet-4-0': DEFAULT_MODEL,
-  'claude-opus-4-0': DEFAULT_MODEL,
-  'claude-3-7-sonnet-20250219': DEFAULT_MODEL,
-  'claude-3-5-haiku-20241022': DEFAULT_MODEL,
-  'claude-3-haiku-20240307': DEFAULT_MODEL,
-};
+/** Retired snapshot IDs (resolved to the fallback passed into resolveAnthropicModel). */
+const RETIRED_MODEL_IDS = new Set([
+  'claude-sonnet-4-20250514',
+  'claude-opus-4-20250514',
+  'claude-sonnet-4-0',
+  'claude-opus-4-0',
+  'claude-3-7-sonnet-20250219',
+  'claude-3-5-haiku-20241022',
+  'claude-3-haiku-20240307',
+]);
 
 /** Pre-4.6 models use YYYYMMDD suffixes; those IDs expire when Anthropic retires the snapshot. */
 const DATED_SNAPSHOT_RE = /-\d{8}$/;
@@ -71,34 +73,41 @@ const TOOL_SEARCH_SUPPORTED_MODELS = [
 ];
 
 /**
- * Resolve ANTHROPIC_MODEL: reject dated snapshots and map retired IDs to the main model.
+ * Resolve an Anthropic model env var: reject dated snapshots and retired IDs.
  * @param {string|undefined} envValue
+ * @param {{ fallback?: string, envName?: string }} [opts]
  */
-function resolveAnthropicModel(envValue) {
-  let modelId = (envValue || '').trim() || DEFAULT_MODEL;
-  if (RETIRED_MODEL_MAP[modelId]) {
+function resolveAnthropicModel(envValue, { fallback = DEFAULT_MODEL, envName = 'ANTHROPIC_MODEL' } = {}) {
+  let modelId = (envValue || '').trim() || fallback;
+  if (RETIRED_MODEL_IDS.has(modelId)) {
     console.warn(
-      `⚠️  ANTHROPIC_MODEL "${modelId}" is retired; using "${DEFAULT_MODEL}". Update the env var.`
+      `⚠️  ${envName} "${modelId}" is retired; using "${fallback}". Update the env var.`
     );
-    return DEFAULT_MODEL;
+    return fallback;
   }
   if (DATED_SNAPSHOT_RE.test(modelId)) {
     console.warn(
-      `⚠️  ANTHROPIC_MODEL "${modelId}" is a dated snapshot; using "${DEFAULT_MODEL}". Set ANTHROPIC_MODEL to a dateless ID.`
+      `⚠️  ${envName} "${modelId}" is a dated snapshot; using "${fallback}". Set a dateless ID.`
     );
-    return DEFAULT_MODEL;
+    return fallback;
   }
   return modelId;
 }
 
 const anthropicModel = resolveAnthropicModel(process.env.ANTHROPIC_MODEL);
+const anthropicFastModel = resolveAnthropicModel(process.env.ANTHROPIC_MODEL_FAST, {
+  fallback: DEFAULT_FAST_MODEL,
+  envName: 'ANTHROPIC_MODEL_FAST',
+});
 const useToolSearchEnv = process.env.ANTHROPIC_USE_TOOL_SEARCH;
 
 export const config = {
   anthropic: {
     apiKey: process.env.ANTHROPIC_API_KEY,
-    /** Sonnet 4.6 for all agent, router, formatter, and summary calls; override with ANTHROPIC_MODEL. */
+    /** Sonnet for agent / governance tool loops; override with ANTHROPIC_MODEL. */
     model: anthropicModel,
+    /** Haiku for plan / router / summary / formatter; override with ANTHROPIC_MODEL_FAST. */
+    fastModel: anthropicFastModel,
     /** Enabled when model supports tool search; set ANTHROPIC_USE_TOOL_SEARCH=false/true to override. */
     useToolSearch: useToolSearchEnv === 'false' ? false : useToolSearchEnv === 'true' ? true : TOOL_SEARCH_SUPPORTED_MODELS.includes(anthropicModel),
     /**

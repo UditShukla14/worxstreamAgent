@@ -16,6 +16,7 @@ router.get('/', (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     model: config.anthropic.model,
+    fast_model: config.anthropic.fastModel,
     tools_count: getAvailableTools().length,
   });
 });

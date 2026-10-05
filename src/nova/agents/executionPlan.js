@@ -140,7 +140,7 @@ export async function getExecutionPlan({
 
   const maxTokens = config.anthropic.maxTokens?.nova ?? 256;
   const response = await createMessage({
-    model: config.anthropic.model,
+    model: config.anthropic.fastModel,
     max_tokens: Math.max(maxTokens, 320),
     system: systemPrompt,
     messages,
