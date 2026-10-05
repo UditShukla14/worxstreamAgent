@@ -63,13 +63,26 @@ describe('coworker orchestrator mode', () => {
     );
   });
 
-  it('pipeline default path is single Nova with UI formatter on by default', () => {
+  it('pipeline default path is single Nova; formatter opt-in; execution plan on', () => {
     const src = readFileSync(pipelinePath, 'utf8');
     assert.ok(src.includes("type: 'orchestrator'"));
-    assert.ok(src.includes("options.formatOutput !== false"));
+    assert.ok(src.includes('options.formatOutput === true'));
     assert.ok(src.includes("getAgentInstance('nova')"));
     assert.ok(src.includes('formatOutputStreaming'));
     assert.ok(src.includes('getExecutionPlan'));
+  });
+
+  it('uses main model for agents and fastModel for control calls', () => {
+    assert.ok(config.anthropic.model);
+    assert.ok(config.anthropic.fastModel);
+    const configSrc = readFileSync(configPath, 'utf8');
+    assert.ok(configSrc.includes('ANTHROPIC_MODEL_FAST'));
+    assert.ok(configSrc.includes('fastModel'));
+    const planSrc = readFileSync(join(__dirname, '../../src/nova/agents/executionPlan.js'), 'utf8');
+    assert.ok(planSrc.includes('config.anthropic.fastModel'));
+    const baseSrc = readFileSync(join(__dirname, '../../src/nova/agents/BaseAgent.js'), 'utf8');
+    assert.ok(baseSrc.includes('config.anthropic.model'));
+    assert.ok(!baseSrc.includes('config.anthropic.fastModel'));
   });
 
   it('shared rules are conversation-native with page-wise safety only', () => {

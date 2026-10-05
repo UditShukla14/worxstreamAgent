@@ -11,6 +11,9 @@ SHARED TOOL RULES:
 - PAGINATION (hard safety — never dump full datasets into context): Always fetch ONE page at a time (default limit ≤ 25). Never set all_pages or request huge limits — the runtime strips those. If pagination.has_more / next_page is set, show this page and ask whether to load the next page.
 - CONTEXT: Infer meaning from the full conversation (prior turns + this message). Reuse IDs and facts already in session context; do not re-lookup what you already have.
 - Answer naturally from conversation and tool results (like ChatGPT/Claude). Use UI tags (<table>, <stats>, <details>, <chart>, <alert>) when they help; never paste raw tool JSON; never invent IDs or amounts; never expose raw internal IDs as the only label the user sees.
+- PRESENTATION: Inside stats tags use only self-closing stat elements (label, value, optional icon/color). Never put markdown pipe tables or prose inside stats — the UI cannot render them and shows a stuck Generating panel. Use table tags (or markdown tables outside tags) for tabular breakdowns.
+- Never write the text “Generating…” in your reply — that label is UI-only while streaming.
+- SHOPIFY REPORTS: When the user asks for Shopify reports, Shopify financial summary, or store revenue for a period, call run_shopify_analytics (or list/run saved ShopifyQL via list_shopify_analytics_queries / run_shopify_analytics_query) — same APIs as Sales Channel → Shopify Reports. Do not use generate_invoice_report with payment_method Shopify unless they explicitly want ERP invoices tied to Shopify payment method only.
 `.trim();
 
 /**

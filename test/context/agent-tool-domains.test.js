@@ -68,6 +68,19 @@ describe('agent tool domains', () => {
     assert.ok(bucketNames('vendor').includes('list_vendor_accounts'));
   });
 
+  it('shopify analytics tools stay in the shopify domain (not reports)', () => {
+    const shopify = bucketNames('shopify');
+    assert.ok(shopify.includes('run_shopify_analytics'));
+    assert.ok(shopify.includes('list_shopify_analytics_queries'));
+    assert.ok(shopify.includes('get_shopify_analytics_query'));
+    assert.ok(shopify.includes('run_shopify_analytics_query'));
+    assert.ok(shopify.includes('save_shopify_analytics_query'));
+    assert.ok(shopify.includes('delete_shopify_analytics_query'));
+    const reports = bucketNames('reports');
+    assert.ok(!reports.includes('run_shopify_analytics'));
+    assert.ok(!reports.includes('run_shopify_analytics_query'));
+  });
+
   it('voice-agent call sessions are not the CRM object call-log bucket', () => {
     assert.ok(!bucketNames('crm').includes('list_call_sessions'));
     assert.ok(!bucketNames('calls').includes('list_calls'));

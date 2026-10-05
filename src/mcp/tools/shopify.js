@@ -606,8 +606,10 @@ export function registerShopifyTools() {
         + 'single_metric, list, table, histogram, funnel, heatmap, etc.). '
         + 'Use SINCE/UNTIL for date bounds (e.g. SINCE startOfDay(-30d) UNTIL today). '
         + 'Present results with <chart type="…"> / <stats> / <table> — never paste raw JSON. '
-        + 'Prefer this for store metrics (sales, orders, customers). WorxStream ERP reports '
-        + 'use the separate reports agent.',
+        + 'stats blocks must use stat tags only (no markdown tables inside). '
+        + 'Financial summary this month: FROM sales SHOW total_sales, gross_sales, net_sales, orders, taxes '
+        + 'WITH TOTALS DURING this_month (same API as Sales Channel → Shopify Reports). '
+        + 'WorxStream ERP invoice BI uses generate_invoice_report — not this tool.',
       inputSchema: {
         query: z.string().min(1).describe(
           'ShopifyQL query string, e.g. '

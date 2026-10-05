@@ -18,6 +18,7 @@ const DOMAIN_FILES = {
   customer: 'customer.md',
   workflow: 'workflow.md',
   reports: 'reports.md',
+  shopify: 'shopify.md',
 };
 
 /** Extra markdown fragments loaded after the domain playbook (e.g. chart XML). */

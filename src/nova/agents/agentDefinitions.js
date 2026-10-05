@@ -36,6 +36,11 @@ SMS (Telnyx): When the user asks to text/SMS someone:
 
 UI hints (formatter may refine): <table>, <stats>, <details>, <chart>, <alert>. Never paste raw tool JSON. Never invent IDs or amounts. Other writes (create/update/email) may still be gated by the system; SMS uses chat confirm only.
 
+SHOPIFY REPORTS vs ERP REPORTS:
+- Shopify reports / Shopify financial summary / store sales for a period → run_shopify_analytics (ShopifyQL, POST /shopify/analytics/report) or saved queries via list_shopify_analytics_queries — same as Sales Channel → Shopify Reports in the app. Use DURING this_month (or concrete SINCE/UNTIL) for this month. Do not ask whether to use Shopify integration vs invoices.
+- Company-wide invoice/estimate BI, AR, gross profit from WorxStream documents → generate_invoice_report / generate_estimate_report (reports tools), not ShopifyQL.
+- stats blocks must contain stat tags only — never markdown tables inside stats.
+
 Be accurate and tenant-safe.`,
   },
 
@@ -93,9 +98,10 @@ PAGINATION: Always one page at a time for list_* tools. If pagination.has_more /
 
 IDS: list/detail/create_shopify_document use the database row id. update_shopify_order and generate_shopify_purchase_order use shopify_order_id (Shopify id/GID). Never confuse the two.
 
-SHOPIFY ANALYTICS:
-- Ad-hoc store metrics → run_shopify_analytics with a ShopifyQL query (include SINCE/UNTIL and VISUALIZE … TYPE … when charting).
-- Saved reports → list_shopify_analytics_queries, then run_shopify_analytics_query(report_id). For custom date ranges, get_shopify_analytics_query then rewrite SINCE/UNTIL and call run_shopify_analytics.
+SHOPIFY ANALYTICS (Sales Channel → Shopify Reports — not ERP invoice BI):
+- Ad-hoc store metrics / financial summary → run_shopify_analytics with ShopifyQL (e.g. FROM sales SHOW total_sales, orders, taxes WITH TOTALS DURING this_month). Include VISUALIZE … TYPE … when charting.
+- Saved reports → list_shopify_analytics_queries, then run_shopify_analytics_query(report_id). For custom date ranges, get_shopify_analytics_query then rewrite DURING / SINCE/UNTIL (this_month, etc.) and call run_shopify_analytics.
+- Never satisfy “Shopify financial summary” with generate_invoice_report + payment_method filter — that is not Shopify Reports.
 - save_shopify_analytics_query / delete_shopify_analytics_query only after the user confirms.
 - Chart TYPE must be a Shopify VISUALIZE type: bar, horizontal_bar, grouped_bar, horizontal_grouped_bar, stacked_bar, stacked_horizontal_bar, single_stacked_bar, line, stacked_area, histogram, donut, funnel, heatmap, single_metric, list, list_with_dimension_values, table, rfm_grid, target_gauge.
 - Present results: time series → <chart type="line">; share/breakdown → donut or bar/horizontal_bar; one KPI → <stats>; tabular → <table>. Map TYPE into the <chart type="…"> attribute. Never paste raw tool JSON.
@@ -515,7 +521,8 @@ Never expose internal IDs to the user. Be concise.`,
     description: 'Generates business reports with charts and analytics when the user asks for reports, trends, or dashboards',
     domain: 'reports',
     systemPrompt: `You are the Reports & Analytics Agent for Worxstream.
-You run only when the user wants reports, analytics, charts, trends, or dashboards — not for simple counts or lists (those belong to domain agents like invoice/estimate).
+You run only when the user wants **WorxStream ERP** reports, analytics, charts, trends, or dashboards — not for simple counts or lists (those belong to domain agents like invoice/estimate).
+Shopify store metrics and “Shopify Reports” (ShopifyQL) belong to the shopify agent / run_shopify_analytics — not generate_invoice_report.
 
 VISUAL PRESENTATION:
 - When the user asked for a **new** report/chart/analytics/trends/overview, include KPI cards and at least one chart plus a short summary table as needed.
