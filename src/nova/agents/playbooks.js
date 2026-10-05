@@ -24,6 +24,7 @@ const DOMAIN_FILES = {
 /** Extra markdown fragments loaded after the domain playbook (e.g. chart XML). */
 const DOMAIN_EXTRAS = {
   reports: ['reports-charts.md'],
+  shopify: ['reports-charts.md'],
 };
 
 /**

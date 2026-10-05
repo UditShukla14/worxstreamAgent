@@ -21,6 +21,11 @@ import {
 } from './executionPlan.js';
 import { resolveAgentKeys, getAgentInstance } from './router.js';
 import { formatOutput, formatOutputStreaming } from './OutputFormatter.js';
+import {
+  buildShopifyAnalyticsPresentation,
+  isShopifyAnalyticsTool,
+  mergeShopifyPresentationWithCommentary,
+} from './shopifyAnalyticsPresentation.js';
 import { createDeltaCoalesceBuffer } from './streamSectionBuffer.js';
 import { rex } from './AgentTracker.js';
 import {
@@ -592,12 +597,25 @@ export async function runCoworkerTurn({
     }
 
     allToolsUsed.push(...(result.toolsUsed || []));
+    let shopifyPresentation = '';
     (result.toolsUsed || []).forEach((t, i) => {
       if (t.name === 'get_workflow_object_tree' && t.success !== false) {
         const payload = result.toolResultPayloads?.[i];
         const tree = payload?.data?.data ?? payload?.data ?? null;
         if (tree && (Array.isArray(tree) ? tree.length > 0 : typeof tree === 'object')) {
           workflowTree = tree;
+        }
+      }
+      if (isShopifyAnalyticsTool(t.name) && t.success !== false) {
+        const payload = result.toolResultPayloads?.[i];
+        const xml = buildShopifyAnalyticsPresentation(payload, {
+          query: t.input?.query || '',
+          title: 'Shopify analytics',
+        });
+        if (xml) {
+          shopifyPresentation = shopifyPresentation
+            ? `${shopifyPresentation}\n\n${xml}`
+            : xml;
         }
       }
     });
@@ -607,7 +625,11 @@ export async function runCoworkerTurn({
       assistantSummary: result.rawText?.slice(0, 300),
     });
 
-    let combinedRawText = result.rawText || '';
+    // Sidekick / ChatGPT pattern: widgets from tool data, commentary from the model.
+    let combinedRawText = mergeShopifyPresentationWithCommentary(
+      shopifyPresentation,
+      result.rawText || '',
+    );
     // Nova streams presentation tags directly — formatter is opt-in (formatOutput:true).
     let formattedForUi = combinedRawText;
     const wantFormatter = options.formatOutput === true;
@@ -846,14 +868,17 @@ export async function runCoworkerTurn({
   // Object tree from get_workflow_object_tree — embedded as a <workflow> tag
   // AFTER formatting so the JSON never round-trips through the formatter LLM.
   let workflowTree = null;
+  /** Deterministic Shopify analytics widgets (Sidekick pattern). */
+  let shopifyPresentation = '';
   const planState = await getPlanState(planRef);
   const maxSelfCheckLoops = config.agentRuntime?.maxSelfCheckLoops ?? 1;
   /** Merged agent transcripts from specialist runs (for next-turn tool memory). */
   let specialistAgentTranscript = [];
 
-  const runAgentsOnce = async (overrideMessage = null) => {
+    const runAgentsOnce = async (overrideMessage = null) => {
     const msg = overrideMessage || message;
     allToolsUsed.length = 0;
+    shopifyPresentation = '';
     specialistAgentTranscript = [];
     const agentRawTexts = [];
 
@@ -887,6 +912,18 @@ export async function runCoworkerTurn({
           const tree = payload?.data?.data ?? payload?.data ?? null;
           if (tree && (Array.isArray(tree) ? tree.length > 0 : typeof tree === 'object')) {
             workflowTree = tree;
+          }
+        }
+        if (isShopifyAnalyticsTool(t.name) && t.success !== false) {
+          const payload = result.toolResultPayloads?.[i];
+          const xml = buildShopifyAnalyticsPresentation(payload, {
+            query: t.input?.query || '',
+            title: 'Shopify analytics',
+          });
+          if (xml) {
+            shopifyPresentation = shopifyPresentation
+              ? `${shopifyPresentation}\n\n${xml}`
+              : xml;
           }
         }
       });
@@ -948,7 +985,10 @@ export async function runCoworkerTurn({
     };
   }
 
-  let combinedRawText = runResult.combinedRawText || '';
+  let combinedRawText = mergeShopifyPresentationWithCommentary(
+    shopifyPresentation,
+    runResult.combinedRawText || '',
+  );
   let attempts = planState.attempts || 0;
   for (let i = 0; i < Math.max(0, maxSelfCheckLoops); i++) {
     const check = await selfCheckCompletion(message, combinedRawText, usageMeta);
@@ -960,7 +1000,10 @@ export async function runCoworkerTurn({
       sse({ type: 'done', agent: plannedAgents.join(', '), pending_confirmation: true });
       return { conversation_id: convId, type: 'pending_confirmation', confirmationId: runResult.confirmationId };
     }
-    combinedRawText = runResult.combinedRawText || combinedRawText;
+    combinedRawText = mergeShopifyPresentationWithCommentary(
+      shopifyPresentation,
+      runResult.combinedRawText || combinedRawText,
+    );
   }
 
   let formattedForUi = combinedRawText;

@@ -59,6 +59,23 @@ function shopifyResourceId(value) {
   return parts[parts.length - 1] || raw;
 }
 
+/**
+ * Same stagger as apps/web ShopifyReportParametersView (PARAMETER_REPORT_DELAY_MS = 3000).
+ * Shopify analytics (ShopifyQL) rate-limits aggressive back-to-back calls → HTTP 503.
+ */
+const SHOPIFY_ANALYTICS_COOLDOWN_MS = 3_000;
+let lastShopifyAnalyticsCallAt = 0;
+
+async function waitShopifyAnalyticsCooldown() {
+  const now = Date.now();
+  const elapsed = now - lastShopifyAnalyticsCallAt;
+  if (lastShopifyAnalyticsCallAt > 0 && elapsed < SHOPIFY_ANALYTICS_COOLDOWN_MS) {
+    const waitMs = SHOPIFY_ANALYTICS_COOLDOWN_MS - elapsed;
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+  }
+  lastShopifyAnalyticsCallAt = Date.now();
+}
+
 export function registerShopifyTools() {
   const orderFilterSchema = z.object({
     search: z.string().optional().describe('Text search (order name, customer, email)'),
@@ -609,6 +626,11 @@ export function registerShopifyTools() {
         + 'stats blocks must use stat tags only (no markdown tables inside). '
         + 'Financial summary this month: FROM sales SHOW total_sales, gross_sales, net_sales, orders, taxes '
         + 'WITH TOTALS DURING this_month (same API as Sales Channel → Shopify Reports). '
+        + 'The chat runtime renders KPI/chart/table widgets from this tool result (Sidekick pattern) — '
+        + 'the model should not invent chart XML. '
+        + 'RATE LIMIT: wait at least 3 seconds between analytics runs (same as Shopify Reports UI). '
+        + 'This tool enforces that cooldown automatically. Prefer one combined query over many small ones. '
+        + 'On HTTP 503 / rate limit, wait and retry once — do not hammer the API. '
         + 'WorxStream ERP invoice BI uses generate_invoice_report — not this tool.',
       inputSchema: {
         query: z.string().min(1).describe(
@@ -620,6 +642,7 @@ export function registerShopifyTools() {
       capabilities: { domain: 'shopify', action: 'read', safety: 'read' },
     },
     async ({ query }) => {
+      await waitShopifyAnalyticsCooldown();
       const { companyId, userId } = getWorxstreamContext();
       return asText(await callWorxstreamAPI({
         method: 'POST',
@@ -687,6 +710,7 @@ export function registerShopifyTools() {
       description:
         'Run a saved ShopifyQL report by id (POST /shopify/analytics/query/run). '
         + 'Same result shape as run_shopify_analytics (columns + rows). '
+        + 'Enforces the same 3s cooldown between analytics runs to avoid Shopify HTTP 503 rate limits. '
         + 'When the user needs a custom date range, prefer loading the saved query '
         + 'then calling run_shopify_analytics with an adjusted ShopifyQL string.',
       inputSchema: {
@@ -696,6 +720,7 @@ export function registerShopifyTools() {
       capabilities: { domain: 'shopify', action: 'read', safety: 'read' },
     },
     async ({ report_id }) => {
+      await waitShopifyAnalyticsCooldown();
       const { companyId, userId } = getWorxstreamContext();
       return asText(await callWorxstreamAPI({
         method: 'POST',
