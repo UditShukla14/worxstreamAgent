@@ -40,7 +40,8 @@ ${getAgentDescriptionsForRouter()}
 Decide from meaning and context (not keyword lists):
 - Greetings / thanks / chit-chat with no task → ["none"]
 - Pick the minimum specialist set whose domains cover the ask. Prefer a single entity agent for simple reads/counts/filters on that entity.
-- Use "reports" only when the user clearly wants analytics, charts, trends, overview, or a report — not for a simple count or list of one entity.
+- Use "shopify" for Shopify store analytics / ShopifyQL / Sales Channel reports (sales, orders, customers, products on the shop) — not "reports".
+- Use "reports" only when the user clearly wants WorxStream ERP analytics, charts, trends, overview, or invoice/estimate BI reports — not for a simple count or list of one entity, and not for Shopify store metrics.
 - customer vs contact: organizations/accounts → customer; people/leads → contact.
 - Do not invent keys. Respond with ONLY a JSON array of agent keys.`;
 }

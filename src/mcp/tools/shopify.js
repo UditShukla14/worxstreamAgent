@@ -590,4 +590,192 @@ export function registerShopifyTools() {
       }));
     }
   );
+
+  // ── Analytics / ShopifyQL reports ──────────────────────────────────
+  // Endpoints mirror apps/web shopifyService getAnalyticsReport / query APIs.
+  // Tool names avoid "*_report" so domain stays shopify (not reports).
+  registerTool(
+    'run_shopify_analytics',
+    {
+      title: 'Run ShopifyQL Analytics Query',
+      description:
+        'Run an ad-hoc ShopifyQL query against the connected shop '
+        + '(POST /shopify/analytics/report). Returns columns + rows. '
+        + 'Include VISUALIZE metric TYPE <type> in the query when you want a chart '
+        + '(TYPE: bar, horizontal_bar, grouped_bar, line, stacked_area, donut, '
+        + 'single_metric, list, table, histogram, funnel, heatmap, etc.). '
+        + 'Use SINCE/UNTIL for date bounds (e.g. SINCE startOfDay(-30d) UNTIL today). '
+        + 'Present results with <chart type="…"> / <stats> / <table> — never paste raw JSON. '
+        + 'Prefer this for store metrics (sales, orders, customers). WorxStream ERP reports '
+        + 'use the separate reports agent.',
+      inputSchema: {
+        query: z.string().min(1).describe(
+          'ShopifyQL query string, e.g. '
+          + 'FROM sales SHOW total_sales TIMESERIES day SINCE startOfDay(-30d) UNTIL today '
+          + 'ORDER BY day ASC LIMIT 100 VISUALIZE total_sales TYPE line',
+        ),
+      },
+      capabilities: { domain: 'shopify', action: 'read', safety: 'read' },
+    },
+    async ({ query }) => {
+      const { companyId, userId } = getWorxstreamContext();
+      return asText(await callWorxstreamAPI({
+        method: 'POST',
+        endpoint: '/shopify/analytics/report',
+        data: {
+          company_id: companyId,
+          user_id: userId,
+          query: String(query || '').trim(),
+        },
+      }));
+    }
+  );
+
+  registerTool(
+    'list_shopify_analytics_queries',
+    {
+      title: 'List Saved Shopify Analytics Queries',
+      description:
+        'List saved ShopifyQL reports/queries for this company '
+        + '(GET /shopify/analytics/getAllQuery). Returns id, label, query, parameters.',
+      inputSchema: {},
+      capabilities: { domain: 'shopify', action: 'read', safety: 'read' },
+    },
+    async () => {
+      const { companyId, userId } = getWorxstreamContext();
+      return asText(await callWorxstreamAPI({
+        method: 'GET',
+        endpoint: '/shopify/analytics/getAllQuery',
+        data: { company_id: companyId, user_id: userId },
+      }));
+    }
+  );
+
+  registerTool(
+    'get_shopify_analytics_query',
+    {
+      title: 'Get Saved Shopify Analytics Query',
+      description:
+        'Load one saved ShopifyQL report by id (GET /shopify/analytics/query). '
+        + 'Does not run the query — use run_shopify_analytics_query or run_shopify_analytics.',
+      inputSchema: {
+        report_id: z.union([z.number(), z.string()])
+          .describe('Saved report id from list_shopify_analytics_queries'),
+      },
+      capabilities: { domain: 'shopify', action: 'read', safety: 'read' },
+    },
+    async ({ report_id }) => {
+      const { companyId, userId } = getWorxstreamContext();
+      return asText(await callWorxstreamAPI({
+        method: 'GET',
+        endpoint: '/shopify/analytics/query',
+        data: {
+          company_id: companyId,
+          user_id: userId,
+          report_id: Number(report_id),
+        },
+      }));
+    }
+  );
+
+  registerTool(
+    'run_shopify_analytics_query',
+    {
+      title: 'Run Saved Shopify Analytics Query',
+      description:
+        'Run a saved ShopifyQL report by id (POST /shopify/analytics/query/run). '
+        + 'Same result shape as run_shopify_analytics (columns + rows). '
+        + 'When the user needs a custom date range, prefer loading the saved query '
+        + 'then calling run_shopify_analytics with an adjusted ShopifyQL string.',
+      inputSchema: {
+        report_id: z.union([z.number(), z.string()])
+          .describe('Saved report id from list_shopify_analytics_queries'),
+      },
+      capabilities: { domain: 'shopify', action: 'read', safety: 'read' },
+    },
+    async ({ report_id }) => {
+      const { companyId, userId } = getWorxstreamContext();
+      return asText(await callWorxstreamAPI({
+        method: 'POST',
+        endpoint: '/shopify/analytics/query/run',
+        data: {
+          company_id: companyId,
+          user_id: userId,
+          report_id: Number(report_id),
+        },
+      }));
+    }
+  );
+
+  registerTool(
+    'save_shopify_analytics_query',
+    {
+      title: 'Save Shopify Analytics Query',
+      description:
+        'Create or update a saved ShopifyQL report (POST /shopify/analytics/query). '
+        + 'Pass report_id to update. Provide query and/or parameters (saved-query ids). '
+        + 'When ShopifyQL is blank but parameters are set, send query as null.',
+      inputSchema: {
+        label: z.string().min(1).describe('Display label for the saved report'),
+        query: z.string().nullable().optional()
+          .describe('ShopifyQL string, or null when using parameters only'),
+        parameters: z.array(z.number()).optional()
+          .describe('Optional ids of available/saved queries to compose'),
+        report_id: z.union([z.number(), z.string()]).optional()
+          .describe('Existing report id to update; omit to create'),
+      },
+      capabilities: { domain: 'shopify', action: 'other', safety: 'write' },
+    },
+    async ({ label, query, parameters, report_id }) => {
+      const { companyId, userId } = getWorxstreamContext();
+      const trimmedLabel = String(label || '').trim();
+      const rawQuery = query == null ? null : String(query).trim();
+      const normalizedQuery =
+        rawQuery && rawQuery.toLowerCase() !== 'null' ? rawQuery : null;
+      const params = [...new Set((parameters || []).filter((id) => Number.isFinite(id)))];
+
+      const data = {
+        company_id: companyId,
+        user_id: userId,
+        label: trimmedLabel,
+        query: normalizedQuery,
+      };
+      if (params.length > 0) data.parameters = params;
+      if (report_id != null && String(report_id).trim() !== '') {
+        data.report_id = Number(report_id);
+      }
+
+      return asText(await callWorxstreamAPI({
+        method: 'POST',
+        endpoint: '/shopify/analytics/query',
+        data,
+      }));
+    }
+  );
+
+  registerTool(
+    'delete_shopify_analytics_query',
+    {
+      title: 'Delete Shopify Analytics Query',
+      description:
+        'Delete a saved ShopifyQL report (DELETE /shopify/analytics/query). Confirm with the user first.',
+      inputSchema: {
+        report_id: z.union([z.number(), z.string()])
+          .describe('Saved report id to delete'),
+      },
+      capabilities: { domain: 'shopify', action: 'other', safety: 'write' },
+    },
+    async ({ report_id }) => {
+      const { companyId, userId } = getWorxstreamContext();
+      return asText(await callWorxstreamAPI({
+        method: 'DELETE',
+        endpoint: '/shopify/analytics/query',
+        data: {
+          company_id: companyId,
+          user_id: userId,
+          report_id: Number(report_id),
+        },
+      }));
+    }
+  );
 }
