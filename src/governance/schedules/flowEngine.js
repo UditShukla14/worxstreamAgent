@@ -522,9 +522,9 @@ export function composeScheduledMessage(flow, definition, timeZone) {
     { name, dateLabel, timeZone },
   );
   if (!body.trim()) {
-    body = channel === 'sms'
-      ? `${name} — reminder for ${dateLabel}.`
-      : `<p>${name}</p><p>Scheduled reminder for ${dateLabel}.</p>`;
+    throw new Error(
+      'Cannot compose scheduled delivery: Nova returned no response and no message_template is configured.',
+    );
   }
   if (channel === 'sms') {
     const { text } = withSmsOptOutFooter(body);
@@ -705,7 +705,23 @@ export function assertSupportedFlow(definition) {
       `Unsupported flow_type "${flowType}". Supported: ${[...SUPPORTED_FLOW_TYPES].join(', ')}`,
     );
   }
-  const flow = definition.flow && typeof definition.flow === 'object' ? definition.flow : {};
+  const storedFlow = definition.flow && typeof definition.flow === 'object' ? definition.flow : {};
+  const flow = { ...storedFlow };
+  const storedEngine = String(flow.engine || '').toLowerCase().trim();
+  if (storedEngine !== 'send_only' && !isNovaScheduleFlow(flow)) {
+    // Repair legacy/partially-created agent schedules at execution time. A
+    // missing engine or prompt must never fall through to the static reminder
+    // composer; Nova receives a fresh intent instead.
+    const legacyIntent = resolveNovaPrompt({
+      ...flow,
+      message_template: '',
+      body: '',
+      message: '',
+    });
+    flow.engine = 'nova';
+    flow.prompt = legacyIntent
+      || `Execute the scheduled task "${String(definition.name || 'scheduled task')}" using live Worxstream tools and return the result for delivery.`;
+  }
   const channel = resolveFlowChannel(flow);
   const recipients = Array.isArray(flow.recipients)
     ? flow.recipients.map((r) => String(r).trim()).filter(Boolean)
@@ -747,8 +763,10 @@ export function assertSupportedFlow(definition) {
       'Process schedule has no frozen tool steps or Nova intent. Update it with the saved user request.',
     );
   }
-  if (!hasNova && !hasBody && !hasProcess && !definition.name) {
-    throw new Error('flow must include prompt (Nova), steps, and/or message_template');
+  if (!hasNova && !hasProcess && !hasBody) {
+    throw new Error(
+      'Schedule has no executable Nova intent or frozen process. Update it with the original user request before running.',
+    );
   }
   if (isNovaScheduleFlow(flow) && !novaPrompt) {
     throw new Error('Nova schedule requires flow.prompt (the work to run each tick)');
@@ -955,6 +973,12 @@ export async function fillFlowRun(definition, run) {
               flow.message_template || flow.body || flow.message || '',
             ).trim();
             const liveVars = liveMetricVars(periodResults);
+
+            if (periodResults.length === 0 && !messageTemplate) {
+              throw new Error(
+                'Schedule has no Nova response or message template; refusing to send a placeholder reminder.',
+              );
+            }
 
             if (periodResults.length > 0 && !templateWantsLivePlaceholders(messageTemplate)) {
               const briefing = composeSalesBriefingEmail({
