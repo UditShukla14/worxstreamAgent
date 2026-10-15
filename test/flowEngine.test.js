@@ -132,6 +132,14 @@ describe('scheduled_message flow', () => {
     assert.equal(text, 'Hi Alert on 2026-10-15');
   });
 
+  it('renders deterministic date placeholders for frozen tool arguments', () => {
+    const text = renderScheduleTemplate(
+      '{{today}} | {{month_start}} | {{quarter_start}}',
+      { dateLabel: '2026-10-15' },
+    );
+    assert.equal(text, '2026-10-15 | 2026-10-01 | 2026-10-01');
+  });
+
   it('composes SMS with opt-out footer', () => {
     const composed = composeScheduledMessage(
       {

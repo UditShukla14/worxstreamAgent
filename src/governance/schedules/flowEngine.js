@@ -484,14 +484,24 @@ export function formatDateInZone(date, timeZone = 'UTC') {
 }
 
 /**
- * Render frozen templates. Built-ins: {{date}}, {{name}}.
+ * Render frozen templates. Built-ins: {{date}}, {{today}}, {{month_start}},
+ * {{quarter_start}}, and {{name}}.
  * Extra vars from opts.vars (e.g. live values Nova froze or a future data step).
  */
 export function renderScheduleTemplate(template, opts = {}) {
   const timeZone = opts.timeZone || 'UTC';
   const date = opts.dateLabel || formatDateInZone(new Date(), timeZone);
+  const [year, month] = date.split('-').map(Number);
+  const quarterMonth = Math.floor((month - 1) / 3) * 3 + 1;
   const name = String(opts.name || 'Schedule');
-  const vars = { date, name, ...(opts.vars || {}) };
+  const vars = {
+    date,
+    today: date,
+    month_start: `${year}-${String(month).padStart(2, '0')}-01`,
+    quarter_start: `${year}-${String(quarterMonth).padStart(2, '0')}-01`,
+    name,
+    ...(opts.vars || {}),
+  };
   let out = String(template || '');
   for (const [key, value] of Object.entries(vars)) {
     out = out.replace(new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`, 'gi'), String(value));
@@ -884,7 +894,12 @@ export async function fillFlowRun(definition, run) {
         }
 
         if (step.type === 'tool') {
-          const baseVars = { date: dateLabel, name, ...liveMetricVars(periodResults) };
+          const baseVars = {
+            date: dateLabel,
+            today: dateLabel,
+            name,
+            ...liveMetricVars(periodResults),
+          };
           const args = deepRenderArgs(step.args || {}, baseVars);
           // Expand period shortcuts on tool args
           if (step.args?.period || args.period) {

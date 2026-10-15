@@ -108,17 +108,38 @@ function buildFlow(input) {
   const messageTemplate = String(
     input.message_template || input.body || '',
   ).trim();
-  // Prefer Nova: freeze the work prompt and re-run the agent on each tick.
-  // Legacy process (steps/periods) only when explicitly requested.
-  const wantsLegacyProcess = engineHint === 'process'
+  // Every new schedule must use a deterministic process. A prompt is retained
+  // only as human-readable intent/audit context; it is never re-run as Nova.
+  const looksLikeInvoiceBriefing = /\b(invoice|sales|revenue|amount\s*paid|paid|sales\s+briefing|financial\s+briefing)\b/i.test(prompt);
+  const wantsProcess = engineHint === 'process'
     || engineHint === 'flow'
     || engineHint === 'steps'
     || steps.length > 0
     || periods.length > 0
     || metrics.length > 0
-    || String(input.data_source || '').toLowerCase() === 'invoice_report';
-  const novaPrompt = prompt
-    || (!wantsLegacyProcess && !messageTemplate && String(input.message || '').trim())
+    || String(input.data_source || '').toLowerCase() === 'invoice_report'
+    || looksLikeInvoiceBriefing;
+  const inferredPeriods = periods.length
+    ? periods
+    : [
+      /\b(today|daily|day)\b/i.test(prompt) ? 'today' : null,
+      /\b(month[- ]to[- ]date|mtd|month)\b/i.test(prompt) ? 'mtd' : null,
+      /\b(quarter[- ]to[- ]date|qtd|quarter)\b/i.test(prompt) ? 'qtd' : null,
+    ].filter(Boolean);
+  const inferredMetrics = metrics.length
+    ? metrics
+    : [
+      /\b(sales|revenue|invoiced|cumulative)\b/i.test(prompt) ? 'sales' : null,
+      /\b(amount\s*paid|paid|payments?)\b/i.test(prompt) ? 'amount_paid' : null,
+    ].filter(Boolean);
+  const wantsInvoiceProcess = wantsProcess && (
+    String(input.data_source || '').toLowerCase() === 'invoice_report'
+    || inferredPeriods.length > 0
+    || inferredMetrics.length > 0
+    || looksLikeInvoiceBriefing
+  );
+  const requestedPrompt = prompt
+    || (!wantsProcess && !messageTemplate && String(input.message || '').trim())
     || '';
 
   const flow = {
@@ -130,21 +151,22 @@ function buildFlow(input) {
     message_template: messageTemplate,
   };
 
-  if (novaPrompt && !wantsLegacyProcess) {
-    flow.engine = 'nova';
-    flow.prompt = novaPrompt;
-  } else if (wantsLegacyProcess) {
+  if (wantsProcess) {
     flow.engine = 'process';
     if (steps.length) flow.steps = steps;
-    if (periods.length) flow.periods = periods;
-    if (metrics.length) flow.metrics = metrics;
+    if (inferredPeriods.length) flow.periods = inferredPeriods;
+    if (inferredMetrics.length) flow.metrics = inferredMetrics;
     if (input.scope != null) flow.scope = String(input.scope).trim() || 'company_totals';
-    if (input.data_source != null) {
-      flow.data_source = String(input.data_source).trim().toLowerCase();
-    }
+    if (wantsInvoiceProcess) flow.data_source = 'invoice_report';
+    if (requestedPrompt) flow.intent = requestedPrompt;
   } else if (messageTemplate) {
     // Send-only reminder (no agent turn)
     flow.engine = 'send_only';
+  } else if (requestedPrompt) {
+    // Do not create a prompt-only schedule. Without a frozen tool plan the
+    // next tick would have to call Nova again and could change its behavior.
+    flow.engine = 'process';
+    flow.intent = requestedPrompt;
   }
 
   return flow;
@@ -177,9 +199,11 @@ export function registerScribeTools() {
     {
       title: 'Create Scribe Schedule',
       description:
-        'Schedule the same Nova chat request on a timer. Freeze prompt (= what the user would type in chat); '
-        + 'each tick Nova answers with full tools, then Scribe emails/SMS that reply. '
-        + 'Required: name, channel, recipients, prompt, cadence. Optional subject_template (email fallback). '
+        'Schedule a frozen process on a timer. For reports, freeze the exact tool steps and normalized arguments '
+        + 'selected during the chat turn; each tick re-runs those tools with only date placeholders changing, '
+        + 'then uses the same compose and delivery steps. Use engine=process for every recurring task. '
+        + 'Required: name, channel, recipients, frozen process steps (or periods/metrics shorthand), cadence. '
+        + 'Optional subject_template (email fallback). '
         + 'Send-only (no Nova): message_template only. '
         + 'Confirm name, channel, recipients, prompt, cadence before calling.',
       inputSchema: {
@@ -201,14 +225,13 @@ export function registerScribeTools() {
           .string()
           .optional()
           .describe(
-            'Same text the user would send in Nova chat. Re-run on each tick. Example: '
-            + '"Summarize today and month-to-date company sales (invoiced) and amount paid."',
+            'Human-readable intent only; never use a prompt as a substitute for frozen process steps.',
           ),
         intent: z.string().optional().describe('Alias for prompt'),
         engine: z
           .enum(['nova', 'process', 'send_only'])
           .optional()
-          .describe('Default nova when prompt is set. process = legacy frozen steps (no LLM).'),
+          .describe('Always use process. Nova is not run during scheduled ticks.'),
         subject_template: z
           .string()
           .optional()
@@ -220,15 +243,15 @@ export function registerScribeTools() {
         steps: z
           .array(z.record(z.any()))
           .optional()
-          .describe('Legacy only (engine=process): invoice_report / tool / compose / deliver steps.'),
+          .describe('Frozen execution steps: tool or invoice_report, followed by compose and deliver.'),
         periods: z
           .array(z.string())
           .optional()
-          .describe('Legacy only: today, mtd, qtd invoice windows'),
+          .describe('Invoice report windows: today, mtd, qtd'),
         metrics: z
           .array(z.string())
           .optional()
-          .describe('Legacy only: sales, amount_paid'),
+          .describe('Invoice metrics: sales, amount_paid'),
         scope: z.string().optional().describe('Legacy label e.g. company_totals'),
         data_source: z.string().optional().describe('Legacy: invoice_report'),
         timezone: z.string().optional().describe('IANA timezone, e.g. America/New_York'),
@@ -269,8 +292,11 @@ export function registerScribeTools() {
         return asText({
           success: false,
           error:
-            'Freeze a prompt (Nova re-runs tools each tick), or message_template (send-only), '
-            + 'or legacy steps/periods',
+            'A recurring schedule must include frozen steps (tool name + args), periods/metrics, '
+            + 'or message_template for a send-only reminder. A prompt alone is not schedulable. '
+            + 'For tool work, retry with steps like [{"type":"tool","tool":"list_invoices",'
+            + '"args":{"from_date":"{{today}}","to_date":"{{today}}"},"as":"invoices"},'
+            + '{"type":"compose"},{"type":"deliver"}].',
         });
       }
       const recipientError = validateRecipientsForChannel(flow.channel, flow.recipients);
@@ -523,18 +549,20 @@ export function registerScribeTools() {
       if (input.prompt != null) {
         const nextPrompt = String(input.prompt).trim();
         if (nextPrompt) {
-          flow.prompt = nextPrompt;
-          flow.engine = 'nova';
-          delete flow.steps;
-          delete flow.periods;
-          delete flow.metrics;
-          delete flow.data_source;
+          flow.intent = nextPrompt;
         } else {
-          delete flow.prompt;
+          delete flow.intent;
         }
       }
       if (input.engine != null) {
-        flow.engine = String(input.engine).toLowerCase().trim();
+        const requestedEngine = String(input.engine).toLowerCase().trim();
+        if (requestedEngine === 'nova') {
+          return asText({
+            success: false,
+            error: 'Nova cannot be used for scheduled ticks. Keep engine=process and provide frozen steps.',
+          });
+        }
+        flow.engine = requestedEngine === 'send_only' ? 'send_only' : 'process';
       }
       if (input.steps != null) {
         const steps = parseSteps(input.steps);
@@ -558,6 +586,18 @@ export function registerScribeTools() {
       if (input.scope != null) flow.scope = String(input.scope).trim() || 'company_totals';
       if (input.data_source != null) {
         flow.data_source = String(input.data_source).trim().toLowerCase();
+      }
+      const hasFrozenWork = Boolean(
+        (Array.isArray(flow.steps) && flow.steps.length)
+        || (Array.isArray(flow.periods) && flow.periods.length)
+        || (Array.isArray(flow.metrics) && flow.metrics.length)
+        || flow.data_source === 'invoice_report',
+      );
+      if (flow.engine !== 'send_only' && !hasFrozenWork) {
+        return asText({
+          success: false,
+          error: 'A recurring schedule must retain frozen steps or periods/metrics; a prompt alone is not schedulable.',
+        });
       }
       if (input.cadence_type != null) {
         const cadence = String(input.cadence_type).toLowerCase() === 'monthly' ? 'monthly' : 'interval';
