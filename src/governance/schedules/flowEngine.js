@@ -1,6 +1,7 @@
 /**
  * Scribe flow-recipe executor.
- * Default (Nova): freeze prompt + channel → run coworker agent on tick → deliver.
+ * Default (Nova): freeze prompt + channel → run the same coworker agent on tick.
+ * Nova performs channel delivery with the normal communication tools.
  * Legacy: frozen invoice/tool steps (no LLM) for older schedules.
  */
 
@@ -92,7 +93,7 @@ function formatMoney(n) {
 
 /**
  * Normalize frozen process steps.
- * Nova: nova_run → compose → deliver (agent uses tools, then we send).
+ * Nova: nova_run (agent uses the normal tools, including communication delivery).
  * Legacy: invoice_report / tool steps, or send-only message_template.
  */
 export function resolveFlowSteps(flow = {}) {
@@ -826,7 +827,7 @@ function composeFromNovaAgentText(flow, definition, channel, agentText, dateLabe
   // would make the Markdown appear literally in a scheduled email.
   const rawBody = channel === 'sms'
     ? chatReplyForChannel(agentText, channel)
-    : String(agentText || '').trim();
+    : cleanNovaScheduledOutput(agentText);
   if (!rawBody) {
     throw new Error('Nova returned an empty reply for this schedule');
   }
@@ -846,6 +847,11 @@ function composeFromNovaAgentText(flow, definition, channel, agentText, dateLabe
   const companyName = String(
     flow.company_name || flow.companyName || definition.company_name || 'AC Units For Less',
   ).trim();
+  // Nova owns the email layout when it returns HTML. Do not wrap a complete
+  // Nova document in another branded shell (which creates nested headers).
+  if (/<[a-z][\s\S]*>/i.test(rawBody)) {
+    return { channel, subject, body: rawBody, dateLabel };
+  }
   const reportHtml = /<[a-z][\s\S]*>/i.test(rawBody)
     ? rawBody
     : renderScheduledReportMarkdown(rawBody);
@@ -867,6 +873,14 @@ function composeFromNovaAgentText(flow, definition, channel, agentText, dateLabe
   </div>
 </div>`.trim();
   return { channel, subject, body, dateLabel };
+}
+
+function cleanNovaScheduledOutput(value) {
+  return String(value || '')
+    .replace(/^\s*```(?:html)?\s*/i, '')
+    .replace(/\s*```\s*$/i, '')
+    .replace(/continuing exactly from where (?:the )?response was truncated\s*:?\s*`{0,3}/ig, '')
+    .trim();
 }
 
 function escapeReportHtml(value) {
@@ -1007,10 +1021,20 @@ export async function fillFlowRun(definition, run) {
             channel,
             dateLabel,
             timeZone,
+            recipients,
           });
           novaAgentText = novaResult.response;
           novaToolsUsed = novaResult.toolsUsed;
           run.conversation_id = novaResult.conversationId;
+          run.delivery = {
+            channel,
+            to: recipients,
+            subject: flow.subject_template || flow.subject || name,
+            status: 'sent',
+            provider_id: '',
+            detail: 'Delivered by Nova send tool',
+          };
+          run.markModified('delivery');
           await upsertProgressStep(run, {
             key: step.key,
             status: 'done',

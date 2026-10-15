@@ -56,7 +56,15 @@ export function resolveNovaPrompt(flow = {}) {
 }
 
 /** The saved user intent, sent to a brand-new Nova conversation for this run. */
-export function buildScheduledAgentMessage(prompt, { channel = 'email', name = 'Scheduled report' } = {}) {
+export function buildScheduledAgentMessage(
+  prompt,
+  {
+    channel = 'email',
+    name = 'Scheduled report',
+    recipients = [],
+    subject = '',
+  } = {},
+) {
   const base = String(prompt || '').trim();
   const channelName = String(channel || 'email').toLowerCase();
   const formatContract = channelName === 'sms'
@@ -64,13 +72,15 @@ export function buildScheduledAgentMessage(prompt, { channel = 'email', name = '
       'DELIVERY FORMAT: SMS',
       'Return concise plain text only. No Markdown, HTML, tables, or long prose.',
       'Lead with the most important totals and keep the message within 1,400 characters.',
+      `This is an authorized scheduled delivery. After retrieving the data, call send_sms exactly once to ${JSON.stringify(recipients[0] || '')}. Do not use draft_sms or wait for confirmation.`,
     ]
     : channelName === 'email'
       ? [
         'DELIVERY FORMAT: EMAIL',
-        `Create a polished HTML report body for "${name}". Return HTML only; do not use Markdown fences or conversational preamble.`,
+        `Create a complete, polished HTML report body for "${name}". Return HTML only; do not use Markdown fences, conversational preamble, or continuation language.`,
         'Use email-safe inline styles, a clear title, dated sections, accessible tables for metrics, right-aligned numeric values, and concise takeaways.',
-        'Do not call an email tool; the scheduler will deliver this response after the report is complete.',
+        'Finish the report in this response, keep it under 2,000 words, and never say that a previous response was truncated.',
+        `This is an authorized scheduled delivery. After retrieving the data, call send_email exactly once with mail_to ${JSON.stringify(recipients)}${subject ? ` and subject "${subject}"` : ''}.`,
       ]
       : [
         `DELIVERY FORMAT: ${channelName.toUpperCase()}`,
@@ -82,8 +92,7 @@ export function buildScheduledAgentMessage(prompt, { channel = 'email', name = '
 
 export function novaScheduleSteps() {
   return [
-    { type: 'nova_run', key: 'nova', label: 'Run Nova (same as chat)' },
-    { type: 'deliver', key: 'deliver', label: 'Send reply' },
+    { type: 'nova_run', key: 'nova', label: 'Run Nova (same as chat, including delivery)' },
   ];
 }
 
@@ -98,6 +107,7 @@ export async function runNovaScheduleTurn({
   companyId,
   userId,
   channel = 'email',
+  recipients = [],
 }) {
   const prompt = resolveNovaPrompt(flow);
   if (!prompt) {
@@ -106,7 +116,12 @@ export async function runNovaScheduleTurn({
   const conversationId = `schedule:${definition._id}:${run._id}`;
 
   const result = await runCoworkerTurn({
-    message: buildScheduledAgentMessage(prompt, { channel, name: definition.name }),
+    message: buildScheduledAgentMessage(prompt, {
+      channel,
+      name: definition.name,
+      recipients,
+      subject: flow.subject_template || flow.subject || definition.name,
+    }),
     company_id: String(companyId || definition.company_id),
     user_id: String(userId || definition.user_id || ''),
     conversation_id: conversationId,
@@ -119,6 +134,7 @@ export async function runNovaScheduleTurn({
       // The only frozen inputs are the saved intent and delivery metadata.
       skipExecutionPlan: false,
       autoExecutePlan: true,
+      scheduledDelivery: true,
       skipWriteConfirm: false,
     },
   });
@@ -150,10 +166,21 @@ export async function runNovaScheduleTurn({
     ? result.toolsUsed.map((t) => (typeof t === 'string' ? t : t?.name)).filter(Boolean)
     : [];
 
+  const deliveryTool = Array.isArray(result?.toolsUsed)
+    ? result.toolsUsed.find((tool) => (
+      (tool?.name === 'send_email' || tool?.name === 'send_sms')
+      && tool.success !== false
+    ))
+    : null;
+  if (!deliveryTool) {
+    throw new Error(`Nova completed without delivering the scheduled ${channel} message`);
+  }
+
   return {
     response,
     conversationId: result?.conversation_id || conversationId,
     toolsUsed,
+    delivered: true,
   };
 }
 

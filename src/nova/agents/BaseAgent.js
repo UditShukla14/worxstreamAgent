@@ -408,6 +408,10 @@ export class BaseAgent {
               && isWriteTool(block.name)
               && !usesAgentChatConfirm(block.name)
               && !context._approvedConfirmations?.includes(block.id)
+              && !(
+                context._scheduledDelivery === true
+                && (block.name === 'send_email' || block.name === 'send_sms')
+              )
             ) {
               console.log(`  ⏸️ [${this.name}] ${block.name} gated — awaiting write confirmation`);
               const confirmationId = await storePendingConfirm(
@@ -437,6 +441,7 @@ export class BaseAgent {
               block.name === 'send_sms'
               && draftedSmsThisRun
               && !isSmsChatConfirmMessage(message)
+              && context._scheduledDelivery !== true
             ) {
               console.log(`  ⏸️ [${this.name}] send_sms blocked — show draft and wait for chat confirm`);
               const blocked = {

@@ -622,6 +622,7 @@ export async function runCoworkerTurn({
       {
         _rexRequestId: requestId,
         _conversationContext: orchContextPrompt,
+        _scheduledDelivery: options.scheduledDelivery === true,
         ...orchRunContext,
       },
       sse,
