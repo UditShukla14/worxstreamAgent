@@ -135,6 +135,7 @@ export async function runNovaScheduleTurn({
       skipExecutionPlan: false,
       autoExecutePlan: true,
       scheduledDelivery: true,
+      freshConversation: true,
       skipWriteConfirm: false,
     },
   });

@@ -414,20 +414,32 @@ export async function runCoworkerTurn({
       .catch(() => ''),
   ]);
 
-  const priorMessages = convState.messages;
-  const summaryBlock = formatSummaryForPrompt(convState.conversation_summary);
+  // Scheduled ticks deliberately start a new agent turn every time. Keep the
+  // persisted conversation for audit/UI purposes, but never feed a previous
+  // scheduled transcript back into Claude (especially after a partial tool
+  // turn or failed delivery).
+  const priorMessages = options.freshConversation === true
+    ? []
+    : convState.messages;
+  const summaryBlock = options.freshConversation === true
+    ? ''
+    : formatSummaryForPrompt(convState.conversation_summary);
 
   const lastAssistant = [...priorMessages].reverse().find((m) => m.role === 'assistant');
   const lastAssistantSnippet = lastAssistant
     ? messageContentToString(lastAssistant.content).slice(0, 500)
     : '';
 
-  const baseContext = await buildContextPrompt(ctxRef, { lastAssistantSnippet });
+  const baseContext = options.freshConversation === true
+    ? ''
+    : await buildContextPrompt(ctxRef, { lastAssistantSnippet });
   const dateContext = getCurrentDateTimeContext();
 
   const contextPrompt = [dateContext, summaryBlock, prefsBlock, baseContext].filter(Boolean).join('\n\n');
 
-  const clarification = detectClarificationNeeded(redisCtx, message);
+  const clarification = options.freshConversation === true
+    ? null
+    : detectClarificationNeeded(redisCtx, message);
   if (clarification?.options?.length && !options.skipClarification) {
     sse({
       type: 'clarification',
@@ -459,7 +471,9 @@ export async function runCoworkerTurn({
     const nova = getAgentInstance('nova');
     if (!nova) throw new Error('Nova orchestrator is not initialized');
 
-    const openTask = redisCtx.workingSet?.taskState;
+    const openTask = options.freshConversation === true
+      ? null
+      : redisCtx.workingSet?.taskState;
     const resumingContinue = isContinueMessage(message)
       && openTask
       && ['in_progress', 'waiting_continue'].includes(String(openTask.status || ''));
