@@ -120,7 +120,7 @@ export function registerAllTools() {
   console.log('  ✓ Governance tools registered (get_relevant_policies)');
 
   registerScribeTools();
-  console.log('  ✓ Scribe schedule tools registered (Nova → Scribe handoff)');
+  console.log('  ✓ Schedule persistence tools registered (Nova executes ticks)');
 
   registerSalesOrderTools();
   console.log('  ✓ Sales order tools registered');

@@ -1,6 +1,7 @@
 /**
- * Scribe schedule MCP tools — Nova hands off recurring work to Scribe.
- * Domain: scribe (visible to Nova tool-search; not governance-gated).
+ * Schedule persistence MCP tools exposed to Nova.
+ * Nova remains the planner/executor; these tools only persist cadence,
+ * delivery settings, and the saved user intent.
  */
 
 import { z } from 'zod';
@@ -17,7 +18,6 @@ import {
   SUPPORTED_FLOW_TYPES,
   computeFlowNextRunAt,
   isFlowRecipe,
-  resolveFlowSteps,
 } from '../schedules/flowEngine.js';
 import { isE164 } from '../../services/telnyxClient.js';
 import {
@@ -111,8 +111,8 @@ function buildFlow(input) {
   const messageTemplate = String(
     input.message_template || input.body || '',
   ).trim();
-  // Every new schedule must use a deterministic process. A prompt is retained
-  // only as human-readable intent/audit context; it is never re-run as Nova.
+  // Nova owns execution. Keep the original request as the durable intent so
+  // every tick starts a fresh Nova turn and can plan against current data.
   const looksLikeInvoiceBriefing = /\b(invoice|sales|revenue|amount\s*paid|paid|sales\s+briefing|financial\s+briefing)\b/i.test(requestedIntent);
   const wantsProcess = engineHint === 'process'
     || engineHint === 'flow'
@@ -153,22 +153,27 @@ function buildFlow(input) {
     message_template: messageTemplate,
   };
 
-  if (wantsProcess) {
-    flow.engine = 'process';
+  if (wantsProcess || requestedIntent) {
+    flow.engine = 'nova';
     if (steps.length) flow.steps = steps;
     if (inferredPeriods.length) flow.periods = inferredPeriods;
     if (inferredMetrics.length) flow.metrics = inferredMetrics;
     if (input.scope != null) flow.scope = String(input.scope).trim() || 'company_totals';
     if (wantsInvoiceProcess) flow.data_source = 'invoice_report';
-    if (requestedPrompt) flow.intent = requestedPrompt;
+    if (requestedPrompt) {
+      flow.prompt = requestedPrompt;
+      flow.intent = requestedPrompt;
+    } else {
+      flow.prompt = [
+        'Run the scheduled data task using the appropriate live Worxstream tools.',
+        inferredPeriods.length ? `Periods: ${inferredPeriods.join(', ')}.` : '',
+        inferredMetrics.length ? `Metrics: ${inferredMetrics.join(', ')}.` : '',
+        'Return a concise result suitable for delivery to the schedule recipient.',
+      ].filter(Boolean).join(' ');
+    }
   } else if (messageTemplate) {
     // Send-only reminder (no agent turn)
     flow.engine = 'send_only';
-  } else if (requestedPrompt) {
-    // Do not create a prompt-only schedule. Without a frozen tool plan the
-    // next tick would have to call Nova again and could change its behavior.
-    flow.engine = 'process';
-    flow.intent = requestedPrompt;
   }
 
   return flow;
@@ -201,12 +206,10 @@ export function registerScribeTools() {
     {
       title: 'Create Scribe Schedule',
       description:
-        'Schedule a frozen process on a timer. For reports, freeze the exact tool steps and normalized arguments '
-        + 'selected during the chat turn; each tick re-runs those tools with only date placeholders changing, '
-        + 'then uses the same compose and delivery steps. Use engine=process for every recurring task. '
-        + 'Required: name, channel, recipients, frozen process steps (or periods/metrics shorthand), cadence. '
-        + 'Optional subject_template (email fallback). '
-        + 'Send-only (no Nova): message_template only. '
+        'Persist a recurring Nova task. Nova plans and executes the task fresh on every tick using live tools, '
+        + 'then the schedule delivers the response. Required: name, channel, recipients, and the user intent '
+        + '(or legacy periods/metrics), plus cadence. Optional subject_template. '
+        + 'Send-only reminders may use message_template without Nova. '
         + 'Confirm name, channel, recipients, prompt, cadence before calling.',
       inputSchema: {
         name: z.string().describe('Schedule display name'),
@@ -227,13 +230,13 @@ export function registerScribeTools() {
           .string()
           .optional()
           .describe(
-            'Human-readable intent only; never use a prompt as a substitute for frozen process steps.',
+            'The user intent Nova should execute fresh on every scheduled tick.',
           ),
         intent: z.string().optional().describe('Alias for prompt'),
         engine: z
           .enum(['nova', 'process', 'send_only'])
           .optional()
-          .describe('Always use process. Nova is not run during scheduled ticks.'),
+          .describe('Use nova for agent execution; process is accepted only for legacy schedules.'),
         subject_template: z
           .string()
           .optional()
@@ -294,26 +297,9 @@ export function registerScribeTools() {
         return asText({
           success: false,
           error:
-            'A recurring schedule must include frozen steps (tool name + args), periods/metrics, '
-            + 'or message_template for a send-only reminder. A prompt alone is not schedulable. '
-            + 'For tool work, retry with steps like [{"type":"tool","tool":"list_invoices",'
-            + '"args":{"from_date":"{{today}}","to_date":"{{today}}"},"as":"invoices"},'
-            + '{"type":"compose"},{"type":"deliver"}].',
+            'A recurring Nova schedule must include the user intent, legacy periods/metrics, '
+            + 'or message_template for a send-only reminder.',
         });
-      }
-      // Persist the executable process, not only the shorthand periods/metrics.
-      // This makes the schedule inspectable before it runs and guarantees that
-      // the same normalized step sequence is used by every future tick.
-      if (flow.engine === 'process') {
-        flow.steps = resolveFlowSteps(flow).map((step) => ({
-          type: step.type,
-          key: step.key,
-          label: step.label,
-          ...(step.period ? { period: step.period } : {}),
-          ...(step.tool ? { tool: step.tool } : {}),
-          ...(step.args ? { args: step.args } : {}),
-          ...(step.as ? { as: step.as } : {}),
-        }));
       }
       const recipientError = validateRecipientsForChannel(flow.channel, flow.recipients);
       if (recipientError) {
@@ -565,33 +551,29 @@ export function registerScribeTools() {
       if (input.prompt != null) {
         const nextPrompt = String(input.prompt).trim();
         if (nextPrompt) {
+          flow.prompt = nextPrompt;
           flow.intent = nextPrompt;
         } else {
+          delete flow.prompt;
           delete flow.intent;
         }
       }
       if (input.engine != null) {
         const requestedEngine = String(input.engine).toLowerCase().trim();
-        if (requestedEngine === 'nova') {
-          return asText({
-            success: false,
-            error: 'Nova cannot be used for scheduled ticks. Keep engine=process and provide frozen steps.',
-          });
-        }
-        flow.engine = requestedEngine === 'send_only' ? 'send_only' : 'process';
+        flow.engine = requestedEngine === 'send_only' ? 'send_only' : 'nova';
       }
       if (input.steps != null) {
         const steps = parseSteps(input.steps);
         if (steps.length) {
           flow.steps = steps;
-          flow.engine = 'process';
+          flow.engine = 'nova';
         } else delete flow.steps;
       }
       if (input.periods != null) {
         const periods = parseStringList(input.periods);
         if (periods.length) {
           flow.periods = periods;
-          flow.engine = 'process';
+          flow.engine = 'nova';
         } else delete flow.periods;
       }
       if (input.metrics != null) {
@@ -615,22 +597,12 @@ export function registerScribeTools() {
           error: 'Send-only schedules require a non-empty message_template.',
         });
       }
-      if (flow.engine !== 'send_only' && !hasFrozenWork) {
+      const hasNovaIntent = Boolean(String(flow.prompt || flow.intent || '').trim());
+      if (flow.engine !== 'send_only' && !hasFrozenWork && !hasNovaIntent) {
         return asText({
           success: false,
-          error: 'A recurring schedule must retain frozen steps or periods/metrics; a prompt alone is not schedulable.',
+          error: 'A recurring Nova schedule requires the saved user intent or legacy periods/metrics.',
         });
-      }
-      if (flow.engine === 'process') {
-        flow.steps = resolveFlowSteps(flow).map((step) => ({
-          type: step.type,
-          key: step.key,
-          label: step.label,
-          ...(step.period ? { period: step.period } : {}),
-          ...(step.tool ? { tool: step.tool } : {}),
-          ...(step.args ? { args: step.args } : {}),
-          ...(step.as ? { as: step.as } : {}),
-        }));
       }
       if (input.cadence_type != null) {
         const cadence = String(input.cadence_type).toLowerCase() === 'monthly' ? 'monthly' : 'interval';

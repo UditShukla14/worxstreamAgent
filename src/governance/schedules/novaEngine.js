@@ -1,5 +1,6 @@
 /**
- * Nova schedule ticks: freeze prompt → run Nova like chat → send that reply.
+ * Nova schedule ticks: persist the user's intent → run a fresh Nova turn → send the reply.
+ * The schedule stores cadence and delivery metadata; Nova plans and selects tools at fire time.
  */
 
 import { runCoworkerTurn } from '../../nova/agents/coworkerPipeline.js';
@@ -9,22 +10,52 @@ import { runCoworkerTurn } from '../../nova/agents/coworkerPipeline.js';
  */
 export function isNovaScheduleFlow(flow = {}) {
   const engine = String(flow.engine || '').toLowerCase().trim();
+  if (engine === 'send_only') return false;
   if (engine === 'nova') return true;
-  if (engine === 'process' || engine === 'flow' || engine === 'steps') return false;
 
-  const prompt = String(flow.prompt || flow.intent || '').trim();
-  const hasSteps = Array.isArray(flow.steps) && flow.steps.length > 0;
-  const hasPeriods = Array.isArray(flow.periods) && flow.periods.length > 0;
-  const dataSource = String(flow.data_source || flow.dataSource || '').toLowerCase();
-  if (dataSource === 'invoice_report') return false;
-  return Boolean(prompt) && !hasSteps && !hasPeriods;
+  // Legacy process definitions remain deterministic when they only contain
+  // steps/periods. Once an intent is present, they are upgraded to a fresh
+  // Nova execution without requiring a migration.
+  const explicitIntent = String(flow.prompt || flow.intent || '').trim();
+  if (engine === 'process') return Boolean(explicitIntent);
+  if (engine) return false;
+  return Boolean(explicitIntent);
 }
 
 export function resolveNovaPrompt(flow = {}) {
-  return String(flow.prompt || flow.intent || flow.message_template || flow.message || '').trim();
+  const explicit = String(flow.prompt || flow.intent || '').trim();
+  if (explicit) return explicit;
+
+  // Compatibility for schedules created before Nova became the executor.
+  // These descriptions are only a fallback; each run still lets Nova choose
+  // and execute the tools against live data.
+  const periods = Array.isArray(flow.periods) ? flow.periods.filter(Boolean).join(', ') : '';
+  const metrics = Array.isArray(flow.metrics) ? flow.metrics.filter(Boolean).join(', ') : '';
+  if (periods || metrics || flow.data_source === 'invoice_report') {
+    return [
+      'Run the scheduled data task using the appropriate live Worxstream tools.',
+      periods ? `Periods: ${periods}.` : '',
+      metrics ? `Metrics: ${metrics}.` : '',
+      'Return a concise result suitable for delivery to the schedule recipient.',
+    ].filter(Boolean).join(' ');
+  }
+
+  if (Array.isArray(flow.steps) && flow.steps.length > 0) {
+    const tools = flow.steps
+      .map((step) => step?.tool || step?.type)
+      .filter(Boolean)
+      .join(', ');
+    return [
+      'Execute the saved scheduled workflow using the appropriate live Worxstream tools.',
+      tools ? `The previous workflow referenced: ${tools}.` : '',
+      'Re-plan the task for the current data and return a concise result suitable for delivery.',
+    ].filter(Boolean).join(' ');
+  }
+
+  return String(flow.message_template || flow.message || '').trim();
 }
 
-/** Frozen prompt only — same text the user would send in chat. */
+/** The saved user intent, sent to a brand-new Nova conversation for this run. */
 export function buildScheduledAgentMessage(prompt) {
   return String(prompt || '').trim();
 }
@@ -63,7 +94,9 @@ export async function runNovaScheduleTurn({
       streamFormatter: false,
       formatOutput: false,
       skipClarification: true,
-      skipExecutionPlan: true,
+      // Scheduled runs must use Nova's normal planning/tool-selection path.
+      // The only frozen inputs are the saved intent and delivery metadata.
+      skipExecutionPlan: false,
       skipWriteConfirm: false,
     },
   });

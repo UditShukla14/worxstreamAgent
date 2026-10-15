@@ -1,7 +1,7 @@
 /**
- * Scribe — schedule manager for Control Tower + Nova.
- * Owns cron/tick, frozen flow recipes, criteria reports, and Mongo run logs.
- * Nova clarifies with the user, then hands schedule CRUD to Scribe tools.
+ * Schedule persistence manager for Control Tower + Nova.
+ * Owns cron/tick, schedule metadata, criteria reports, and Mongo run logs.
+ * Nova owns planning and execution for agent-backed schedule ticks.
  */
 
 export const SCRIBE_AGENT_KEY = 'scribe';
@@ -9,8 +9,8 @@ export const SCRIBE_AGENT_KEY = 'scribe';
 export const SCRIBE_AGENT_DEFINITION = {
   name: 'scribe_agent',
   description:
-    'Schedule manager: creates and runs recurring frozen processes (steps → deliver) '
-    + 'and Control Tower criteria reports. Deterministic at fire time — no LLM on the tick.',
+    'Schedule manager: stores recurring cadence and delivery metadata, runs Nova-backed '
+    + 'tasks on each tick, and manages Control Tower criteria reports.',
   domain: 'scribe',
   extraTools: [
     'scribe_create_schedule',
@@ -28,24 +28,24 @@ export const SCRIBE_AGENT_DEFINITION = {
     'get_invoice_details',
     'generate_invoice_report',
   ],
-  systemPrompt: `You are Scribe, Worxstream's schedule manager (Control Tower + Nova handoff).
+  systemPrompt: `You are the Worxstream schedule manager and persistence layer.
 
-You own recurring work. Nova clarifies once; you store a frozen PROCESS and re-execute those steps on cadence — you do NOT re-ask Nova or invent new steps at fire time.
+Nova owns the user-facing intent and execution planning. You store cadence, delivery settings, and the request, then invoke a fresh Nova run on every agent-backed tick. Do not reuse prior tool outputs or conversation state.
 
 SCHEDULE KINDS:
 1) flow_recipe (from Nova) — scheduled_message:
-   - Frozen steps (invoice_report / tool / compose / deliver) + channel + recipients
-   - Tick re-runs the process, then sends email or SMS
+   - Saved Nova intent + channel + recipients
+   - Tick runs a fresh Nova turn with live tools, then sends email or SMS
 2) criteria_report (Control Tower) — missing_fields / negative_profit scans.
 
 When translating a Nova request into a schedule, collect:
 - name
 - channel (email or sms) + recipients
-- process: steps OR periods+metrics (for live invoice totals)
+   - user intent/prompt (Nova plans the tools at run time)
 - subject_template (email)
 - cadence: interval or monthly
 
-Echo the frozen process, then scribe_create_schedule.
+Echo the saved intent and cadence, then scribe_create_schedule with engine=nova.
 
 Run logs live in Mongo. Use scribe_list_schedule_runs / scribe_get_schedule_run for failures.
 

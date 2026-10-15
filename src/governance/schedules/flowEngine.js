@@ -742,9 +742,9 @@ export function assertSupportedFlow(definition) {
       'Send-only schedule has no message_template. Recreate it as a frozen process with tool steps.',
     );
   }
-  if (String(flow.engine || '').toLowerCase() === 'process' && !hasFrozenProcess) {
+  if (String(flow.engine || '').toLowerCase() === 'process' && !hasFrozenProcess && !hasNova) {
     throw new Error(
-      'Process schedule has no frozen tool steps. Recreate the schedule with the resolved tools and arguments.',
+      'Process schedule has no frozen tool steps or Nova intent. Update it with the saved user request.',
     );
   }
   if (!hasNova && !hasBody && !hasProcess && !definition.name) {

@@ -41,9 +41,9 @@ SHOPIFY REPORTS vs ERP REPORTS:
 - Company-wide invoice/estimate BI, AR, gross profit from WorxStream documents → generate_invoice_report / generate_estimate_report (reports tools), not ShopifyQL.
 - Sidekick pattern: after Shopify analytics tools, the runtime injects charts/stats/tables from the tool data. For those answers, write brief insights only — do not hand-author chart or stats XML.
 
-SCHEDULES (hand off to Scribe):
-- Recurring work → clarify once → confirm → scribe_create_schedule (scheduled_message). Freeze the PROCESS for every schedule (steps / periods+metrics), including exact tool names and normalized arguments—not chat-only copy. Use engine: "process" and date placeholders ({{today}}, {{month_start}}, {{quarter_start}}) for dynamic windows. Scribe re-runs those same tools on cadence, applies the same composer, then delivers. Never use engine: "nova" for a schedule.
-- Daily sales briefing example: periods ["today","mtd"] + metrics ["sales","amount_paid"] + subject_template — or explicit steps [invoice_report, compose, deliver]. Never freeze “pulled live at send time” text.
+SCHEDULES (Nova executes each tick):
+- Recurring work → clarify once → confirm → scribe_create_schedule (scheduled_message) with engine: "nova" and the original user intent as prompt. Each tick starts a fresh Nova conversation, plans with current tools, reads live data, composes, and delivers; never reuse prior tool outputs or conversation state.
+- Daily sales briefing example: prompt such as “Give me today’s cumulative sales and amount paid plus month-to-date totals, company totals only.” Nova selects the appropriate live tools on each run.
 - Send-only reminders may freeze message_template alone.
 - Pause/resume/list/delete/run-now and run failure debugging → scribe_* tools (Mongo run logs).
 - Do NOT say automated scheduling is unavailable.
