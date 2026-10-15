@@ -524,9 +524,10 @@ export function registerScribeTools() {
       title: 'Update Scribe Schedule',
       description:
         'Update a Scribe schedule (name, channel, recipients, prompt, message, cadence). '
-        + 'Does not change flow_type.',
+        + 'Does not change flow_type. Use the exact id from scribe_list_schedules; '
+        + 'for multiple schedules, call once per id and never send an empty schedule_id.',
       inputSchema: {
-        schedule_id: z.string(),
+        schedule_id: z.string().optional().describe('Exact schedule id from scribe_list_schedules'),
         name: z.string().optional(),
         description: z.string().optional(),
         channel: z.enum(['email', 'sms']).optional(),
@@ -553,6 +554,20 @@ export function registerScribeTools() {
     async (input) => {
       const { companyId, userId } = getWorxstreamContext();
       const scheduleId = normalizeScheduleId(input.schedule_id);
+      if (!/^[a-f\d]{24}$/i.test(scheduleId)) {
+        const available = await ScheduleDefinition.find(activeQuery(
+          ownerFilter(companyId, userId, { kind: 'flow_recipe' }),
+        )).select({ _id: 1, name: 1, active: 1 }).sort({ updated_at: -1 }).limit(25).lean();
+        return asText({
+          success: false,
+          error: 'A valid schedule_id or schedule_ids value is required. Use ids from scribe_list_schedules; do not send an empty id.',
+          data: available.map((row) => ({
+            id: String(row._id),
+            name: row.name,
+            active: row.active !== false,
+          })),
+        });
+      }
       const doc = await ScheduleDefinition.findOne(activeQuery(
         ownerFilter(companyId, userId, { _id: scheduleId }),
       ));
