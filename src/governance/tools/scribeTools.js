@@ -47,6 +47,12 @@ function parseRecipients(raw) {
   return raw.map((item) => String(item).trim()).filter(Boolean);
 }
 
+function normalizeScheduleId(raw) {
+  return String(raw ?? '')
+    .trim()
+    .replace(/^['"`]+|['"`,.]+$/g, '');
+}
+
 function resolveChannel(input) {
   const raw = String(input.channel || 'email').toLowerCase().trim();
   return raw === 'sms' ? 'sms' : 'email';
@@ -272,6 +278,10 @@ export function registerScribeTools() {
           .optional()
           .describe('When cadence_type=monthly: local hour 0-23 in timezone'),
         conversation_id: z.string().optional().describe('Nova conversation id that created this'),
+        clone_from_schedule_id: z
+          .string()
+          .optional()
+          .describe('Optional existing schedule id to clone; preserves its Nova intent and cadence'),
         active: z.boolean().optional().describe('Start active (default true)'),
       },
       capabilities: { domain: 'scribe', action: 'create', safety: 'write' },
@@ -285,7 +295,31 @@ export function registerScribeTools() {
           error: `Unsupported flow_type. Supported: ${[...SUPPORTED_FLOW_TYPES].join(', ')}`,
         });
       }
-      const flow = buildFlow(input);
+      let cloneSource = null;
+      if (input.clone_from_schedule_id) {
+        const cloneId = normalizeScheduleId(input.clone_from_schedule_id);
+        cloneSource = await ScheduleDefinition.findOne(activeQuery(
+          ownerFilter(companyId, userId, { _id: cloneId }),
+        ));
+        if (!cloneSource) {
+          return asText({ success: false, error: 'Clone source schedule not found' });
+        }
+      }
+      const sourceFlow = cloneSource?.flow && typeof cloneSource.flow === 'object'
+        ? cloneSource.flow
+        : {};
+      const flow = buildFlow({
+        ...sourceFlow,
+        ...input,
+        recipients: input.recipients ?? sourceFlow.recipients,
+        prompt: input.prompt ?? sourceFlow.prompt ?? sourceFlow.intent,
+        intent: input.intent ?? sourceFlow.intent ?? sourceFlow.prompt,
+        periods: input.periods ?? sourceFlow.periods,
+        metrics: input.metrics ?? sourceFlow.metrics,
+        subject_template: input.subject_template ?? sourceFlow.subject_template,
+        timezone: input.timezone ?? cloneSource?.timezone ?? sourceFlow.timezone,
+        cadence_type: input.cadence_type ?? cloneSource?.cadence_type ?? sourceFlow.cadence_type,
+      });
       const hasNova = flow.engine === 'nova' && Boolean(flow.prompt);
       const hasProcess = Boolean(
         (flow.steps && flow.steps.length)
@@ -333,18 +367,18 @@ export function registerScribeTools() {
 
       const cadenceFields = {
         cadence_type,
-        interval_days,
-        run_at_hour_utc,
-        day_of_month,
-        run_at_hour_local,
+        interval_days: input.interval_days ?? cloneSource?.interval_days ?? interval_days,
+        run_at_hour_utc: input.run_at_hour_utc ?? cloneSource?.run_at_hour_utc ?? run_at_hour_utc,
+        day_of_month: input.day_of_month ?? cloneSource?.day_of_month ?? day_of_month,
+        run_at_hour_local: input.run_at_hour_local ?? cloneSource?.run_at_hour_local ?? run_at_hour_local,
         timezone: flow.timezone,
       };
 
       const doc = await ScheduleDefinition.create({
         company_id: String(companyId),
         user_id: String(userId),
-        name: String(input.name || '').trim(),
-        description: String(input.description || '').trim(),
+        name: String(input.name || cloneSource?.name || '').trim(),
+        description: String(input.description ?? cloneSource?.description ?? '').trim(),
         kind: 'flow_recipe',
         source: 'nova',
         conversation_id: input.conversation_id ? String(input.conversation_id) : null,
@@ -518,8 +552,9 @@ export function registerScribeTools() {
     },
     async (input) => {
       const { companyId, userId } = getWorxstreamContext();
+      const scheduleId = normalizeScheduleId(input.schedule_id);
       const doc = await ScheduleDefinition.findOne(activeQuery(
-        ownerFilter(companyId, userId, { _id: input.schedule_id }),
+        ownerFilter(companyId, userId, { _id: scheduleId }),
       ));
       if (!doc) return asText({ success: false, error: 'Schedule not found' });
       if (!isFlowRecipe(doc)) {
