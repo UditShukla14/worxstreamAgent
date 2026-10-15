@@ -349,7 +349,8 @@ export class BaseAgent {
           totalOutputTokens += response.usage.output_tokens || 0;
         }
 
-        if (response.stop_reason === 'max_tokens') {
+        const hasToolUse = response.content?.some((block) => block?.type === 'tool_use');
+        if (response.stop_reason === 'max_tokens' && !hasToolUse) {
           console.log(`  ⚠️ [${this.name}] stop_reason=max_tokens — continuing…`);
           if (response.content?.length) {
             messages.push({ role: 'assistant', content: response.content });
@@ -363,9 +364,25 @@ export class BaseAgent {
           continue;
         }
 
-        if (response.stop_reason === 'tool_use') {
-          const toolUseBlocks = response.content.filter((b) => b.type === 'tool_use');
-          messages.push({ role: 'assistant', content: response.content });
+        // A max_tokens response can still contain a complete tool_use block.
+        // Process it exactly like stop_reason=tool_use; sending a plain
+        // continuation message after an assistant tool_use violates Anthropic's
+        // required assistant-tool_use → user-tool_result sequence.
+        if (response.stop_reason === 'tool_use' || hasToolUse) {
+          const allToolUseBlocks = response.content.filter((b) => b.type === 'tool_use');
+          // Scheduled runs use the same sequential tool loop as chat: one
+          // tool call, one result, then Nova gets another turn. If the model
+          // emits a batch anyway, retain only the first tool_use block in the
+          // assistant message so no unpaired tool IDs enter the next request.
+          const toolUseBlocks = context._oneToolAtATime === true
+            ? allToolUseBlocks.slice(0, 1)
+            : allToolUseBlocks;
+          const assistantContent = context._oneToolAtATime === true
+            ? response.content.filter((block) => (
+              block?.type !== 'tool_use' || block === toolUseBlocks[0]
+            ))
+            : response.content;
+          messages.push({ role: 'assistant', content: assistantContent });
 
           const toolResults = [];
           for (const block of toolUseBlocks) {
