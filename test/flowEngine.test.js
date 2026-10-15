@@ -12,10 +12,11 @@ import {
   unwrapInvoiceReportEnvelope,
   SUPPORTED_FLOW_TYPES,
 } from '../src/governance/schedules/flowEngine.js';
+import { isNovaScheduleFlow } from '../src/governance/schedules/novaEngine.js';
 import {
-  isNovaScheduleFlow,
-  stripAgentPresentationForDelivery,
-} from '../src/governance/schedules/novaEngine.js';
+  unwrapNovaDeliveryDraft,
+  buildChannelOutputInstructions,
+} from '../src/governance/schedules/deliveryFormat.js';
 
 describe('scheduled_message flow', () => {
   it('supports scheduled_message and legacy sales_email_briefing alias', () => {
@@ -49,14 +50,35 @@ describe('scheduled_message flow', () => {
     assert.deepEqual(steps.map((s) => s.type), ['nova_run', 'compose', 'deliver']);
   });
 
-  it('strips chart/stats tags for email delivery', () => {
-    const cleaned = stripAgentPresentationForDelivery(
-      'Hello\n<stats><stat label="Sales" value="$1"/></stats>\n<table><tr><td>ok</td></tr></table>',
+  it('passes Nova email HTML draft through (scheduler does not rewrite)', () => {
+    const draft = unwrapNovaDeliveryDraft(
+      [
+        'Subject: Daily Briefing — Oct 15',
+        '',
+        '<h2>Today</h2><p>Sales: <strong>$490.53</strong></p>',
+        '<table><tr><th>Metric</th><th>Value</th></tr><tr><td>Invoices</td><td>1</td></tr></table>',
+      ].join('\n'),
       'email',
     );
-    assert.match(cleaned, /Hello/);
-    assert.match(cleaned, /<table>/);
-    assert.equal(/<stats/i.test(cleaned), false);
+    assert.equal(draft.subject, 'Daily Briefing — Oct 15');
+    assert.match(draft.body, /<h2>Today<\/h2>/);
+    assert.match(draft.body, /\$490\.53/);
+    assert.match(draft.body, /<table>/);
+  });
+
+  it('unwraps Nova SMS draft to plain text', () => {
+    const draft = unwrapNovaDeliveryDraft(
+      '**Today:** 1 invoice, $490.53 invoiced, $0 paid.',
+      'sms',
+    );
+    assert.match(draft.body, /1 invoice/);
+    assert.equal(/<[^>]+>/.test(draft.body), false);
+    assert.equal(/\*\*/.test(draft.body), false);
+  });
+
+  it('tells Nova to draft email or SMS', () => {
+    assert.match(buildChannelOutputInstructions('email'), /Draft the final email/);
+    assert.match(buildChannelOutputInstructions('sms'), /Draft the final SMS/);
   });
 
   it('resolves invoice process from periods', () => {

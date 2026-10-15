@@ -1,9 +1,13 @@
 /**
- * Nova-backed schedule runs: freeze a prompt, re-run the coworker agent on tick
- * (full tool access), then hand the response back for compose + deliver.
+ * Nova-backed schedule runs.
+ * Scribe follows steps in order; Nova drafts the email/SMS; Scribe delivers.
  */
 
 import { runCoworkerTurn } from '../../nova/agents/coworkerPipeline.js';
+import {
+  buildScheduledAgentMessage,
+  unwrapNovaDeliveryDraft,
+} from './deliveryFormat.js';
 
 /**
  * True when this schedule should invoke Nova on each tick.
@@ -26,60 +30,13 @@ export function resolveNovaPrompt(flow = {}) {
   return String(flow.prompt || flow.intent || flow.message_template || flow.message || '').trim();
 }
 
+/** Prescribed order: Nova drafts → prepare payload → deliver. */
 export function novaScheduleSteps() {
   return [
-    { type: 'nova_run', key: 'nova', label: 'Run Nova agent' },
-    { type: 'compose', key: 'compose', label: 'Compose' },
+    { type: 'nova_run', key: 'nova', label: 'Nova drafts message' },
+    { type: 'compose', key: 'compose', label: 'Prepare delivery' },
     { type: 'deliver', key: 'deliver', label: 'Send' },
   ];
-}
-
-/**
- * Strip chart/stats/UI-only tags; keep prose and simple tables for email/SMS.
- */
-export function stripAgentPresentationForDelivery(text, channel = 'email') {
-  let body = String(text || '');
-  body = body
-    .replace(/<chart\b[\s\S]*?<\/chart>/gi, '')
-    .replace(/<stats\b[\s\S]*?<\/stats>/gi, '')
-    .replace(/<workflow\b[\s\S]*?<\/workflow>/gi, '')
-    .replace(/<details\b[\s\S]*?<\/details>/gi, '')
-    .replace(/<alert\b[\s\S]*?<\/alert>/gi, '')
-    .replace(/<!--AGENT_BLK_\d+-->/g, '');
-
-  if (channel === 'sms') {
-    body = body
-      .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<\/p>/gi, '\n')
-      .replace(/<\/tr>/gi, '\n')
-      .replace(/<\/(h[1-6]|div|li)>/gi, '\n')
-      .replace(/<[^>]+>/g, '')
-      .replace(/[ \t]+\n/g, '\n')
-      .replace(/\n{3,}/g, '\n\n')
-      .replace(/[ \t]{2,}/g, ' ')
-      .trim();
-    if (body.length > 1400) body = `${body.slice(0, 1397)}...`;
-    return body;
-  }
-
-  return body.trim();
-}
-
-function buildScheduledAgentMessage({ name, prompt, channel }) {
-  const deliveryHint = channel === 'sms'
-    ? 'Write a concise plain-text answer suitable for SMS (no HTML, no charts).'
-    : 'Write a clear email-ready answer (prose and HTML tables OK). Do not use chart/stats/workflow tags.';
-
-  return [
-    `[Scheduled run: ${name}]`,
-    'Complete the following request now.',
-    'Do not ask clarifying questions.',
-    'Do not call send_email, SMS, or other delivery tools — delivery is handled after you respond.',
-    'Prefer read-only tools (reports, lists, lookups). Avoid creates/updates/deletes unless the request explicitly requires a write.',
-    deliveryHint,
-    '',
-    prompt,
-  ].join('\n');
 }
 
 /**
@@ -112,7 +69,6 @@ export async function runNovaScheduleTurn({
       formatOutput: false,
       skipClarification: true,
       skipExecutionPlan: true,
-      // Background ticks have no Approve UI — fail closed on pending_confirmation.
       skipWriteConfirm: false,
     },
   });
@@ -137,7 +93,7 @@ export async function runNovaScheduleTurn({
     || '',
   ).trim();
   if (!response) {
-    throw new Error('Nova returned no text for this schedule run');
+    throw new Error('Nova returned no draft for this schedule run');
   }
 
   const toolsUsed = Array.isArray(result?.toolsUsed)
@@ -150,3 +106,8 @@ export async function runNovaScheduleTurn({
     toolsUsed,
   };
 }
+
+export {
+  buildScheduledAgentMessage,
+  unwrapNovaDeliveryDraft,
+};

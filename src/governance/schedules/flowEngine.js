@@ -21,8 +21,8 @@ import {
   novaScheduleSteps,
   resolveNovaPrompt,
   runNovaScheduleTurn,
-  stripAgentPresentationForDelivery,
 } from './novaEngine.js';
+import { unwrapNovaDeliveryDraft } from './deliveryFormat.js';
 
 /**
  * Generic notification schedule. Legacy `sales_email_briefing` still accepted.
@@ -774,26 +774,26 @@ export async function createPendingFlowRun(definition, meta = {}) {
  * @param {import('../models/ScheduleDefinition.js').default} definition
  * @param {import('../models/ScheduleRun.js').default} run
  */
+/**
+ * Prepare Nova's draft for send — do not rewrite/redesign the message.
+ * Subject falls back to subject_template when Nova did not supply Subject:.
+ */
 function composeFromNovaAgentText(flow, definition, channel, agentText, dateLabel, timeZone) {
   const name = definition.name || 'Scheduled message';
-  const subject = renderScheduleTemplate(
-    String(flow.subject_template || flow.subject || `${name} — {{date}}`).trim(),
-    { name, dateLabel, timeZone },
-  );
-  let body = stripAgentPresentationForDelivery(agentText, channel);
-  if (!body) {
-    throw new Error('Nova returned an empty response for this schedule');
+  const draft = unwrapNovaDeliveryDraft(agentText, channel);
+  if (!draft.body) {
+    throw new Error('Nova returned an empty draft for this schedule');
   }
+  const subject = draft.subject
+    || renderScheduleTemplate(
+      String(flow.subject_template || flow.subject || `${name} — {{date}}`).trim(),
+      { name, dateLabel, timeZone },
+    );
   if (channel === 'sms') {
-    const { text } = withSmsOptOutFooter(body);
+    const { text } = withSmsOptOutFooter(draft.body);
     return { channel, subject, body: text, dateLabel };
   }
-  if (!/<[a-z][\s\S]*>/i.test(body)) {
-    body = `<div style="font-family:system-ui,-apple-system,sans-serif;color:#222;line-height:1.45;">${
-      body.split(/\n+/).map((line) => `<p style="margin:0 0 8px;">${line}</p>`).join('')
-    }</div>`;
-  }
-  return { channel, subject, body, dateLabel };
+  return { channel, subject, body: draft.body, dateLabel };
 }
 
 export async function fillFlowRun(definition, run) {
