@@ -456,9 +456,9 @@ export class BaseAgent {
               continue;
             }
 
-            // Scheduled ticks need JSON report totals — CSV/XLSX exports are unreadable in-agent.
+            // Headless schedule ticks (conversation_id schedule:…) can't use binary CSV/XLSX.
             if (
-              String(message || '').includes('[Scheduled run:')
+              String(context._conversationId || '').startsWith('schedule:')
               && /^export_.*_(csv|xlsx)$/i.test(String(block.name || ''))
             ) {
               const blocked = {
@@ -466,7 +466,7 @@ export class BaseAgent {
                 error:
                   `Scheduled runs cannot use ${block.name}. `
                   + 'Use generate_invoice_report (or the matching generate_*_report) with from_date/to_date '
-                  + 'and read meta.totals / rows for real numbers, then draft the email/SMS.',
+                  + 'and read meta.totals / rows for real numbers.',
               };
               toolsUsed.push({ name: block.name, input: normalizedInput, success: false, error: blocked.error });
               toolResultPayloads.push(blocked);

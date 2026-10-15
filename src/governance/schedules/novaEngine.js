@@ -1,17 +1,11 @@
 /**
- * Nova-backed schedule runs.
- * Scribe follows steps in order; Nova drafts the email/SMS; Scribe delivers.
+ * Nova schedule ticks: freeze prompt → run Nova like chat → send that reply.
  */
 
 import { runCoworkerTurn } from '../../nova/agents/coworkerPipeline.js';
-import {
-  buildScheduledAgentMessage,
-  unwrapNovaDeliveryDraft,
-} from './deliveryFormat.js';
 
 /**
  * True when this schedule should invoke Nova on each tick.
- * Explicit engine:'nova', or a frozen prompt without legacy process steps.
  */
 export function isNovaScheduleFlow(flow = {}) {
   const engine = String(flow.engine || '').toLowerCase().trim();
@@ -30,17 +24,20 @@ export function resolveNovaPrompt(flow = {}) {
   return String(flow.prompt || flow.intent || flow.message_template || flow.message || '').trim();
 }
 
-/** Same chat request → prepare → send. */
+/** Frozen prompt only — same text the user would send in chat. */
+export function buildScheduledAgentMessage(prompt) {
+  return String(prompt || '').trim();
+}
+
 export function novaScheduleSteps() {
   return [
     { type: 'nova_run', key: 'nova', label: 'Run Nova (same as chat)' },
-    { type: 'compose', key: 'compose', label: 'Prepare delivery' },
-    { type: 'deliver', key: 'deliver', label: 'Send' },
+    { type: 'deliver', key: 'deliver', label: 'Send reply' },
   ];
 }
 
 /**
- * Headless Nova turn for a schedule tick.
+ * Headless Nova turn — same pipeline as chat, frozen prompt as the user message.
  * @returns {{ response: string, conversationId: string, toolsUsed: string[] }}
  */
 export async function runNovaScheduleTurn({
@@ -49,27 +46,15 @@ export async function runNovaScheduleTurn({
   flow,
   companyId,
   userId,
-  channel = 'email',
-  dateLabel,
-  timeZone,
 }) {
   const prompt = resolveNovaPrompt(flow);
   if (!prompt) {
     throw new Error('Nova schedule is missing flow.prompt');
   }
-  const name = definition.name || 'Scheduled message';
   const conversationId = `schedule:${definition._id}:${run._id}`;
-  const tz = String(timeZone || flow.timezone || definition.timezone || 'UTC');
-  const asOf = dateLabel || undefined;
 
   const result = await runCoworkerTurn({
-    message: buildScheduledAgentMessage({
-      name,
-      prompt,
-      channel,
-      dateLabel: asOf,
-      timeZone: tz,
-    }),
+    message: buildScheduledAgentMessage(prompt),
     company_id: String(companyId || definition.company_id),
     user_id: String(userId || definition.user_id || ''),
     conversation_id: conversationId,
@@ -103,7 +88,7 @@ export async function runNovaScheduleTurn({
     || '',
   ).trim();
   if (!response) {
-    throw new Error('Nova returned no draft for this schedule run');
+    throw new Error('Nova returned an empty reply for this schedule run');
   }
 
   const toolsUsed = Array.isArray(result?.toolsUsed)
@@ -117,7 +102,39 @@ export async function runNovaScheduleTurn({
   };
 }
 
-export {
-  buildScheduledAgentMessage,
-  unwrapNovaDeliveryDraft,
-};
+/**
+ * Adapt the same chat reply for the delivery channel (no redesign).
+ * Email: keep HTML as-is, or wrap plain text.
+ * SMS: plain text only.
+ */
+export function chatReplyForChannel(text, channel = 'email') {
+  const raw = String(text || '').trim();
+  if (!raw) return '';
+
+  if (channel === 'sms') {
+    let body = raw
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(p|div|h[1-6]|li|tr)>/gi, '\n')
+      .replace(/<[^>]+>/g, '')
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    if (body.length > 1400) body = `${body.slice(0, 1397)}...`;
+    return body;
+  }
+
+  // Email: send the chat reply; wrap only if it has no markup.
+  if (/<[a-z][\s\S]*>/i.test(raw)) return raw;
+  return `<div style="font-family:system-ui,-apple-system,sans-serif;color:#222;line-height:1.5;white-space:pre-wrap;">${
+    escapeHtml(raw)
+  }</div>`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}

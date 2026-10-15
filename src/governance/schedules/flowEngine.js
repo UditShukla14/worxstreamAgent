@@ -17,12 +17,12 @@ import {
 } from '../../services/telnyxClient.js';
 import { withSmsOptOutFooter } from '../../mcp/tools/sms.js';
 import {
+  chatReplyForChannel,
   isNovaScheduleFlow,
   novaScheduleSteps,
   resolveNovaPrompt,
   runNovaScheduleTurn,
 } from './novaEngine.js';
-import { unwrapNovaDeliveryDraft } from './deliveryFormat.js';
 
 /**
  * Generic notification schedule. Legacy `sales_email_briefing` still accepted.
@@ -775,25 +775,23 @@ export async function createPendingFlowRun(definition, meta = {}) {
  * @param {import('../models/ScheduleRun.js').default} run
  */
 /**
- * Prepare Nova's draft for send — do not rewrite/redesign the message.
- * Subject falls back to subject_template when Nova did not supply Subject:.
+ * Same chat reply → channel payload. Subject from schedule template only.
  */
 function composeFromNovaAgentText(flow, definition, channel, agentText, dateLabel, timeZone) {
   const name = definition.name || 'Scheduled message';
-  const draft = unwrapNovaDeliveryDraft(agentText, channel);
-  if (!draft.body) {
-    throw new Error('Nova returned an empty draft for this schedule');
+  const body = chatReplyForChannel(agentText, channel);
+  if (!body) {
+    throw new Error('Nova returned an empty reply for this schedule');
   }
-  const subject = draft.subject
-    || renderScheduleTemplate(
-      String(flow.subject_template || flow.subject || `${name} — {{date}}`).trim(),
-      { name, dateLabel, timeZone },
-    );
+  const subject = renderScheduleTemplate(
+    String(flow.subject_template || flow.subject || `${name} — {{date}}`).trim(),
+    { name, dateLabel, timeZone },
+  );
   if (channel === 'sms') {
-    const { text } = withSmsOptOutFooter(draft.body);
+    const { text } = withSmsOptOutFooter(body);
     return { channel, subject, body: text, dateLabel };
   }
-  return { channel, subject, body: draft.body, dateLabel };
+  return { channel, subject, body, dateLabel };
 }
 
 export async function fillFlowRun(definition, run) {
@@ -994,6 +992,16 @@ export async function fillFlowRun(definition, run) {
         }
 
         if (step.type === 'deliver') {
+          if (!composed && novaAgentText) {
+            composed = composeFromNovaAgentText(
+              flow,
+              definition,
+              channel,
+              novaAgentText,
+              dateLabel,
+              timeZone,
+            );
+          }
           if (!composed) {
             composed = composeScheduledMessage(flow, definition, timeZone);
           }

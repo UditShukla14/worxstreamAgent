@@ -12,11 +12,11 @@ import {
   unwrapInvoiceReportEnvelope,
   SUPPORTED_FLOW_TYPES,
 } from '../src/governance/schedules/flowEngine.js';
-import { isNovaScheduleFlow } from '../src/governance/schedules/novaEngine.js';
 import {
-  unwrapNovaDeliveryDraft,
-  buildChannelOutputInstructions,
-} from '../src/governance/schedules/deliveryFormat.js';
+  buildScheduledAgentMessage,
+  chatReplyForChannel,
+  isNovaScheduleFlow,
+} from '../src/governance/schedules/novaEngine.js';
 
 describe('scheduled_message flow', () => {
   it('supports scheduled_message and legacy sales_email_briefing alias', () => {
@@ -34,7 +34,7 @@ describe('scheduled_message flow', () => {
     assert.deepEqual(steps.map((s) => s.type), ['compose', 'deliver']);
   });
 
-  it('resolves Nova agent process from prompt', () => {
+  it('resolves Nova steps as run + send (same chat prompt)', () => {
     assert.equal(
       isNovaScheduleFlow({
         engine: 'nova',
@@ -47,50 +47,24 @@ describe('scheduled_message flow', () => {
       prompt: 'Summarize today and MTD sales',
       channel: 'email',
     });
-    assert.deepEqual(steps.map((s) => s.type), ['nova_run', 'compose', 'deliver']);
+    assert.deepEqual(steps.map((s) => s.type), ['nova_run', 'deliver']);
   });
 
-  it('passes Nova email HTML draft through (scheduler does not rewrite)', () => {
-    const draft = unwrapNovaDeliveryDraft(
-      [
-        'Subject: Daily Briefing — Oct 15',
-        '',
-        '<h2>Today</h2><p>Sales: <strong>$490.53</strong></p>',
-        '<table><tr><th>Metric</th><th>Value</th></tr><tr><td>Invoices</td><td>1</td></tr></table>',
-      ].join('\n'),
-      'email',
-    );
-    assert.equal(draft.subject, 'Daily Briefing — Oct 15');
-    assert.match(draft.body, /<h2>Today<\/h2>/);
-    assert.match(draft.body, /\$490\.53/);
-    assert.match(draft.body, /<table>/);
+  it('uses frozen prompt as the Nova user message (no wrapper)', () => {
+    const prompt = 'Summarize today and month-to-date company sales';
+    assert.equal(buildScheduledAgentMessage(prompt), prompt);
   });
 
-  it('unwraps Nova SMS draft to plain text', () => {
-    const draft = unwrapNovaDeliveryDraft(
-      '**Today:** 1 invoice, $490.53 invoiced, $0 paid.',
-      'sms',
-    );
-    assert.match(draft.body, /1 invoice/);
-    assert.equal(/<[^>]+>/.test(draft.body), false);
-    assert.equal(/\*\*/.test(draft.body), false);
+  it('sends chat HTML reply as email body unchanged', () => {
+    const html = '<h2>Today</h2><p>$490.53</p>';
+    assert.equal(chatReplyForChannel(html, 'email'), html);
   });
 
-  it('treats schedule as chat-quality reply for email or SMS', () => {
-    const emailRules = buildChannelOutputInstructions('email');
-    assert.match(emailRules, /sent as email/);
-    assert.match(emailRules, /Subject:/);
-    assert.match(emailRules, /generate_\*_report/);
-    assert.match(buildChannelOutputInstructions('sms'), /sent as SMS/);
-  });
-
-  it('extracts Subject line from Nova email draft', () => {
-    const draft = unwrapNovaDeliveryDraft(
-      'Subject: 📊 Daily Briefing for Sales – Thursday, October 15, 2026\n\n<h2>Today</h2>',
-      'email',
-    );
-    assert.match(draft.subject, /Daily Briefing for Sales/);
-    assert.match(draft.body, /<h2>Today<\/h2>/);
+  it('converts chat reply to plain SMS', () => {
+    const sms = chatReplyForChannel('**Today:** 1 invoice, $490.53', 'sms');
+    assert.match(sms, /1 invoice/);
+    assert.equal(/<[^>]+>/.test(sms), false);
+    assert.equal(/\*\*/.test(sms), false);
   });
 
   it('resolves invoice process from periods', () => {
