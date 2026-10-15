@@ -5,7 +5,7 @@
 
 import { AsyncLocalStorage } from 'async_hooks';
 
-/** @typedef {{ companyId?: string, userId?: string, apiToken?: string }} RequestContextStore */
+/** @typedef {{ companyId?: string, userId?: string, apiToken?: string, freshData?: boolean }} RequestContextStore */
 
 const storage = new AsyncLocalStorage();
 
@@ -33,6 +33,7 @@ function normalizeStore(ctx) {
     companyId: ctx.companyId != null ? String(ctx.companyId).trim() : undefined,
     userId: ctx.userId != null ? String(ctx.userId).trim() : undefined,
     apiToken: ctx.apiToken != null ? String(ctx.apiToken).trim() : undefined,
+    freshData: ctx.freshData === true,
   };
 }
 

@@ -1129,6 +1129,9 @@ async function withDefinitionCredentials(definition, options, fn) {
       companyId: String(definition.company_id),
       userId: String(options.userId || definition.user_id || ''),
       apiToken,
+      // A scheduled tick is a fresh evaluation of the frozen process. Tool
+      // adapters may use this flag to bypass interactive-read caches.
+      freshData: true,
     },
     fn,
   );

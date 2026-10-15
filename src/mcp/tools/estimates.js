@@ -8,6 +8,7 @@ import { registerTool } from '../server.js';
 import { callWorxstreamAPI, normalizeFilter } from '../../services/httpClient.js';
 import { config, getWorxstreamContext } from '../../config/index.js';
 import { redisGet, redisSet } from '../../services/redisClient.js';
+import { getRequestContext } from '../../request/requestContext.js';
 
 function inputHash(obj) {
   const json = JSON.stringify(obj);
@@ -43,6 +44,7 @@ export function registerEstimateTools() {
       const { companyId, userId } = getWorxstreamContext();
       const filterObj = normalizeFilter(filter);
       const effectiveLimit = limit;
+      const freshData = getRequestContext()?.freshData === true;
 
       const ttl = Number.isFinite(config.redis?.cacheTtlSeconds) ? config.redis.cacheTtlSeconds : 60;
       const cacheKey = `ws:cache:tool:list_estimates:${companyId}:${userId}:${inputHash({
@@ -53,7 +55,7 @@ export function registerEstimateTools() {
         filter: filterObj ?? {},
       })}`;
 
-      const cached = ttl > 0 ? await redisGet(cacheKey) : null;
+      const cached = !freshData && ttl > 0 ? await redisGet(cacheKey) : null;
       if (cached) {
         try {
           const parsed = JSON.parse(cached);
@@ -78,7 +80,7 @@ export function registerEstimateTools() {
         },
       });
 
-      if (ttl > 0) {
+      if (!freshData && ttl > 0) {
         await redisSet(cacheKey, JSON.stringify(result), { ex: ttl });
       }
 
@@ -100,10 +102,11 @@ export function registerEstimateTools() {
     },
     async ({ id }) => {
       const { companyId, userId } = getWorxstreamContext();
+      const freshData = getRequestContext()?.freshData === true;
 
       const ttl = Number.isFinite(config.redis?.cacheTtlSeconds) ? config.redis.cacheTtlSeconds : 60;
       const cacheKey = `ws:cache:entity:get_estimate_details:${companyId}:${id}`;
-      const cached = ttl > 0 ? await redisGet(cacheKey) : null;
+      const cached = !freshData && ttl > 0 ? await redisGet(cacheKey) : null;
       if (cached) {
         try {
           const parsed = JSON.parse(cached);
@@ -123,7 +126,7 @@ export function registerEstimateTools() {
         },
       });
 
-      if (ttl > 0) {
+      if (!freshData && ttl > 0) {
         await redisSet(cacheKey, JSON.stringify(result), { ex: ttl });
       }
 

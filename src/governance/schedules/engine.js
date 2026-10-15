@@ -567,6 +567,9 @@ async function withDefinitionCredentials(definition, options, fn) {
       companyId: String(definition.company_id),
       userId: String(options.userId || definition.user_id || ''),
       apiToken,
+      // Every scheduled execution must re-read live data. This flag is
+      // consumed by tool adapters that maintain interactive-read caches.
+      freshData: true,
     },
     fn,
   );
