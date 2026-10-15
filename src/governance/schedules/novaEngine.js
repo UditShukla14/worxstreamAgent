@@ -77,9 +77,9 @@ export function buildScheduledAgentMessage(
     : channelName === 'email'
       ? [
         'DELIVERY FORMAT: EMAIL',
-        `Create a complete, polished HTML report body for "${name}". Return HTML only; do not use Markdown fences, conversational preamble, or continuation language.`,
-        'Use email-safe inline styles, a clear title, dated sections, accessible tables for metrics, right-aligned numeric values, and concise takeaways.',
-        'Finish the report in this response, keep it under 2,000 words, and never say that a previous response was truncated.',
+        `Create a complete, minimal HTML report body for "${name}". Return HTML only; do not use Markdown fences, conversational preamble, or continuation language.`,
+        'Use a white background, dark readable text, one subtle blue accent, compact accessible tables, and clear section headings. No gradients, colored panels, decorative icons, emojis, or repeated branding.',
+        'Finish the report in this response, keep it under 800 words, and never say that a previous response was truncated.',
         `This is an authorized scheduled delivery. After retrieving the data, call send_email exactly once with mail_to ${JSON.stringify(recipients)}${subject ? ` and subject "${subject}"` : ''}.`,
       ]
       : [
