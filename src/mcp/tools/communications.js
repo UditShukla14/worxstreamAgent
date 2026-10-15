@@ -98,37 +98,32 @@ export function registerCommunicationsTools() {
     {
       title: 'Send Email',
       description:
-        'Send a free-form HTML/text email (briefings, summaries) without a master-object PDF. '
-        + 'Uses the same company email send path as send_object_email. Confirm recipients/subject in chat; '
-        + 'Scribe scheduled briefings also call this tool.',
+        'Send a free-form HTML/text email (summaries, alerts, schedules) with no master-object PDF. '
+        + 'Uses POST /company/email/send (company mail path — does not require object_id). '
+        + 'For estimate/invoice PDF emails use send_object_email instead. '
+        + 'Confirm recipients/subject in chat; Scribe scheduled messages also call this tool.',
       inputSchema: {
         mail_to: z.array(z.string()).min(1).describe('To email addresses'),
         mail_cc: z.array(z.string()).optional().describe('CC email addresses'),
         subject: z.string().describe('Email subject'),
         body: z.string().describe('Email body (HTML or text)'),
-        include_pdf: z.boolean().optional().describe('Attach PDF (default: false for free-form)'),
-        object_id: z.number().optional().describe('Optional related master object ID'),
-        add_accept_reject_option: z.boolean().optional().describe('Include accept/reject links (default: false)'),
       },
       capabilities: { domain: 'communications', action: 'create', safety: 'write' },
     },
     async (input) => {
       const { companyId, userId } = getWorxstreamContext();
-      const data = {
-        company_id: companyId,
-        user_id: userId,
-        mail_to: input.mail_to,
-        mail_cc: input.mail_cc,
-        subject: input.subject,
-        body: input.body,
-        include_pdf: input.include_pdf ?? false,
-        add_accept_reject_option: input.add_accept_reject_option ?? false,
-      };
-      if (input.object_id != null) data.object_id = input.object_id;
       return asText(await callWorxstreamAPI({
         method: 'POST',
-        endpoint: '/master-objects/email/send',
-        data,
+        endpoint: '/company/email/send',
+        data: {
+          company_id: companyId,
+          user_id: userId,
+          mail_to: input.mail_to,
+          mail_cc: input.mail_cc || [],
+          subject: input.subject,
+          body: input.body,
+          include_pdf: false,
+        },
       }));
     }
   );

@@ -42,10 +42,10 @@ SHOPIFY REPORTS vs ERP REPORTS:
 - Sidekick pattern: after Shopify analytics tools, the runtime injects charts/stats/tables from the tool data. For those answers, write brief insights only — do not hand-author chart or stats XML.
 
 SCHEDULES (hand off to Scribe):
-- Recurring / scheduled work (daily sales briefing email, "every day at EOD", named schedules) → clarify name, recipients, metrics, periods, timezone/hour → confirm → scribe_create_schedule (flow_type sales_email_briefing). Say that Scribe owns the schedule going forward.
+- Recurring / scheduled work → clarify once → confirm → scribe_create_schedule (scheduled_message, channel email|sms, frozen message_template). Say that Scribe owns the schedule going forward.
 - Pause/resume/list/delete/run-now and run failure debugging → scribe_* tools (Mongo run logs).
 - Do NOT say automated scheduling is unavailable. Do NOT offer only on-demand "ask me every evening" as the long-term solution when Scribe can own it.
-- Unsupported recipes: be honest; only sales_email_briefing is supported in v1.
+- Unsupported recipes: be honest about what is not in SUPPORTED_FLOW_TYPES; do not invent recipes.
 
 Be accurate and tenant-safe.`,
   },
@@ -489,7 +489,7 @@ Never expose internal IDs to the user. Be concise.`,
   // ── Communications ─────────────────────────────────────────────────
   communications: {
     name: 'communications_agent',
-    description: 'Manages in-app notifications, master-object email, and Telnyx SMS (draft → confirm → send)',
+    description: 'Manages in-app notifications, free-form + master-object email, and Telnyx SMS (draft → confirm → send)',
     domain: 'communications',
     useToolSearch: true,
     extraTools: [
@@ -501,10 +501,12 @@ Never expose internal IDs to the user. Be concise.`,
       'list_sales_orders',
     ],
     systemPrompt: `You are the Communications Agent for Worxstream.
-You handle in-app notifications, master-object email (send + outbox), and SMS via Telnyx.
+You handle in-app notifications, email (free-form + master-object), outbox, and SMS via Telnyx.
 You may look up estimate/invoice/sales-order details only to resolve which document to email — do not become a full finance agent.
 
-Before send_object_email, confirm recipients, subject, and whether to attach the PDF. Do not send email unless the user clearly asked to send it.
+Before sending email, confirm recipients and subject. Do not send unless the user clearly asked to send it.
+- Free-form / alerts / no PDF → send_email (no object_id).
+- Estimate/invoice/sales order with PDF → send_object_email (requires object_id).
 
 SMS FLOW (mandatory — agent chat confirm, not env write-gate):
 1. Call draft_sms (to must be E.164 like +15551234567).
@@ -515,7 +517,8 @@ SMS FLOW (mandatory — agent chat confirm, not env write-gate):
 TOOL USAGE:
 - Use list_notifications (unread_only=true when they ask for unread).
 - Use mark_notification_read for a specific notification.
-- Use send_object_email to email an estimate/invoice/sales order.
+- Use send_email for free-form HTML/text mail (no object_id).
+- Use send_object_email to email an estimate/invoice/sales order (needs object_id).
 - Use list_email_outbox to check sent/queued/failed mail.
 - Use draft_sms then send_sms for text messages.
 Never expose internal IDs to the user. Be concise.`,

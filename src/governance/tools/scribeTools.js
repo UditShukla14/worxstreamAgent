@@ -18,6 +18,7 @@ import {
   computeFlowNextRunAt,
   isFlowRecipe,
 } from '../schedules/flowEngine.js';
+import { isE164 } from '../../services/telnyxClient.js';
 import {
   activeQuery,
   definitionToApi,
@@ -36,21 +37,46 @@ function parseRecipients(raw) {
   return raw.map((item) => String(item).trim()).filter(Boolean);
 }
 
-function parseStringList(raw, fallback = []) {
-  if (!Array.isArray(raw)) return [...fallback];
-  const list = raw.map((item) => String(item).trim().toLowerCase()).filter(Boolean);
-  return list.length > 0 ? list : [...fallback];
+function resolveChannel(input) {
+  const raw = String(input.channel || 'email').toLowerCase().trim();
+  return raw === 'sms' ? 'sms' : 'email';
 }
 
 function buildFlow(input) {
+  const timezone = String(input.timezone || 'UTC').trim() || 'UTC';
+  const channel = resolveChannel(input);
+  const cadenceType = String(input.cadence_type || 'interval').toLowerCase() === 'monthly'
+    ? 'monthly'
+    : 'interval';
   return {
     recipients: parseRecipients(input.recipients),
-    metrics: parseStringList(input.metrics, ['sales', 'amount_paid']),
-    periods: parseStringList(input.periods, ['today']),
-    scope: String(input.scope || 'company_totals').trim() || 'company_totals',
-    timezone: String(input.timezone || 'UTC').trim() || 'UTC',
-    subject_template: String(input.subject_template || '').trim(),
+    channel,
+    timezone,
+    cadence_type: cadenceType,
+    subject_template: String(input.subject_template || input.subject || '').trim(),
+    message_template: String(input.message_template || input.body || input.message || '').trim(),
   };
+}
+
+function validateRecipientsForChannel(channel, recipients) {
+  if (!recipients.length) {
+    return channel === 'sms'
+      ? 'recipients required (E.164 phone numbers)'
+      : 'recipients required (email addresses)';
+  }
+  if (channel === 'sms') {
+    const bad = recipients.filter((r) => !isE164(r));
+    if (bad.length) {
+      return `Invalid phone recipients (need E.164 like +15551234567): ${bad.slice(0, 3).join(', ')}`;
+    }
+    return null;
+  }
+  const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const bad = recipients.filter((r) => !emailRe.test(r));
+  if (bad.length) {
+    return `Invalid email recipients: ${bad.slice(0, 3).join(', ')}`;
+  }
+  return null;
 }
 
 export function registerScribeTools() {
@@ -59,30 +85,50 @@ export function registerScribeTools() {
     {
       title: 'Create Scribe Schedule',
       description:
-        'Hand a recurring job to Scribe (schedule manager). Freezes a structured flow — '
-        + 'Scribe re-runs the same steps on cadence with fresh date values only (no LLM). '
-        + 'v1 flow_type: sales_email_briefing (invoice totals → email). '
-        + 'Confirm name, recipients, time, metrics, and periods with the user before calling.',
+        'Hand any recurring notification to Scribe. Freezes channel + recipients + message — '
+        + 'Scribe sends on cadence with no LLM on the tick. '
+        + 'flow_type: scheduled_message. '
+        + 'channel: email or sms. '
+        + 'SMS uses Telnyx on the tick (not draft_sms/send_sms chat confirms) — freeze E.164 phones. '
+        + 'Email uses send_email. '
+        + 'Cadence: interval (days + UTC hour) or monthly (day_of_month + local hour in timezone). '
+        + 'message_template / subject_template support {{date}} and {{name}}. '
+        + 'Clarify content with the user first (pull live data in chat if needed, then freeze the message). '
+        + 'Confirm name, channel, recipients, message, and cadence before calling.',
       inputSchema: {
-        name: z.string().describe('Schedule display name, e.g. Daily briefing for sales'),
+        name: z.string().describe('Schedule display name'),
         description: z.string().optional().describe('Optional description'),
         flow_type: z
-          .enum(['sales_email_briefing'])
-          .describe('Frozen recipe type'),
-        recipients: z.array(z.string().email()).min(1).describe('Email recipients'),
-        metrics: z
-          .array(z.string())
+          .enum(['scheduled_message', 'sales_email_briefing'])
           .optional()
-          .describe('Metrics: sales, amount_paid'),
-        periods: z
-          .array(z.string())
+          .describe('Use scheduled_message (sales_email_briefing is a legacy alias)'),
+        channel: z
+          .enum(['email', 'sms'])
           .optional()
-          .describe('Periods: today, mtd, qtd'),
-        scope: z.string().optional().describe('company_totals (v1)'),
+          .describe('Delivery channel (default email). sms → E.164 recipients via Telnyx'),
+        recipients: z
+          .array(z.string())
+          .min(1)
+          .describe('Emails when channel=email; E.164 phones when channel=sms'),
+        subject_template: z
+          .string()
+          .optional()
+          .describe('Email subject (also used as SMS label). Supports {{date}} {{name}}'),
+        message_template: z
+          .string()
+          .describe('Frozen message body. Supports {{date}} {{name}}. For SMS keep it short.'),
         timezone: z.string().optional().describe('IANA timezone, e.g. America/New_York'),
-        interval_days: z.number().optional().describe('Run every N days (default 1)'),
-        run_at_hour_utc: z.number().optional().describe('Hour UTC 0-23 (default 23 = EOD UTC)'),
-        subject_template: z.string().optional().describe('Optional email subject override'),
+        cadence_type: z
+          .enum(['interval', 'monthly'])
+          .optional()
+          .describe('interval (default) or monthly'),
+        interval_days: z.number().optional().describe('When cadence_type=interval: every N days'),
+        run_at_hour_utc: z.number().optional().describe('When cadence_type=interval: hour UTC 0-23'),
+        day_of_month: z.number().optional().describe('When cadence_type=monthly: 1-28'),
+        run_at_hour_local: z
+          .number()
+          .optional()
+          .describe('When cadence_type=monthly: local hour 0-23 in timezone'),
         conversation_id: z.string().optional().describe('Nova conversation id that created this'),
         active: z.boolean().optional().describe('Start active (default true)'),
       },
@@ -90,7 +136,7 @@ export function registerScribeTools() {
     },
     async (input) => {
       const { companyId, userId } = getWorxstreamContext();
-      const flowType = String(input.flow_type || 'sales_email_briefing');
+      const flowType = String(input.flow_type || 'scheduled_message');
       if (!SUPPORTED_FLOW_TYPES.has(flowType)) {
         return asText({
           success: false,
@@ -98,8 +144,15 @@ export function registerScribeTools() {
         });
       }
       const flow = buildFlow(input);
-      if (flow.recipients.length === 0) {
-        return asText({ success: false, error: 'recipients required' });
+      if (!flow.message_template) {
+        return asText({
+          success: false,
+          error: 'message_template is required (freeze the message text to send each run)',
+        });
+      }
+      const recipientError = validateRecipientsForChannel(flow.channel, flow.recipients);
+      if (recipientError) {
+        return asText({ success: false, error: recipientError });
       }
 
       const activeCount = await ScheduleDefinition.countDocuments(activeQuery({
@@ -115,11 +168,28 @@ export function registerScribeTools() {
         });
       }
 
+      const isMonthly = flow.cadence_type === 'monthly';
+      const cadence_type = isMonthly ? 'monthly' : 'interval';
       const interval_days = Math.min(90, Math.max(1, Math.round(Number(input.interval_days) || 1)));
       const run_at_hour_utc = Math.min(
         23,
         Math.max(0, Math.round(Number(input.run_at_hour_utc ?? 23))),
       );
+      const day_of_month = isMonthly
+        ? Math.min(28, Math.max(1, Math.round(Number(input.day_of_month) || 1)))
+        : null;
+      const run_at_hour_local = isMonthly
+        ? Math.min(23, Math.max(0, Math.round(Number(input.run_at_hour_local ?? 9))))
+        : null;
+
+      const cadenceFields = {
+        cadence_type,
+        interval_days,
+        run_at_hour_utc,
+        day_of_month,
+        run_at_hour_local,
+        timezone: flow.timezone,
+      };
 
       const doc = await ScheduleDefinition.create({
         company_id: String(companyId),
@@ -129,18 +199,18 @@ export function registerScribeTools() {
         kind: 'flow_recipe',
         source: 'nova',
         conversation_id: input.conversation_id ? String(input.conversation_id) : null,
-        flow_type: flowType,
+        flow_type: flowType === 'sales_email_briefing' ? 'scheduled_message' : flowType,
         flow,
-        timezone: flow.timezone,
-        interval_days,
-        run_at_hour_utc,
+        ...cadenceFields,
         active,
-        next_run_at: computeFlowNextRunAt({ interval_days, run_at_hour_utc }),
+        next_run_at: computeFlowNextRunAt(cadenceFields),
       });
 
       return asText({
         success: true,
-        message: `Scribe owns schedule "${doc.name}". It will run the frozen ${flowType} flow on cadence.`,
+        message:
+          `Scribe owns schedule "${doc.name}" `
+          + `(${flow.channel}, ${cadence_type}).`,
         data: definitionToApi(doc),
       });
     },
@@ -270,20 +340,22 @@ export function registerScribeTools() {
     {
       title: 'Update Scribe Schedule',
       description:
-        'Update a Scribe flow schedule (name, recipients, metrics, periods, cadence). '
+        'Update a Scribe flow schedule (name, channel, recipients, message, cadence). '
         + 'Does not change flow_type.',
       inputSchema: {
         schedule_id: z.string(),
         name: z.string().optional(),
         description: z.string().optional(),
-        recipients: z.array(z.string().email()).optional(),
-        metrics: z.array(z.string()).optional(),
-        periods: z.array(z.string()).optional(),
-        scope: z.string().optional(),
+        channel: z.enum(['email', 'sms']).optional(),
+        recipients: z.array(z.string()).optional(),
+        subject_template: z.string().optional(),
+        message_template: z.string().optional(),
         timezone: z.string().optional(),
+        cadence_type: z.enum(['interval', 'monthly']).optional(),
         interval_days: z.number().optional(),
         run_at_hour_utc: z.number().optional(),
-        subject_template: z.string().optional(),
+        day_of_month: z.number().optional(),
+        run_at_hour_local: z.number().optional(),
         active: z.boolean().optional(),
       },
       capabilities: { domain: 'scribe', action: 'update', safety: 'write' },
@@ -307,16 +379,24 @@ export function registerScribeTools() {
       if (input.active != null) doc.active = Boolean(input.active);
 
       const flow = { ...(doc.flow && typeof doc.flow === 'object' ? doc.flow : {}) };
+      if (input.channel != null) {
+        flow.channel = String(input.channel).toLowerCase() === 'sms' ? 'sms' : 'email';
+      }
       if (input.recipients) flow.recipients = parseRecipients(input.recipients);
-      if (input.metrics) flow.metrics = parseStringList(input.metrics, flow.metrics || ['sales', 'amount_paid']);
-      if (input.periods) flow.periods = parseStringList(input.periods, flow.periods || ['today']);
-      if (input.scope != null) flow.scope = String(input.scope).trim() || 'company_totals';
       if (input.timezone != null) {
         flow.timezone = String(input.timezone).trim() || 'UTC';
         doc.timezone = flow.timezone;
       }
       if (input.subject_template != null) {
         flow.subject_template = String(input.subject_template).trim();
+      }
+      if (input.message_template != null) {
+        flow.message_template = String(input.message_template).trim();
+      }
+      if (input.cadence_type != null) {
+        const cadence = String(input.cadence_type).toLowerCase() === 'monthly' ? 'monthly' : 'interval';
+        flow.cadence_type = cadence;
+        doc.cadence_type = cadence;
       }
       doc.flow = flow;
       doc.markModified('flow');
@@ -326,6 +406,12 @@ export function registerScribeTools() {
       }
       if (input.run_at_hour_utc != null) {
         doc.run_at_hour_utc = Math.min(23, Math.max(0, Math.round(Number(input.run_at_hour_utc))));
+      }
+      if (input.day_of_month != null) {
+        doc.day_of_month = Math.min(28, Math.max(1, Math.round(Number(input.day_of_month) || 1)));
+      }
+      if (input.run_at_hour_local != null) {
+        doc.run_at_hour_local = Math.min(23, Math.max(0, Math.round(Number(input.run_at_hour_local))));
       }
       doc.next_run_at = computeFlowNextRunAt(doc);
       await doc.save();

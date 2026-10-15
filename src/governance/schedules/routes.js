@@ -42,8 +42,11 @@ function definitionToApi(doc) {
     flowType: doc.flow_type || null,
     flow: doc.flow || null,
     timezone: doc.timezone || 'UTC',
+    cadenceType: doc.cadence_type || 'interval',
     intervalDays: doc.interval_days,
     runAtHourUtc: doc.run_at_hour_utc,
+    dayOfMonth: doc.day_of_month ?? null,
+    runAtHourLocal: doc.run_at_hour_local ?? null,
     active: Boolean(doc.active),
     lastRunAt: doc.last_run_at ? new Date(doc.last_run_at).toISOString() : null,
     nextRunAt: doc.next_run_at ? new Date(doc.next_run_at).toISOString() : null,
@@ -168,13 +171,27 @@ function flowFromBody(body) {
   const recipients = parseRecipients(
     flowIn.recipients ?? body.recipients ?? body.mail_to ?? body.mailTo,
   );
+  const timezone = String(flowIn.timezone ?? body.timezone ?? 'UTC').trim() || 'UTC';
+  const channelRaw = String(flowIn.channel ?? body.channel ?? 'email').toLowerCase().trim();
+  const cadenceRaw = String(
+    flowIn.cadence_type ?? body.cadenceType ?? body.cadence_type ?? 'interval',
+  ).toLowerCase();
   return {
     recipients,
-    metrics: parseStringList(flowIn.metrics ?? body.metrics, ['sales', 'amount_paid']),
-    periods: parseStringList(flowIn.periods ?? body.periods, ['today']),
-    scope: String(flowIn.scope ?? body.scope ?? 'company_totals').trim() || 'company_totals',
-    timezone: String(flowIn.timezone ?? body.timezone ?? 'UTC').trim() || 'UTC',
-    subject_template: String(flowIn.subject_template ?? flowIn.subjectTemplate ?? body.subject_template ?? '').trim(),
+    channel: channelRaw === 'sms' ? 'sms' : 'email',
+    timezone,
+    cadence_type: cadenceRaw === 'monthly' ? 'monthly' : 'interval',
+    subject_template: String(
+      flowIn.subject_template ?? flowIn.subjectTemplate ?? body.subject_template ?? body.subject ?? '',
+    ).trim(),
+    message_template: String(
+      flowIn.message_template
+      ?? flowIn.messageTemplate
+      ?? flowIn.body
+      ?? body.message_template
+      ?? body.body
+      ?? '',
+    ).trim(),
   };
 }
 
@@ -203,13 +220,17 @@ function definitionFieldsFromBody(body, partial = false) {
 
   if (isFlow || out.kind === 'flow_recipe') {
     if (!partial || body.flowType != null || body.flow_type != null || body.flow != null || body.recipients != null) {
-      const flowType = flowTypeRaw || 'sales_email_briefing';
+      let flowType = flowTypeRaw || 'scheduled_message';
+      if (flowType === 'sales_email_briefing') flowType = 'scheduled_message';
       out.flow_type = flowType;
       out.flow = flowFromBody(body);
       out.timezone = out.flow.timezone;
       out.criteria_type = null;
       out.entity_types = [];
       out.criteria_fields = [];
+      if (!partial || body.cadenceType != null || body.cadence_type != null) {
+        out.cadence_type = out.flow.cadence_type;
+      }
     }
   } else {
     if (!partial || body.entityTypes != null || body.entity_types != null) {
@@ -234,6 +255,18 @@ function definitionFieldsFromBody(body, partial = false) {
     const hour = Number(body.runAtHourUtc ?? body.run_at_hour_utc);
     out.run_at_hour_utc = Number.isFinite(hour) ? Math.min(23, Math.max(0, Math.round(hour))) : 23;
   }
+  if (!partial || body.cadenceType != null || body.cadence_type != null) {
+    const cadence = String(body.cadenceType ?? body.cadence_type ?? 'interval').toLowerCase();
+    out.cadence_type = cadence === 'monthly' ? 'monthly' : 'interval';
+  }
+  if (!partial || body.dayOfMonth != null || body.day_of_month != null) {
+    const day = Number(body.dayOfMonth ?? body.day_of_month);
+    out.day_of_month = Number.isFinite(day) ? Math.min(28, Math.max(1, Math.round(day))) : 1;
+  }
+  if (!partial || body.runAtHourLocal != null || body.run_at_hour_local != null) {
+    const hour = Number(body.runAtHourLocal ?? body.run_at_hour_local);
+    out.run_at_hour_local = Number.isFinite(hour) ? Math.min(23, Math.max(0, Math.round(hour))) : 9;
+  }
   if (!partial || body.timezone != null) {
     out.timezone = String(body.timezone || 'UTC').trim() || 'UTC';
   }
@@ -242,9 +275,14 @@ function definitionFieldsFromBody(body, partial = false) {
 }
 
 function nextRunFor(fields, existing = null) {
-  const interval_days = fields.interval_days ?? existing?.interval_days ?? 1;
-  const run_at_hour_utc = fields.run_at_hour_utc ?? existing?.run_at_hour_utc ?? 23;
-  const stub = { interval_days, run_at_hour_utc };
+  const stub = {
+    cadence_type: fields.cadence_type ?? existing?.cadence_type ?? 'interval',
+    interval_days: fields.interval_days ?? existing?.interval_days ?? 1,
+    run_at_hour_utc: fields.run_at_hour_utc ?? existing?.run_at_hour_utc ?? 23,
+    day_of_month: fields.day_of_month ?? existing?.day_of_month ?? 1,
+    run_at_hour_local: fields.run_at_hour_local ?? existing?.run_at_hour_local ?? 9,
+    timezone: fields.timezone ?? existing?.timezone ?? 'UTC',
+  };
   if ((fields.kind || existing?.kind) === 'flow_recipe') {
     return computeFlowNextRunAt(stub);
   }

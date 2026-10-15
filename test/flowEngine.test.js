@@ -1,48 +1,74 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  composeSalesBriefingEmail,
+  composeScheduledMessage,
+  computeMonthlyNextRunAt,
   formatDateInZone,
-  resolvePeriodWindows,
+  renderScheduleTemplate,
+  resolveFlowChannel,
+  SUPPORTED_FLOW_TYPES,
 } from '../src/governance/schedules/flowEngine.js';
 
-describe('flowEngine period windows', () => {
-  it('resolves today and mtd', () => {
-    const asOf = new Date('2026-10-15T18:00:00.000Z');
-    const windows = resolvePeriodWindows(['today', 'mtd'], 'UTC', asOf);
-    assert.equal(windows.length, 2);
-    assert.equal(windows[0].key, 'today');
-    assert.equal(windows[0].from, '2026-10-15');
-    assert.equal(windows[1].key, 'mtd');
-    assert.equal(windows[1].from, '2026-10-01');
-    assert.equal(windows[1].to, '2026-10-15');
+describe('scheduled_message flow', () => {
+  it('supports scheduled_message and legacy sales_email_briefing alias', () => {
+    assert.equal(SUPPORTED_FLOW_TYPES.has('scheduled_message'), true);
+    assert.equal(SUPPORTED_FLOW_TYPES.has('sales_email_briefing'), true);
   });
 
-  it('formats date in zone', () => {
-    assert.equal(formatDateInZone(new Date('2026-10-15T00:30:00.000Z'), 'UTC'), '2026-10-15');
+  it('resolves channel', () => {
+    assert.equal(resolveFlowChannel({ channel: 'sms' }), 'sms');
+    assert.equal(resolveFlowChannel({}), 'email');
   });
-});
 
-describe('composeSalesBriefingEmail', () => {
-  it('includes sales and amount paid columns', () => {
-    const { subject, body } = composeSalesBriefingEmail({
-      name: 'Daily briefing for sales',
-      metrics: ['sales', 'amount_paid'],
-      scope: 'company_totals',
-      periods: [
-        {
-          key: 'today',
-          label: 'Today',
-          from: '2026-10-15',
-          to: '2026-10-15',
-          sales: 1000,
-          amount_paid: 400,
-        },
-      ],
+  it('renders template placeholders', () => {
+    const text = renderScheduleTemplate('Hi {{name}} on {{date}}', {
+      name: 'Alert',
+      dateLabel: '2026-10-15',
     });
-    assert.match(subject, /Daily briefing/);
-    assert.match(body, /Cumulative sales/);
-    assert.match(body, /Amount paid/);
-    assert.match(body, /\$1,000\.00/);
+    assert.equal(text, 'Hi Alert on 2026-10-15');
+  });
+
+  it('composes SMS with opt-out footer', () => {
+    const composed = composeScheduledMessage(
+      {
+        channel: 'sms',
+        message_template: '78 taxable customers missing tax rate as of {{date}}.',
+      },
+      { name: 'Taxable reminder' },
+      'UTC',
+    );
+    assert.equal(composed.channel, 'sms');
+    assert.match(composed.body, /78 taxable/);
+    assert.match(composed.body, /STOP/i);
+  });
+
+  it('composes email HTML from plain text', () => {
+    const composed = composeScheduledMessage(
+      {
+        channel: 'email',
+        subject_template: 'Daily note {{date}}',
+        message_template: 'Hello team',
+      },
+      { name: 'Note' },
+      'UTC',
+    );
+    assert.equal(composed.channel, 'email');
+    assert.match(composed.subject, /Daily note/);
+    assert.match(composed.body, /Hello team/);
+    assert.match(composed.body, /<p/);
+  });
+
+  it('computes next monthly run after 1st 9am local', () => {
+    const next = computeMonthlyNextRunAt(
+      {
+        cadence_type: 'monthly',
+        day_of_month: 1,
+        run_at_hour_local: 9,
+        timezone: 'America/New_York',
+      },
+      new Date('2026-10-15T18:00:00.000Z'),
+    );
+    assert.ok(next > new Date('2026-10-15T18:00:00.000Z'));
+    assert.equal(formatDateInZone(next, 'America/New_York'), '2026-11-01');
   });
 });
