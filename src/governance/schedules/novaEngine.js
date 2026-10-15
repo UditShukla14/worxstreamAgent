@@ -97,6 +97,7 @@ export async function runNovaScheduleTurn({
       // Scheduled runs must use Nova's normal planning/tool-selection path.
       // The only frozen inputs are the saved intent and delivery metadata.
       skipExecutionPlan: false,
+      autoExecutePlan: true,
       skipWriteConfirm: false,
     },
   });

@@ -510,6 +510,30 @@ export async function runCoworkerTurn({
         executionPlan = null;
       }
 
+      // Interactive turns must pause when the planner needs confirmation. A
+      // scheduled turn has no user waiting at the keyboard, so it must accept
+      // the plan internally and continue into Nova's normal tool loop. This is
+      // separate from write-tool confirmation, which remains enforced later by
+      // the tool execution path.
+      if (
+        executionPlan?.mode === 'clarify'
+        && executionPlan.ask
+        && options.autoExecutePlan === true
+      ) {
+        executionPlan = {
+          ...executionPlan,
+          mode: 'execute',
+          ask: null,
+          steps: Array.isArray(executionPlan.steps) && executionPlan.steps.length
+            ? executionPlan.steps
+            : [
+              'Understand the scheduled request',
+              'Call the minimum live tools needed',
+              'Return the result for delivery',
+            ],
+        };
+      }
+
       if (executionPlan?.mode === 'clarify' && executionPlan.ask) {
         const askText = executionPlan.ask;
         sse({ type: 'plan', plan: executionPlan });
