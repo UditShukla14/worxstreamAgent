@@ -56,8 +56,28 @@ export function resolveNovaPrompt(flow = {}) {
 }
 
 /** The saved user intent, sent to a brand-new Nova conversation for this run. */
-export function buildScheduledAgentMessage(prompt) {
-  return String(prompt || '').trim();
+export function buildScheduledAgentMessage(prompt, { channel = 'email', name = 'Scheduled report' } = {}) {
+  const base = String(prompt || '').trim();
+  const channelName = String(channel || 'email').toLowerCase();
+  const formatContract = channelName === 'sms'
+    ? [
+      'DELIVERY FORMAT: SMS',
+      'Return concise plain text only. No Markdown, HTML, tables, or long prose.',
+      'Lead with the most important totals and keep the message within 1,400 characters.',
+    ]
+    : channelName === 'email'
+      ? [
+        'DELIVERY FORMAT: EMAIL',
+        `Create a polished HTML report body for "${name}". Return HTML only; do not use Markdown fences or conversational preamble.`,
+        'Use email-safe inline styles, a clear title, dated sections, accessible tables for metrics, right-aligned numeric values, and concise takeaways.',
+        'Do not call an email tool; the scheduler will deliver this response after the report is complete.',
+      ]
+      : [
+        `DELIVERY FORMAT: ${channelName.toUpperCase()}`,
+        'Return content formatted for the requested channel, without a conversational preamble.',
+        'Do not call a delivery tool; the scheduler will deliver the completed response.',
+      ];
+  return [base, '', ...formatContract].filter(Boolean).join('\n');
 }
 
 export function novaScheduleSteps() {
@@ -77,6 +97,7 @@ export async function runNovaScheduleTurn({
   flow,
   companyId,
   userId,
+  channel = 'email',
 }) {
   const prompt = resolveNovaPrompt(flow);
   if (!prompt) {
@@ -85,7 +106,7 @@ export async function runNovaScheduleTurn({
   const conversationId = `schedule:${definition._id}:${run._id}`;
 
   const result = await runCoworkerTurn({
-    message: buildScheduledAgentMessage(prompt),
+    message: buildScheduledAgentMessage(prompt, { channel, name: definition.name }),
     company_id: String(companyId || definition.company_id),
     user_id: String(userId || definition.user_id || ''),
     conversation_id: conversationId,

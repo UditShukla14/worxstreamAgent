@@ -50,9 +50,12 @@ describe('scheduled_message flow', () => {
     assert.deepEqual(steps.map((s) => s.type), ['nova_run', 'deliver']);
   });
 
-  it('uses frozen prompt as the Nova user message (no wrapper)', () => {
+  it('preserves the frozen prompt and appends the channel delivery contract', () => {
     const prompt = 'Summarize today and month-to-date company sales';
-    assert.equal(buildScheduledAgentMessage(prompt), prompt);
+    const message = buildScheduledAgentMessage(prompt, { channel: 'email' });
+    assert.match(message, /^Summarize today and month-to-date company sales\n/);
+    assert.match(message, /DELIVERY FORMAT: EMAIL/);
+    assert.match(message, /Return HTML only/);
   });
 
   it('sends chat HTML reply as email body unchanged', () => {
