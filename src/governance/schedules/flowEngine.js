@@ -1,8 +1,7 @@
 /**
- * Deterministic Scribe flow-recipe executor.
- * Generic scheduled message — email or SMS channel. No LLM at fire time.
- * Frozen: recipients, channel, subject/body templates, cadence.
- * Optional live invoice totals: freeze periods + metrics → pull on tick.
+ * Scribe flow-recipe executor.
+ * Default (Nova): freeze prompt + channel → run coworker agent on tick → deliver.
+ * Legacy: frozen invoice/tool steps (no LLM) for older schedules.
  */
 
 import { callWorxstreamAPI } from '../../services/httpClient.js';
@@ -17,11 +16,18 @@ import {
   sendTelnyxMessage,
 } from '../../services/telnyxClient.js';
 import { withSmsOptOutFooter } from '../../mcp/tools/sms.js';
+import {
+  isNovaScheduleFlow,
+  novaScheduleSteps,
+  resolveNovaPrompt,
+  runNovaScheduleTurn,
+  stripAgentPresentationForDelivery,
+} from './novaEngine.js';
 
 /**
  * Generic notification schedule. Legacy `sales_email_briefing` still accepted.
- * When flow.periods/metrics (or data_source=invoice_report) are set, tick pulls
- * invoice report totals — not stuck to a sales-only flow_type.
+ * Nova schedules freeze a prompt and re-run the agent; legacy periods/steps
+ * still pull invoice totals without an LLM.
  */
 const SUPPORTED_FLOW_TYPES = new Set(['scheduled_message', 'sales_email_briefing']);
 const MAX_ACTIVE_FLOW_SCHEDULES = 25;
@@ -32,16 +38,43 @@ export function resolveFlowChannel(flow = {}) {
   return raw === 'sms' ? 'sms' : 'email';
 }
 
-function peel(value) {
-  let current = value;
-  for (let i = 0; i < 5; i += 1) {
-    if (!current || typeof current !== 'object') return current;
-    if (Array.isArray(current)) return current;
-    const inner = current.data ?? current.item ?? current.result;
-    if (inner == null) return current;
-    current = inner;
+/**
+ * Unwrap callWorxstreamAPI → invoice/generate body without peeling into the rows array.
+ * API shape: { success, data: { meta: { totals }, data: rows, pagination } }.
+ * Blind `.data` peeling drops meta.totals and yields $0.00 briefings.
+ */
+export function unwrapInvoiceReportEnvelope(apiResult) {
+  const body = apiResult?.data ?? apiResult;
+  if (Array.isArray(body)) {
+    return { meta: {}, data: body, pagination: {} };
   }
-  return current;
+  if (!body || typeof body !== 'object') return {};
+
+  const inner = body.data;
+  if (
+    inner
+    && typeof inner === 'object'
+    && !Array.isArray(inner)
+    && (
+      inner.meta != null
+      || Array.isArray(inner.data)
+      || Array.isArray(inner.rows)
+      || inner.pagination != null
+    )
+  ) {
+    return inner;
+  }
+
+  if (
+    body.meta != null
+    || Array.isArray(body.data)
+    || Array.isArray(body.rows)
+    || body.pagination != null
+  ) {
+    return body;
+  }
+
+  return body;
 }
 
 function asNumber(value) {
@@ -58,17 +91,15 @@ function formatMoney(n) {
 }
 
 /**
- * Normalize frozen process steps. Tick re-runs this pipeline (not send-only).
- * Supported step types:
- * - invoice_report { period: today|mtd|qtd }
- * - tool { tool: mcp_tool_name, args?: object }
- * - compose  (build subject/body from prior outputs + templates)
- * - deliver  (send via channel)
- *
- * Legacy: flow.periods / flow.metrics / "pulled live at send time" → invoice_report steps.
- * Plain message_template only → compose + deliver.
+ * Normalize frozen process steps.
+ * Nova: nova_run → compose → deliver (agent uses tools, then we send).
+ * Legacy: invoice_report / tool steps, or send-only message_template.
  */
 export function resolveFlowSteps(flow = {}) {
+  if (isNovaScheduleFlow(flow)) {
+    return novaScheduleSteps();
+  }
+
   const rawSteps = Array.isArray(flow.steps) ? flow.steps : [];
   if (rawSteps.length > 0) {
     const steps = rawSteps.map((step, index) => normalizeFlowStep(step, index)).filter(Boolean);
@@ -117,6 +148,13 @@ export function resolveFlowSteps(flow = {}) {
 function normalizeFlowStep(step, index = 0) {
   if (!step || typeof step !== 'object') return null;
   const type = String(step.type || step.kind || '').toLowerCase().trim();
+  if (type === 'nova_run' || type === 'nova' || type === 'agent') {
+    return {
+      type: 'nova_run',
+      key: String(step.key || 'nova'),
+      label: String(step.label || 'Run Nova agent'),
+    };
+  }
   if (type === 'invoice_report' || type === 'report') {
     const period = String(step.period || step.as || 'today').toLowerCase().trim();
     const labels = { today: 'Today', mtd: 'Month-to-date', qtd: 'Quarter-to-date' };
@@ -193,15 +231,21 @@ async function fetchInvoicePeriodTotals(range) {
     throw new Error(result?.error || result?.message || 'Invoice report failed');
   }
 
-  const envelope = peel(result?.data ?? result) || {};
-  const meta = envelope.meta || envelope;
-  const totalsRaw = meta.totals || {};
-  const sales = asNumber(
+  const envelope = unwrapInvoiceReportEnvelope(result);
+  const meta = envelope.meta && typeof envelope.meta === 'object' ? envelope.meta : {};
+  const totalsRaw = meta.totals && typeof meta.totals === 'object' ? meta.totals : {};
+  let sales = asNumber(
     totalsRaw.grandTotal ?? totalsRaw.grand_total ?? totalsRaw.sales,
   );
   const rows = Array.isArray(envelope.data)
     ? envelope.data
     : (Array.isArray(envelope.rows) ? envelope.rows : []);
+  if (!sales && rows.length > 0) {
+    sales = rows.reduce(
+      (sum, row) => sum + asNumber(row?.grandTotal ?? row?.grand_total ?? row?.total),
+      0,
+    );
+  }
 
   let amountPaid = asNumber(
     totalsRaw.amountPaid
@@ -239,8 +283,10 @@ async function fetchInvoicePeriodTotals(range) {
           per_page: 100,
         },
       });
-      const pageEnv = peel(pageResult?.data ?? pageResult) || {};
-      const pageRows = Array.isArray(pageEnv.data) ? pageEnv.data : [];
+      const pageEnv = unwrapInvoiceReportEnvelope(pageResult);
+      const pageRows = Array.isArray(pageEnv.data)
+        ? pageEnv.data
+        : (Array.isArray(pageEnv.rows) ? pageEnv.rows : []);
       amountPaid += pageRows.reduce((sum, row) => {
         const payments = Array.isArray(row?.payments) ? row.payments : [];
         const rowPaid = payments.reduce((s, p) => s + asNumber(p?.amount), 0);
@@ -668,13 +714,20 @@ export function assertSupportedFlow(definition) {
     }
   }
   const steps = resolveFlowSteps(flow);
-  const hasProcess = steps.some((s) => s.type === 'invoice_report' || s.type === 'tool');
+  const novaPrompt = resolveNovaPrompt(flow);
+  const hasNova = isNovaScheduleFlow(flow) && Boolean(novaPrompt);
+  const hasProcess = steps.some((s) => (
+    s.type === 'invoice_report' || s.type === 'tool' || s.type === 'nova_run'
+  ));
   const hasBody = Boolean(
     String(flow.message_template || flow.body || flow.message || '').trim()
     || String(flow.subject_template || flow.subject || '').trim(),
   );
-  if (!hasBody && !hasProcess && !definition.name) {
-    throw new Error('flow must include steps (process) and/or message_template');
+  if (!hasNova && !hasBody && !hasProcess && !definition.name) {
+    throw new Error('flow must include prompt (Nova), steps, and/or message_template');
+  }
+  if (isNovaScheduleFlow(flow) && !novaPrompt) {
+    throw new Error('Nova schedule requires flow.prompt (the work to run each tick)');
   }
   return { flowType, flow, recipients, channel, steps };
 }
@@ -721,6 +774,28 @@ export async function createPendingFlowRun(definition, meta = {}) {
  * @param {import('../models/ScheduleDefinition.js').default} definition
  * @param {import('../models/ScheduleRun.js').default} run
  */
+function composeFromNovaAgentText(flow, definition, channel, agentText, dateLabel, timeZone) {
+  const name = definition.name || 'Scheduled message';
+  const subject = renderScheduleTemplate(
+    String(flow.subject_template || flow.subject || `${name} — {{date}}`).trim(),
+    { name, dateLabel, timeZone },
+  );
+  let body = stripAgentPresentationForDelivery(agentText, channel);
+  if (!body) {
+    throw new Error('Nova returned an empty response for this schedule');
+  }
+  if (channel === 'sms') {
+    const { text } = withSmsOptOutFooter(body);
+    return { channel, subject, body: text, dateLabel };
+  }
+  if (!/<[a-z][\s\S]*>/i.test(body)) {
+    body = `<div style="font-family:system-ui,-apple-system,sans-serif;color:#222;line-height:1.45;">${
+      body.split(/\n+/).map((line) => `<p style="margin:0 0 8px;">${line}</p>`).join('')
+    }</div>`;
+  }
+  return { channel, subject, body, dateLabel };
+}
+
 export async function fillFlowRun(definition, run) {
   const { flow, recipients, channel, steps } = assertSupportedFlow(definition);
   const timeZone = String(flow.timezone || definition.timezone || 'UTC');
@@ -729,7 +804,10 @@ export async function fillFlowRun(definition, run) {
   const metrics = flowMetrics(flow);
   const periodResults = [];
   const toolOutputs = {};
+  let novaAgentText = '';
+  let novaToolsUsed = [];
   let composed = null;
+  const { companyId, userId } = getWorxstreamContext();
 
   // Ensure progress steps exist for this process (older queued runs may lack them)
   if (!run.progress?.steps?.length) {
@@ -741,7 +819,9 @@ export async function fillFlowRun(definition, run) {
     await upsertProgressStep(run, {
       key: 'init',
       status: 'done',
-      detail: `channel=${channel} tz=${timeZone} steps=${steps.length}`,
+      detail: isNovaScheduleFlow(flow)
+        ? `engine=nova channel=${channel} tz=${timeZone}`
+        : `channel=${channel} tz=${timeZone} steps=${steps.length}`,
       phase: 'running',
     });
 
@@ -753,6 +833,31 @@ export async function fillFlowRun(definition, run) {
       });
 
       try {
+        if (step.type === 'nova_run') {
+          const novaResult = await runNovaScheduleTurn({
+            definition,
+            run,
+            flow,
+            companyId,
+            userId,
+            channel,
+          });
+          novaAgentText = novaResult.response;
+          novaToolsUsed = novaResult.toolsUsed;
+          run.conversation_id = novaResult.conversationId;
+          await upsertProgressStep(run, {
+            key: step.key,
+            status: 'done',
+            detail: `tools=${novaToolsUsed.length || 0} chars=${novaAgentText.length}`,
+            output_summary: {
+              tools: novaToolsUsed.slice(0, 20),
+              preview: novaAgentText.slice(0, 240),
+              conversation_id: novaResult.conversationId,
+            },
+          });
+          continue;
+        }
+
         if (step.type === 'invoice_report') {
           const windows = resolvePeriodWindows([step.period], timeZone);
           const window = windows[0];
@@ -806,58 +911,69 @@ export async function fillFlowRun(definition, run) {
         }
 
         if (step.type === 'compose') {
-          const subjectTemplate = String(flow.subject_template || flow.subject || '').trim();
-          const messageTemplate = String(
-            flow.message_template || flow.body || flow.message || '',
-          ).trim();
-          const liveVars = liveMetricVars(periodResults);
-
-          if (periodResults.length > 0 && !templateWantsLivePlaceholders(messageTemplate)) {
-            const briefing = composeSalesBriefingEmail({
-              name,
-              periods: periodResults,
-              metrics,
-              scope: String(flow.scope || 'company_totals'),
-              subject: renderScheduleTemplate(
-                subjectTemplate || `${name} — {{date}}`,
-                { name, dateLabel, timeZone, vars: liveVars },
-              ),
-            });
-            composed = {
-              channel,
-              subject: briefing.subject,
-              body: briefing.body,
-              dateLabel,
-            };
-          } else if (messageTemplate && templateWantsLivePlaceholders(messageTemplate)) {
-            composed = composeScheduledMessage(
-              {
-                ...flow,
-                subject_template: subjectTemplate || `${name} — {{date}}`,
-                message_template: messageTemplate,
-              },
+          if (novaAgentText) {
+            composed = composeFromNovaAgentText(
+              flow,
               definition,
+              channel,
+              novaAgentText,
+              dateLabel,
               timeZone,
             );
-            composed.subject = renderScheduleTemplate(composed.subject, {
-              name,
-              dateLabel,
-              timeZone,
-              vars: liveVars,
-            });
-            composed.body = renderScheduleTemplate(composed.body, {
-              name,
-              dateLabel,
-              timeZone,
-              vars: liveVars,
-            });
           } else {
-            composed = composeScheduledMessage(flow, definition, timeZone);
-          }
+            const subjectTemplate = String(flow.subject_template || flow.subject || '').trim();
+            const messageTemplate = String(
+              flow.message_template || flow.body || flow.message || '',
+            ).trim();
+            const liveVars = liveMetricVars(periodResults);
 
-          if (channel === 'sms' && composed.body && !/STOP/i.test(composed.body)) {
-            const { text } = withSmsOptOutFooter(composed.body);
-            composed.body = text;
+            if (periodResults.length > 0 && !templateWantsLivePlaceholders(messageTemplate)) {
+              const briefing = composeSalesBriefingEmail({
+                name,
+                periods: periodResults,
+                metrics,
+                scope: String(flow.scope || 'company_totals'),
+                subject: renderScheduleTemplate(
+                  subjectTemplate || `${name} — {{date}}`,
+                  { name, dateLabel, timeZone, vars: liveVars },
+                ),
+              });
+              composed = {
+                channel,
+                subject: briefing.subject,
+                body: briefing.body,
+                dateLabel,
+              };
+            } else if (messageTemplate && templateWantsLivePlaceholders(messageTemplate)) {
+              composed = composeScheduledMessage(
+                {
+                  ...flow,
+                  subject_template: subjectTemplate || `${name} — {{date}}`,
+                  message_template: messageTemplate,
+                },
+                definition,
+                timeZone,
+              );
+              composed.subject = renderScheduleTemplate(composed.subject, {
+                name,
+                dateLabel,
+                timeZone,
+                vars: liveVars,
+              });
+              composed.body = renderScheduleTemplate(composed.body, {
+                name,
+                dateLabel,
+                timeZone,
+                vars: liveVars,
+              });
+            } else {
+              composed = composeScheduledMessage(flow, definition, timeZone);
+            }
+
+            if (channel === 'sms' && composed.body && !/STOP/i.test(composed.body)) {
+              const { text } = withSmsOptOutFooter(composed.body);
+              composed.body = text;
+            }
           }
 
           await upsertProgressStep(run, {
@@ -869,6 +985,7 @@ export async function fillFlowRun(definition, run) {
               subject: composed.subject,
               preview: String(composed.body || '').slice(0, 160),
               period_count: periodResults.length,
+              engine: novaAgentText ? 'nova' : 'process',
             },
           });
           continue;
@@ -927,8 +1044,9 @@ export async function fillFlowRun(definition, run) {
       metrics: {
         channel,
         as_of: dateLabel,
+        engine: novaAgentText ? 'nova' : 'process',
         periods: periodResults,
-        tools: Object.keys(toolOutputs),
+        tools: novaToolsUsed.length ? novaToolsUsed : Object.keys(toolOutputs),
       },
     };
     run.markModified('summary');
@@ -1049,4 +1167,8 @@ export async function queueFlowRecipe(definition, options = {}) {
   return run;
 }
 
-export { SUPPORTED_FLOW_TYPES, MAX_ACTIVE_FLOW_SCHEDULES };
+export {
+  SUPPORTED_FLOW_TYPES,
+  MAX_ACTIVE_FLOW_SCHEDULES,
+  isNovaScheduleFlow,
+};

@@ -9,8 +9,13 @@ import {
   resolveFlowChannel,
   resolveFlowSteps,
   resolvePeriodWindows,
+  unwrapInvoiceReportEnvelope,
   SUPPORTED_FLOW_TYPES,
 } from '../src/governance/schedules/flowEngine.js';
+import {
+  isNovaScheduleFlow,
+  stripAgentPresentationForDelivery,
+} from '../src/governance/schedules/novaEngine.js';
 
 describe('scheduled_message flow', () => {
   it('supports scheduled_message and legacy sales_email_briefing alias', () => {
@@ -28,8 +33,35 @@ describe('scheduled_message flow', () => {
     assert.deepEqual(steps.map((s) => s.type), ['compose', 'deliver']);
   });
 
+  it('resolves Nova agent process from prompt', () => {
+    assert.equal(
+      isNovaScheduleFlow({
+        engine: 'nova',
+        prompt: 'Summarize today and MTD sales',
+      }),
+      true,
+    );
+    const steps = resolveFlowSteps({
+      engine: 'nova',
+      prompt: 'Summarize today and MTD sales',
+      channel: 'email',
+    });
+    assert.deepEqual(steps.map((s) => s.type), ['nova_run', 'compose', 'deliver']);
+  });
+
+  it('strips chart/stats tags for email delivery', () => {
+    const cleaned = stripAgentPresentationForDelivery(
+      'Hello\n<stats><stat label="Sales" value="$1"/></stats>\n<table><tr><td>ok</td></tr></table>',
+      'email',
+    );
+    assert.match(cleaned, /Hello/);
+    assert.match(cleaned, /<table>/);
+    assert.equal(/<stats/i.test(cleaned), false);
+  });
+
   it('resolves invoice process from periods', () => {
     const steps = resolveFlowSteps({
+      engine: 'process',
       periods: ['today', 'mtd'],
       metrics: ['sales', 'amount_paid'],
     });
@@ -134,5 +166,43 @@ describe('scheduled_message flow', () => {
     );
     assert.ok(next > new Date('2026-10-15T18:00:00.000Z'));
     assert.equal(formatDateInZone(next, 'America/New_York'), '2026-11-01');
+  });
+
+  it('unwraps invoice report without peeling into rows (keeps meta.totals)', () => {
+    const apiResult = {
+      success: true,
+      data: {
+        success: true,
+        data: {
+          meta: {
+            fromDate: '2026-10-01',
+            toDate: '2026-10-15',
+            totals: { grandTotal: 12500.5, tax: 100 },
+          },
+          data: [
+            { id: 1, grandTotal: 10000 },
+            { id: 2, grandTotal: 2500.5 },
+          ],
+          pagination: { total: 2, lastPage: 1, currentPage: 1 },
+        },
+      },
+    };
+    const envelope = unwrapInvoiceReportEnvelope(apiResult);
+    assert.equal(envelope.meta.totals.grandTotal, 12500.5);
+    assert.equal(envelope.data.length, 2);
+    assert.equal(envelope.pagination.lastPage, 1);
+  });
+
+  it('unwraps already-flat invoice report envelope', () => {
+    const envelope = unwrapInvoiceReportEnvelope({
+      success: true,
+      data: {
+        meta: { totals: { grandTotal: 42 } },
+        data: [{ id: 9, grandTotal: 42 }],
+        pagination: { total: 1 },
+      },
+    });
+    assert.equal(envelope.meta.totals.grandTotal, 42);
+    assert.equal(envelope.data[0].id, 9);
   });
 });

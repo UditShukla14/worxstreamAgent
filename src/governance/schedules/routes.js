@@ -31,6 +31,7 @@ function definitionToApi(doc) {
   return {
     id: String(doc._id),
     companyId: String(doc.company_id),
+    userId: doc.user_id != null && doc.user_id !== '' ? String(doc.user_id) : null,
     name: doc.name,
     description: doc.description || '',
     kind,

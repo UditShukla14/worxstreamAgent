@@ -32,6 +32,15 @@ function asText(payload) {
   };
 }
 
+/** Nova schedules are per (company_id, user_id), same as conversations. */
+function ownerFilter(companyId, userId, extra = {}) {
+  return {
+    company_id: String(companyId),
+    user_id: String(userId),
+    ...extra,
+  };
+}
+
 function parseRecipients(raw) {
   if (!Array.isArray(raw)) return [];
   return raw.map((item) => String(item).trim()).filter(Boolean);
@@ -94,21 +103,50 @@ function buildFlow(input) {
   const periods = parseStringList(input.periods);
   const metrics = parseStringList(input.metrics);
   const steps = parseSteps(input.steps);
+  const prompt = String(input.prompt || input.intent || '').trim();
+  const engineHint = String(input.engine || '').toLowerCase().trim();
+  const messageTemplate = String(
+    input.message_template || input.body || '',
+  ).trim();
+  // Prefer Nova: freeze the work prompt and re-run the agent on each tick.
+  // Legacy process (steps/periods) only when explicitly requested.
+  const wantsLegacyProcess = engineHint === 'process'
+    || engineHint === 'flow'
+    || engineHint === 'steps'
+    || steps.length > 0
+    || periods.length > 0
+    || metrics.length > 0
+    || String(input.data_source || '').toLowerCase() === 'invoice_report';
+  const novaPrompt = prompt
+    || (!wantsLegacyProcess && !messageTemplate && String(input.message || '').trim())
+    || '';
+
   const flow = {
     recipients: parseRecipients(input.recipients),
     channel,
     timezone,
     cadence_type: cadenceType,
     subject_template: String(input.subject_template || input.subject || '').trim(),
-    message_template: String(input.message_template || input.body || input.message || '').trim(),
+    message_template: messageTemplate,
   };
-  if (steps.length) flow.steps = steps;
-  if (periods.length) flow.periods = periods;
-  if (metrics.length) flow.metrics = metrics;
-  if (input.scope != null) flow.scope = String(input.scope).trim() || 'company_totals';
-  if (input.data_source != null) {
-    flow.data_source = String(input.data_source).trim().toLowerCase();
+
+  if (novaPrompt && !wantsLegacyProcess) {
+    flow.engine = 'nova';
+    flow.prompt = novaPrompt;
+  } else if (wantsLegacyProcess) {
+    flow.engine = 'process';
+    if (steps.length) flow.steps = steps;
+    if (periods.length) flow.periods = periods;
+    if (metrics.length) flow.metrics = metrics;
+    if (input.scope != null) flow.scope = String(input.scope).trim() || 'company_totals';
+    if (input.data_source != null) {
+      flow.data_source = String(input.data_source).trim().toLowerCase();
+    }
+  } else if (messageTemplate) {
+    // Send-only reminder (no agent turn)
+    flow.engine = 'send_only';
   }
+
   return flow;
 }
 
@@ -139,17 +177,13 @@ export function registerScribeTools() {
     {
       title: 'Create Scribe Schedule',
       description:
-        'Hand recurring work to Scribe as a frozen PROCESS (steps), not chat-only. '
-        + 'On each tick Scribe re-runs the frozen steps then delivers — no LLM. '
-        + 'flow_type: scheduled_message. channel: email|sms. '
-        + 'steps: ordered process, e.g. '
-        + '[{type:"invoice_report",period:"today"},{type:"invoice_report",period:"mtd"},'
-        + '{type:"compose"},{type:"deliver"}]. '
-        + 'Also accept periods+metrics shorthand (today|mtd|qtd + sales|amount_paid). '
-        + 'Or type:"tool" with any MCP tool name + args ({{date}} ok). '
-        + 'Send-only: omit steps and freeze message_template. '
-        + 'Do NOT put "pulled live at send time" in message_template — freeze steps/periods instead. '
-        + 'Confirm name, channel, recipients, process, cadence before calling.',
+        'Create a recurring schedule owned by Scribe. Default: freeze a PROMPT — on each tick '
+        + 'Nova re-runs with full tools, then Scribe emails/SMS the response. '
+        + 'Required: name, channel, recipients, prompt (the work to do each run), cadence. '
+        + 'Optional subject_template for email. '
+        + 'Send-only (no agent): omit prompt and set message_template. '
+        + 'Legacy no-LLM process (rare): set engine=process with steps/periods. '
+        + 'Confirm name, channel, recipients, prompt, cadence before calling.',
       inputSchema: {
         name: z.string().describe('Schedule display name'),
         description: z.string().optional().describe('Optional description'),
@@ -165,6 +199,18 @@ export function registerScribeTools() {
           .array(z.string())
           .min(1)
           .describe('Emails when channel=email; E.164 phones when channel=sms'),
+        prompt: z
+          .string()
+          .optional()
+          .describe(
+            'Work for Nova to perform each tick (preferred). Example: '
+            + '"Summarize today and month-to-date company sales (invoiced) and amount paid."',
+          ),
+        intent: z.string().optional().describe('Alias for prompt'),
+        engine: z
+          .enum(['nova', 'process', 'send_only'])
+          .optional()
+          .describe('Default nova when prompt is set. process = legacy frozen steps (no LLM).'),
         subject_template: z
           .string()
           .optional()
@@ -172,26 +218,21 @@ export function registerScribeTools() {
         message_template: z
           .string()
           .optional()
-          .describe(
-            'Optional frozen body for send-only, or custom body with {{sales_today}} etc. '
-            + 'When periods/steps gather data and this has no live placeholders, Scribe builds a totals table.',
-          ),
+          .describe('Frozen body for send-only reminders (no Nova turn).'),
         steps: z
           .array(z.record(z.any()))
           .optional()
-          .describe(
-            'Frozen process steps. Types: invoice_report (period), tool (tool+args), compose, deliver.',
-          ),
+          .describe('Legacy only (engine=process): invoice_report / tool / compose / deliver steps.'),
         periods: z
           .array(z.string())
           .optional()
-          .describe('Shorthand live invoice windows: today, mtd, qtd (implies invoice_report steps)'),
+          .describe('Legacy only: today, mtd, qtd invoice windows'),
         metrics: z
           .array(z.string())
           .optional()
-          .describe('For invoice compose table: sales, amount_paid'),
-        scope: z.string().optional().describe('e.g. company_totals'),
-        data_source: z.string().optional().describe('Set invoice_report to force live invoice process'),
+          .describe('Legacy only: sales, amount_paid'),
+        scope: z.string().optional().describe('Legacy label e.g. company_totals'),
+        data_source: z.string().optional().describe('Legacy: invoice_report'),
         timezone: z.string().optional().describe('IANA timezone, e.g. America/New_York'),
         cadence_type: z
           .enum(['interval', 'monthly'])
@@ -219,18 +260,19 @@ export function registerScribeTools() {
         });
       }
       const flow = buildFlow(input);
+      const hasNova = flow.engine === 'nova' && Boolean(flow.prompt);
       const hasProcess = Boolean(
         (flow.steps && flow.steps.length)
         || (flow.periods && flow.periods.length)
         || (flow.metrics && flow.metrics.length)
         || flow.data_source === 'invoice_report',
       );
-      if (!flow.message_template && !hasProcess) {
+      if (!hasNova && !flow.message_template && !hasProcess) {
         return asText({
           success: false,
           error:
-            'Freeze a process (steps or periods/metrics) and/or message_template — '
-            + 'Scribe must know what to run on each tick',
+            'Freeze a prompt (Nova re-runs tools each tick), or message_template (send-only), '
+            + 'or legacy steps/periods',
         });
       }
       const recipientError = validateRecipientsForChannel(flow.channel, flow.recipients);
@@ -238,11 +280,9 @@ export function registerScribeTools() {
         return asText({ success: false, error: recipientError });
       }
 
-      const activeCount = await ScheduleDefinition.countDocuments(activeQuery({
-        company_id: String(companyId),
-        kind: 'flow_recipe',
-        active: true,
-      }));
+      const activeCount = await ScheduleDefinition.countDocuments(activeQuery(
+        ownerFilter(companyId, userId, { kind: 'flow_recipe', active: true }),
+      ));
       const active = input.active !== false;
       if (active && activeCount >= MAX_ACTIVE_FLOW_SCHEDULES) {
         return asText({
@@ -293,7 +333,8 @@ export function registerScribeTools() {
         success: true,
         message:
           `Scribe owns schedule "${doc.name}" `
-          + `(${flow.channel}, ${cadence_type}).`,
+          + `(${flow.channel}, ${cadence_type}`
+          + `${flow.engine === 'nova' ? ', Nova agent each tick' : ''}).`,
         data: definitionToApi(doc),
       });
     },
@@ -303,7 +344,8 @@ export function registerScribeTools() {
     'scribe_list_schedules',
     {
       title: 'List Scribe Schedules',
-      description: 'List Scribe schedules (flow recipes and/or criteria reports) for this company.',
+      description:
+        'List Scribe schedules for this user+company (same scope as conversations).',
       inputSchema: {
         kind: z
           .enum(['flow_recipe', 'criteria_report', 'all'])
@@ -315,9 +357,9 @@ export function registerScribeTools() {
       capabilities: { domain: 'scribe', action: 'list', safety: 'read' },
     },
     async (input = {}) => {
-      const { companyId } = getWorxstreamContext();
+      const { companyId, userId } = getWorxstreamContext();
       const kind = input.kind || 'flow_recipe';
-      const filter = { company_id: String(companyId) };
+      const filter = ownerFilter(companyId, userId);
       if (kind !== 'all') filter.kind = kind;
       if (input.active_only) filter.active = true;
       const q = activeQuery(filter);
@@ -342,11 +384,10 @@ export function registerScribeTools() {
       capabilities: { domain: 'scribe', action: 'update', safety: 'write' },
     },
     async ({ schedule_id }) => {
-      const { companyId } = getWorxstreamContext();
-      const doc = await ScheduleDefinition.findOne(activeQuery({
-        _id: schedule_id,
-        company_id: String(companyId),
-      }));
+      const { companyId, userId } = getWorxstreamContext();
+      const doc = await ScheduleDefinition.findOne(activeQuery(
+        ownerFilter(companyId, userId, { _id: schedule_id }),
+      ));
       if (!doc) return asText({ success: false, error: 'Schedule not found' });
       doc.active = false;
       await doc.save();
@@ -365,19 +406,19 @@ export function registerScribeTools() {
       capabilities: { domain: 'scribe', action: 'update', safety: 'write' },
     },
     async ({ schedule_id }) => {
-      const { companyId } = getWorxstreamContext();
-      const doc = await ScheduleDefinition.findOne(activeQuery({
-        _id: schedule_id,
-        company_id: String(companyId),
-      }));
+      const { companyId, userId } = getWorxstreamContext();
+      const doc = await ScheduleDefinition.findOne(activeQuery(
+        ownerFilter(companyId, userId, { _id: schedule_id }),
+      ));
       if (!doc) return asText({ success: false, error: 'Schedule not found' });
       if (isFlowRecipe(doc)) {
-        const activeCount = await ScheduleDefinition.countDocuments(activeQuery({
-          company_id: String(companyId),
-          kind: 'flow_recipe',
-          active: true,
-          _id: { $ne: doc._id },
-        }));
+        const activeCount = await ScheduleDefinition.countDocuments(activeQuery(
+          ownerFilter(companyId, userId, {
+            kind: 'flow_recipe',
+            active: true,
+            _id: { $ne: doc._id },
+          }),
+        ));
         if (activeCount >= MAX_ACTIVE_FLOW_SCHEDULES) {
           return asText({
             success: false,
@@ -405,11 +446,10 @@ export function registerScribeTools() {
       capabilities: { domain: 'scribe', action: 'delete', safety: 'write' },
     },
     async ({ schedule_id }) => {
-      const { companyId } = getWorxstreamContext();
-      const doc = await ScheduleDefinition.findOne({
-        _id: schedule_id,
-        company_id: String(companyId),
-      });
+      const { companyId, userId } = getWorxstreamContext();
+      const doc = await ScheduleDefinition.findOne(
+        ownerFilter(companyId, userId, { _id: schedule_id }),
+      );
       if (!doc) return asText({ success: false, error: 'Schedule not found' });
       doc.deleted_at = new Date();
       doc.active = false;
@@ -423,7 +463,7 @@ export function registerScribeTools() {
     {
       title: 'Update Scribe Schedule',
       description:
-        'Update a Scribe flow schedule (name, channel, recipients, steps/periods, message, cadence). '
+        'Update a Scribe schedule (name, channel, recipients, prompt, message, cadence). '
         + 'Does not change flow_type.',
       inputSchema: {
         schedule_id: z.string(),
@@ -431,6 +471,8 @@ export function registerScribeTools() {
         description: z.string().optional(),
         channel: z.enum(['email', 'sms']).optional(),
         recipients: z.array(z.string()).optional(),
+        prompt: z.string().optional().describe('Nova work prompt each tick'),
+        engine: z.enum(['nova', 'process', 'send_only']).optional(),
         subject_template: z.string().optional(),
         message_template: z.string().optional(),
         steps: z.array(z.record(z.any())).optional(),
@@ -449,11 +491,10 @@ export function registerScribeTools() {
       capabilities: { domain: 'scribe', action: 'update', safety: 'write' },
     },
     async (input) => {
-      const { companyId } = getWorxstreamContext();
-      const doc = await ScheduleDefinition.findOne(activeQuery({
-        _id: input.schedule_id,
-        company_id: String(companyId),
-      }));
+      const { companyId, userId } = getWorxstreamContext();
+      const doc = await ScheduleDefinition.findOne(activeQuery(
+        ownerFilter(companyId, userId, { _id: input.schedule_id }),
+      ));
       if (!doc) return asText({ success: false, error: 'Schedule not found' });
       if (!isFlowRecipe(doc)) {
         return asText({
@@ -481,15 +522,35 @@ export function registerScribeTools() {
       if (input.message_template != null) {
         flow.message_template = String(input.message_template).trim();
       }
+      if (input.prompt != null) {
+        const nextPrompt = String(input.prompt).trim();
+        if (nextPrompt) {
+          flow.prompt = nextPrompt;
+          flow.engine = 'nova';
+          delete flow.steps;
+          delete flow.periods;
+          delete flow.metrics;
+          delete flow.data_source;
+        } else {
+          delete flow.prompt;
+        }
+      }
+      if (input.engine != null) {
+        flow.engine = String(input.engine).toLowerCase().trim();
+      }
       if (input.steps != null) {
         const steps = parseSteps(input.steps);
-        if (steps.length) flow.steps = steps;
-        else delete flow.steps;
+        if (steps.length) {
+          flow.steps = steps;
+          flow.engine = 'process';
+        } else delete flow.steps;
       }
       if (input.periods != null) {
         const periods = parseStringList(input.periods);
-        if (periods.length) flow.periods = periods;
-        else delete flow.periods;
+        if (periods.length) {
+          flow.periods = periods;
+          flow.engine = 'process';
+        } else delete flow.periods;
       }
       if (input.metrics != null) {
         const metrics = parseStringList(input.metrics);
@@ -540,10 +601,9 @@ export function registerScribeTools() {
     },
     async ({ schedule_id }) => {
       const { companyId, userId } = getWorxstreamContext();
-      const doc = await ScheduleDefinition.findOne(activeQuery({
-        _id: schedule_id,
-        company_id: String(companyId),
-      }));
+      const doc = await ScheduleDefinition.findOne(activeQuery(
+        ownerFilter(companyId, userId, { _id: schedule_id }),
+      ));
       if (!doc) return asText({ success: false, error: 'Schedule not found' });
       const run = await queueScheduleDefinition(doc, {
         companyId: String(companyId),
@@ -563,7 +623,7 @@ export function registerScribeTools() {
     {
       title: 'List Scribe Schedule Runs',
       description:
-        'List Mongo run logs for a schedule (or all company runs). Includes status, steps, errors.',
+        'List Mongo run logs for this user\'s schedules. Includes status, steps, errors.',
       inputSchema: {
         schedule_id: z.string().optional().describe('Filter by schedule id'),
         status: z.enum(['running', 'completed', 'error', 'partial']).optional(),
@@ -572,13 +632,21 @@ export function registerScribeTools() {
       capabilities: { domain: 'scribe', action: 'list', safety: 'read' },
     },
     async (input = {}) => {
-      const { companyId } = getWorxstreamContext();
-      const base = { company_id: String(companyId) };
+      const { companyId, userId } = getWorxstreamContext();
+      // Scope via owned definitions (legacy runs may omit user_id).
+      const ownedDefs = await ScheduleDefinition.find(
+        activeQuery(ownerFilter(companyId, userId)),
+      ).select('_id').lean();
+      const ownedIds = ownedDefs.map((d) => d._id);
+      if (!ownedIds.length) {
+        return asText({ success: true, count: 0, data: [] });
+      }
+      const base = {
+        company_id: String(companyId),
+        definition_id: { $in: ownedIds },
+      };
       if (input.schedule_id) {
-        const owned = await ScheduleDefinition.findOne(activeQuery({
-          _id: input.schedule_id,
-          company_id: String(companyId),
-        }));
+        const owned = ownedDefs.find((d) => String(d._id) === String(input.schedule_id));
         if (!owned) return asText({ success: false, error: 'Schedule not found' });
         base.definition_id = owned._id;
       }
@@ -607,12 +675,16 @@ export function registerScribeTools() {
       capabilities: { domain: 'scribe', action: 'get', safety: 'read' },
     },
     async ({ run_id }) => {
-      const { companyId } = getWorxstreamContext();
+      const { companyId, userId } = getWorxstreamContext();
       const doc = await ScheduleRun.findOne(activeQuery({
         _id: run_id,
         company_id: String(companyId),
       }));
       if (!doc) return asText({ success: false, error: 'Run not found' });
+      const owned = await ScheduleDefinition.findOne(activeQuery(
+        ownerFilter(companyId, userId, { _id: doc.definition_id }),
+      ));
+      if (!owned) return asText({ success: false, error: 'Run not found' });
       return asText({ success: true, data: runDetailToApi(doc) });
     },
   );

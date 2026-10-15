@@ -418,13 +418,21 @@ router.post('/multi', async (req, res) => {
   }
 });
 
-// ── Scribe schedules (Nova UI) ───────────────────────────────────────
+// ── Scribe schedules (Nova UI) — scoped by company_id + user_id like conversations ──
+function scheduleOwnerFilter(tenant, extra = {}) {
+  return {
+    company_id: tenant.company_id,
+    user_id: tenant.user_id,
+    ...extra,
+  };
+}
+
 router.get('/schedules', async (req, res) => {
   try {
     const tenant = requireConversationTenant(req, res);
     if (!tenant) return;
     const kind = String(req.query.kind || 'flow_recipe');
-    const filter = { company_id: tenant.company_id };
+    const filter = scheduleOwnerFilter(tenant);
     if (kind !== 'all') filter.kind = kind;
     if (req.query.active_only === 'true' || req.query.active_only === '1') {
       filter.active = true;
@@ -443,11 +451,12 @@ router.get('/schedules/:id', async (req, res) => {
   try {
     const tenant = requireConversationTenant(req, res);
     if (!tenant) return;
-    const doc = await ScheduleDefinition.findOne(scheduleActiveQuery({
-      _id: req.params.id,
-      company_id: tenant.company_id,
-    }));
+    const doc = await ScheduleDefinition.findOne(scheduleActiveQuery(
+      scheduleOwnerFilter(tenant, { _id: req.params.id }),
+    ));
     if (!doc) return res.status(404).json({ success: false, error: 'Schedule not found' });
+    // Definition is already owner-scoped; do not also require run.user_id
+    // (legacy runs may have empty user_id).
     const runs = await ScheduleRun.find(scheduleActiveQuery({
       company_id: tenant.company_id,
       definition_id: doc._id,
@@ -471,10 +480,9 @@ router.get('/schedules/:id/runs/:runId', async (req, res) => {
   try {
     const tenant = requireConversationTenant(req, res);
     if (!tenant) return;
-    const owned = await ScheduleDefinition.findOne(scheduleActiveQuery({
-      _id: req.params.id,
-      company_id: tenant.company_id,
-    }));
+    const owned = await ScheduleDefinition.findOne(scheduleActiveQuery(
+      scheduleOwnerFilter(tenant, { _id: req.params.id }),
+    ));
     if (!owned) return res.status(404).json({ success: false, error: 'Schedule not found' });
     const run = await ScheduleRun.findOne(scheduleActiveQuery({
       _id: req.params.runId,
@@ -493,10 +501,9 @@ router.post('/schedules/:id/pause', async (req, res) => {
   try {
     const tenant = requireConversationTenant(req, res);
     if (!tenant) return;
-    const doc = await ScheduleDefinition.findOne(scheduleActiveQuery({
-      _id: req.params.id,
-      company_id: tenant.company_id,
-    }));
+    const doc = await ScheduleDefinition.findOne(scheduleActiveQuery(
+      scheduleOwnerFilter(tenant, { _id: req.params.id }),
+    ));
     if (!doc) return res.status(404).json({ success: false, error: 'Schedule not found' });
     doc.active = false;
     await doc.save();
@@ -510,10 +517,9 @@ router.post('/schedules/:id/resume', async (req, res) => {
   try {
     const tenant = requireConversationTenant(req, res);
     if (!tenant) return;
-    const doc = await ScheduleDefinition.findOne(scheduleActiveQuery({
-      _id: req.params.id,
-      company_id: tenant.company_id,
-    }));
+    const doc = await ScheduleDefinition.findOne(scheduleActiveQuery(
+      scheduleOwnerFilter(tenant, { _id: req.params.id }),
+    ));
     if (!doc) return res.status(404).json({ success: false, error: 'Schedule not found' });
     doc.active = true;
     doc.next_run_at = isFlowRecipe(doc) ? computeFlowNextRunAt(doc) : computeNextRunAt(doc);
@@ -528,10 +534,9 @@ router.post('/schedules/:id/run', async (req, res) => {
   try {
     const tenant = requireConversationTenant(req, res);
     if (!tenant) return;
-    const doc = await ScheduleDefinition.findOne(scheduleActiveQuery({
-      _id: req.params.id,
-      company_id: tenant.company_id,
-    }));
+    const doc = await ScheduleDefinition.findOne(scheduleActiveQuery(
+      scheduleOwnerFilter(tenant, { _id: req.params.id }),
+    ));
     if (!doc) return res.status(404).json({ success: false, error: 'Schedule not found' });
     const run = await queueScheduleDefinition(doc, {
       companyId: tenant.company_id,
@@ -548,10 +553,9 @@ router.delete('/schedules/:id', async (req, res) => {
   try {
     const tenant = requireConversationTenant(req, res);
     if (!tenant) return;
-    const doc = await ScheduleDefinition.findOne({
-      _id: req.params.id,
-      company_id: tenant.company_id,
-    });
+    const doc = await ScheduleDefinition.findOne(
+      scheduleOwnerFilter(tenant, { _id: req.params.id }),
+    );
     if (!doc) return res.status(404).json({ success: false, error: 'Schedule not found' });
     doc.deleted_at = new Date();
     doc.active = false;

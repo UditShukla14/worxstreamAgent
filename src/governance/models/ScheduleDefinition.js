@@ -77,6 +77,7 @@ const scheduleDefinitionSchema = new mongoose.Schema({
 
 scheduleDefinitionSchema.index({ company_id: 1, active: 1, next_run_at: 1 });
 scheduleDefinitionSchema.index({ company_id: 1, kind: 1, active: 1 });
+scheduleDefinitionSchema.index({ company_id: 1, user_id: 1, kind: 1, updated_at: -1 });
 
 const ScheduleDefinition = mongoose.models.ScheduleDefinition
   || mongoose.model('ScheduleDefinition', scheduleDefinitionSchema);
