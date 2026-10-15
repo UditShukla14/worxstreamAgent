@@ -17,6 +17,7 @@ import {
   SUPPORTED_FLOW_TYPES,
   computeFlowNextRunAt,
   isFlowRecipe,
+  resolveFlowSteps,
 } from '../schedules/flowEngine.js';
 import { isE164 } from '../../services/telnyxClient.js';
 import {
@@ -299,6 +300,20 @@ export function registerScribeTools() {
             + '"args":{"from_date":"{{today}}","to_date":"{{today}}"},"as":"invoices"},'
             + '{"type":"compose"},{"type":"deliver"}].',
         });
+      }
+      // Persist the executable process, not only the shorthand periods/metrics.
+      // This makes the schedule inspectable before it runs and guarantees that
+      // the same normalized step sequence is used by every future tick.
+      if (flow.engine === 'process') {
+        flow.steps = resolveFlowSteps(flow).map((step) => ({
+          type: step.type,
+          key: step.key,
+          label: step.label,
+          ...(step.period ? { period: step.period } : {}),
+          ...(step.tool ? { tool: step.tool } : {}),
+          ...(step.args ? { args: step.args } : {}),
+          ...(step.as ? { as: step.as } : {}),
+        }));
       }
       const recipientError = validateRecipientsForChannel(flow.channel, flow.recipients);
       if (recipientError) {
@@ -594,11 +609,28 @@ export function registerScribeTools() {
         || (Array.isArray(flow.metrics) && flow.metrics.length)
         || flow.data_source === 'invoice_report',
       );
+      if (flow.engine === 'send_only' && !flow.message_template) {
+        return asText({
+          success: false,
+          error: 'Send-only schedules require a non-empty message_template.',
+        });
+      }
       if (flow.engine !== 'send_only' && !hasFrozenWork) {
         return asText({
           success: false,
           error: 'A recurring schedule must retain frozen steps or periods/metrics; a prompt alone is not schedulable.',
         });
+      }
+      if (flow.engine === 'process') {
+        flow.steps = resolveFlowSteps(flow).map((step) => ({
+          type: step.type,
+          key: step.key,
+          label: step.label,
+          ...(step.period ? { period: step.period } : {}),
+          ...(step.tool ? { tool: step.tool } : {}),
+          ...(step.args ? { args: step.args } : {}),
+          ...(step.as ? { as: step.as } : {}),
+        }));
       }
       if (input.cadence_type != null) {
         const cadence = String(input.cadence_type).toLowerCase() === 'monthly' ? 'monthly' : 'interval';

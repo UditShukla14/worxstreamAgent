@@ -733,6 +733,20 @@ export function assertSupportedFlow(definition) {
     String(flow.message_template || flow.body || flow.message || '').trim()
     || String(flow.subject_template || flow.subject || '').trim(),
   );
+  const hasFrozenProcess = steps.some((s) => (
+    s.type === 'invoice_report' || s.type === 'tool'
+  ));
+  if (String(flow.engine || '').toLowerCase() === 'send_only'
+      && !String(flow.message_template || flow.body || flow.message || '').trim()) {
+    throw new Error(
+      'Send-only schedule has no message_template. Recreate it as a frozen process with tool steps.',
+    );
+  }
+  if (String(flow.engine || '').toLowerCase() === 'process' && !hasFrozenProcess) {
+    throw new Error(
+      'Process schedule has no frozen tool steps. Recreate the schedule with the resolved tools and arguments.',
+    );
+  }
   if (!hasNova && !hasBody && !hasProcess && !definition.name) {
     throw new Error('flow must include prompt (Nova), steps, and/or message_template');
   }

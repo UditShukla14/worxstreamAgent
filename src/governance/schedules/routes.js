@@ -15,6 +15,7 @@ import {
   SUPPORTED_FLOW_TYPES,
   computeFlowNextRunAt,
   isFlowRecipe,
+  resolveFlowSteps,
 } from './flowEngine.js';
 
 function activeQuery(filter) {
@@ -28,6 +29,18 @@ function activeQuery(filter) {
 
 function definitionToApi(doc) {
   const kind = doc.kind === 'flow_recipe' || doc.flow_type ? 'flow_recipe' : 'criteria_report';
+  const flow = doc.flow && typeof doc.flow === 'object' ? { ...doc.flow } : null;
+  if (flow && flow.engine === 'process' && (!Array.isArray(flow.steps) || flow.steps.length === 0)) {
+    flow.steps = resolveFlowSteps(flow).map((step) => ({
+      type: step.type,
+      key: step.key,
+      label: step.label,
+      ...(step.period ? { period: step.period } : {}),
+      ...(step.tool ? { tool: step.tool } : {}),
+      ...(step.args ? { args: step.args } : {}),
+      ...(step.as ? { as: step.as } : {}),
+    }));
+  }
   return {
     id: String(doc._id),
     companyId: String(doc.company_id),
@@ -41,7 +54,7 @@ function definitionToApi(doc) {
     criteriaType: doc.criteria_type || null,
     criteriaFields: doc.criteria_fields || [],
     flowType: doc.flow_type || null,
-    flow: doc.flow || null,
+    flow,
     timezone: doc.timezone || 'UTC',
     cadenceType: doc.cadence_type || 'interval',
     intervalDays: doc.interval_days,
@@ -167,6 +180,22 @@ function parseStringList(raw, fallback = []) {
   return raw.map((item) => String(item).trim().toLowerCase()).filter(Boolean);
 }
 
+function normalizeStoredFlow(flow) {
+  const next = flow && typeof flow === 'object' ? { ...flow } : {};
+  if (String(next.engine || '').toLowerCase() === 'process') {
+    next.steps = resolveFlowSteps(next).map((step) => ({
+      type: step.type,
+      key: step.key,
+      label: step.label,
+      ...(step.period ? { period: step.period } : {}),
+      ...(step.tool ? { tool: step.tool } : {}),
+      ...(step.args ? { args: step.args } : {}),
+      ...(step.as ? { as: step.as } : {}),
+    }));
+  }
+  return next;
+}
+
 function flowFromBody(body) {
   const flowIn = body.flow && typeof body.flow === 'object' ? body.flow : {};
   const recipients = parseRecipients(
@@ -177,7 +206,7 @@ function flowFromBody(body) {
   const cadenceRaw = String(
     flowIn.cadence_type ?? body.cadenceType ?? body.cadence_type ?? 'interval',
   ).toLowerCase();
-  return {
+  const flow = {
     recipients,
     channel: channelRaw === 'sms' ? 'sms' : 'email',
     timezone,
@@ -194,6 +223,30 @@ function flowFromBody(body) {
       ?? '',
     ).trim(),
   };
+  const engine = String(flowIn.engine ?? body.engine ?? '').toLowerCase().trim();
+  const prompt = String(flowIn.prompt ?? flowIn.intent ?? body.prompt ?? body.intent ?? '').trim();
+  const steps = flowIn.steps ?? body.steps;
+  const periods = flowIn.periods ?? body.periods;
+  const metrics = flowIn.metrics ?? body.metrics;
+  if (engine) flow.engine = engine;
+  if (prompt) flow.intent = prompt;
+  if (Array.isArray(steps)) flow.steps = steps;
+  if (Array.isArray(periods)) flow.periods = parseStringList(periods);
+  if (Array.isArray(metrics)) flow.metrics = parseStringList(metrics);
+  if (!flow.engine && (
+    (Array.isArray(flow.steps) && flow.steps.length > 0)
+    || (Array.isArray(flow.periods) && flow.periods.length > 0)
+    || (Array.isArray(flow.metrics) && flow.metrics.length > 0)
+  )) {
+    flow.engine = 'process';
+  } else if (!flow.engine && flow.message_template) {
+    flow.engine = 'send_only';
+  }
+  if (flowIn.scope != null || body.scope != null) flow.scope = String(flowIn.scope ?? body.scope).trim();
+  if (flowIn.data_source != null || body.data_source != null) {
+    flow.data_source = String(flowIn.data_source ?? body.data_source).trim().toLowerCase();
+  }
+  return normalizeStoredFlow(flow);
 }
 
 function definitionFieldsFromBody(body, partial = false) {
@@ -379,6 +432,7 @@ export function createScheduleRouter() {
 
       if (isFlowRecipe(doc)) {
         doc.kind = 'flow_recipe';
+        doc.flow = normalizeStoredFlow(doc.flow);
         if (!SUPPORTED_FLOW_TYPES.has(String(doc.flow_type || ''))) {
           return res.status(400).json({
             success: false,
