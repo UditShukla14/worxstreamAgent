@@ -173,22 +173,52 @@ export function registerReportTools() {
     'export_invoice_report_csv',
     {
       title: 'Export Invoice Report CSV',
-      description: 'Exports invoice report data as CSV file for download.',
-      inputSchema: {}
+      description: 'Exports invoice report data as CSV for a date range (same as Reports → Invoice Report export).',
+      inputSchema: {
+        from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('Start date YYYY-MM-DD'),
+        to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('End date YYYY-MM-DD'),
+      },
     },
-    async () => {
+    async ({ from_date, to_date }) => {
       const { companyId, userId } = getWorxstreamContext();
-      
       return await callWorxstreamAPI({
         method: 'POST',
         endpoint: '/report/invoice/export-csv',
-        data: { 
-          company_id: companyId, 
-          user_id: userId 
+        data: {
+          company_id: companyId,
+          user_id: userId,
+          from_date,
+          to_date,
         },
-        responseType: 'blob' // For binary file download
+        responseType: 'blob',
       });
-    }
+    },
+  );
+
+  registerTool(
+    'export_estimate_report_csv',
+    {
+      title: 'Export Estimate Report CSV',
+      description: 'Exports estimate report data as CSV for a date range (Reports → Estimate Report).',
+      inputSchema: {
+        from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('Start date YYYY-MM-DD'),
+        to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('End date YYYY-MM-DD'),
+      },
+    },
+    async ({ from_date, to_date }) => {
+      const { companyId, userId } = getWorxstreamContext();
+      return await callWorxstreamAPI({
+        method: 'POST',
+        endpoint: '/report/estimate/export-csv',
+        data: {
+          company_id: companyId,
+          user_id: userId,
+          from_date,
+          to_date,
+        },
+        responseType: 'blob',
+      });
+    },
   );
 
   // Get estimate line items report
@@ -268,6 +298,364 @@ export function registerReportTools() {
         }
       });
     }
+  );
+
+  // Product Report (Reports hub)
+  registerTool(
+    'generate_product_report',
+    {
+      title: 'Generate Product Report',
+      description:
+        'Generates the Product Report grid (Reports → Products): units sold, revenue, and cost by product for a date range. Same API as /reports/products.',
+      inputSchema: {
+        from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('Start date YYYY-MM-DD'),
+        to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('End date YYYY-MM-DD'),
+        product_name: z.string().optional().describe('Filter by product name'),
+        customer_ids: z.array(z.number()).optional().describe('Filter by customer IDs'),
+        warehouse_id: z.number().optional().describe('Filter by warehouse ID'),
+        page: z.number().optional().describe('Page (default 1)'),
+        per_page: z.number().optional().describe('Rows per page (default 50)'),
+      },
+    },
+    async (params) => {
+      const { companyId, userId } = getWorxstreamContext();
+      const data = {
+        company_id: companyId,
+        user_id: userId,
+        from_date: params.from_date,
+        to_date: params.to_date,
+        page: params.page ? Number(params.page) : 1,
+        per_page: params.per_page ? Number(params.per_page) : 50,
+      };
+      if (params.product_name?.trim()) data.product_name = params.product_name.trim();
+      if (params.customer_ids?.length) data.customer_ids = params.customer_ids.map(Number);
+      if (params.warehouse_id != null && params.warehouse_id > 0) {
+        data.warehouse_id = Number(params.warehouse_id);
+      }
+      return await callWorxstreamAPI({
+        method: 'POST',
+        endpoint: '/report/product/generate',
+        data,
+      });
+    },
+  );
+
+  registerTool(
+    'export_product_report_csv',
+    {
+      title: 'Export Product Report CSV',
+      description: 'Exports product report CSV for a date range (Reports → Products).',
+      inputSchema: {
+        from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('Start date YYYY-MM-DD'),
+        to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('End date YYYY-MM-DD'),
+      },
+    },
+    async ({ from_date, to_date }) => {
+      const { companyId, userId } = getWorxstreamContext();
+      return await callWorxstreamAPI({
+        method: 'POST',
+        endpoint: '/report/product/export-csv',
+        data: {
+          company_id: companyId,
+          user_id: userId,
+          from_date,
+          to_date,
+        },
+        responseType: 'blob',
+      });
+    },
+  );
+
+  // Customer Buying Report (Reports hub — 4 views)
+  const customerBuyingBaseSchema = {
+    from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('Start date YYYY-MM-DD'),
+    to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('End date YYYY-MM-DD'),
+    customer_ids: z.array(z.number()).min(1).describe('One or more customer IDs'),
+    warehouse_id: z.number().optional().describe('Optional warehouse filter'),
+  };
+
+  function buildCustomerBuyingData(params) {
+    const { companyId, userId } = getWorxstreamContext();
+    const data = {
+      company_id: companyId,
+      user_id: userId,
+      from_date: params.from_date,
+      to_date: params.to_date,
+      customer_ids: params.customer_ids.map(Number),
+    };
+    if (params.warehouse_id != null && params.warehouse_id > 0) {
+      data.warehouse_id = Number(params.warehouse_id);
+    }
+    return data;
+  }
+
+  registerTool(
+    'generate_customer_buying_unique_products_report',
+    {
+      title: 'Customer Buying — Unique Products',
+      description:
+        'Customer Buying Report unique-products view (Reports → Customer Buying). Qty by product across selected customers.',
+      inputSchema: customerBuyingBaseSchema,
+    },
+    async (params) =>
+      callWorxstreamAPI({
+        method: 'POST',
+        endpoint: '/report/customer-buying/unique-products',
+        data: buildCustomerBuyingData(params),
+      }),
+  );
+
+  registerTool(
+    'generate_customer_buying_monthly_products_report',
+    {
+      title: 'Customer Buying — Monthly Products',
+      description:
+        'Customer Buying Report monthly-products view (Reports → Customer Buying). Qty by product by month.',
+      inputSchema: customerBuyingBaseSchema,
+    },
+    async (params) =>
+      callWorxstreamAPI({
+        method: 'POST',
+        endpoint: '/report/customer-buying/monthly-products',
+        data: buildCustomerBuyingData(params),
+      }),
+  );
+
+  registerTool(
+    'generate_customer_buying_price_lookup_report',
+    {
+      title: 'Customer Buying — Price Lookup',
+      description:
+        'Customer Buying price-lookup view: invoice line pricing for selected customers (optional SKU filter).',
+      inputSchema: {
+        ...customerBuyingBaseSchema,
+        skus: z.array(z.string()).optional().describe('Optional SKUs to filter; omit for all'),
+      },
+    },
+    async (params) => {
+      const data = buildCustomerBuyingData(params);
+      const skus = (params.skus || []).map((s) => String(s).trim()).filter(Boolean);
+      if (skus.length) data.skus = skus;
+      return callWorxstreamAPI({
+        method: 'POST',
+        endpoint: '/report/customer-buying/price-lookup',
+        data,
+      });
+    },
+  );
+
+  registerTool(
+    'generate_customer_buying_product_details_report',
+    {
+      title: 'Customer Buying — Product Details',
+      description:
+        'Customer Buying product-details view for one product across the date range.',
+      inputSchema: {
+        from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('Start date YYYY-MM-DD'),
+        to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('End date YYYY-MM-DD'),
+        product_id: z.number().describe('Product ID'),
+      },
+    },
+    async ({ from_date, to_date, product_id }) => {
+      const { companyId, userId } = getWorxstreamContext();
+      return callWorxstreamAPI({
+        method: 'POST',
+        endpoint: '/report/customer-buying/product-details',
+        data: {
+          company_id: companyId,
+          user_id: userId,
+          from_date,
+          to_date,
+          product_id: Number(product_id),
+        },
+      });
+    },
+  );
+
+  // Reconcile Report
+  registerTool(
+    'generate_reconcile_report',
+    {
+      title: 'Generate Reconcile Report',
+      description:
+        'Reconcile Report data (Reports → Reconcile): vendor/Motili cost reconciliation for estimates/invoices. Read-only; use UI for mark-verified/credits.',
+      inputSchema: {
+        from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe('Start date YYYY-MM-DD'),
+        to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe('End date YYYY-MM-DD'),
+        search: z.string().optional().describe('Free-text search'),
+      },
+    },
+    async (params) => {
+      const { companyId, userId } = getWorxstreamContext();
+      const data = { company_id: companyId, user_id: userId };
+      if (params.from_date?.trim()) data.from_date = params.from_date.trim();
+      if (params.to_date?.trim()) data.to_date = params.to_date.trim();
+      if (params.search?.trim()) data.search = params.search.trim();
+      return callWorxstreamAPI({
+        method: 'POST',
+        endpoint: '/report/reconsile/data',
+        data,
+      });
+    },
+  );
+
+  // Customer Address Report
+  registerTool(
+    'generate_customer_address_report',
+    {
+      title: 'Generate Customer Address Report',
+      description:
+        'Customer Address Report (Reports → Customer Address): customers filtered by taxable flag and tax rate via customer-list address filter.',
+      inputSchema: {
+        is_customer_taxable: z.boolean().describe('true = taxable customers, false = non-taxable'),
+        customer_tax_rate: z.string().optional().describe('Tax rate string filter (e.g. "7.75"); empty = any'),
+      },
+    },
+    async ({ is_customer_taxable, customer_tax_rate }) => {
+      const { companyId, userId } = getWorxstreamContext();
+      return callWorxstreamAPI({
+        method: 'POST',
+        endpoint: '/master/customer/customer-list',
+        data: {
+          company_id: companyId,
+          user_id: userId,
+          filter: {
+            address: {
+              is_customer_taxable: Boolean(is_customer_taxable),
+              customer_tax_rate: customer_tax_rate != null ? String(customer_tax_rate) : '',
+            },
+          },
+        },
+      });
+    },
+  );
+
+  // Warehouse Stock Report
+  registerTool(
+    'get_warehouse_stock_report_initial_data',
+    {
+      title: 'Warehouse Stock Report Filters',
+      description:
+        'Initial data for Warehouse Stock Report (managed warehouses, categories, stock types/statuses). Call before generate_warehouse_stock_report when filters are unknown.',
+      inputSchema: {},
+    },
+    async () => {
+      const { companyId, userId } = getWorxstreamContext();
+      return callWorxstreamAPI({
+        method: 'POST',
+        endpoint: '/inventory/stock/report/managed-warehouses/initial-data',
+        data: { company_id: companyId, user_id: userId },
+      });
+    },
+  );
+
+  registerTool(
+    'generate_warehouse_stock_report',
+    {
+      title: 'Generate Warehouse Stock Report',
+      description:
+        'Warehouse Stock Report (Reports → Warehouse Stock): qty by SKU across managed warehouses. Same API as /reports/warehouse-stock.',
+      inputSchema: {
+        page: z.number().optional().describe('Page (default 1)'),
+        limit: z.number().optional().describe('Rows per page (default 50)'),
+        search: z.string().optional().describe('SKU/name search'),
+        category_id: z.number().optional().describe('Product category ID'),
+        sub_category_id: z.number().optional().describe('Product subcategory ID'),
+        stock_type: z.string().optional().describe('Stock type filter'),
+        stock_status: z.string().optional().describe('Stock status filter'),
+        warehouse_id: z.number().optional().describe('Optional single warehouse focus'),
+      },
+    },
+    async (params) => {
+      const { companyId, userId } = getWorxstreamContext();
+      const data = {
+        company_id: companyId,
+        user_id: userId,
+        page: params.page ? Number(params.page) : 1,
+        limit: params.limit ? Number(params.limit) : 50,
+      };
+      const filter = {};
+      if (params.search?.trim()) {
+        data.search = params.search.trim();
+        filter.search = params.search.trim();
+      }
+      if (params.category_id != null) data.category_id = Number(params.category_id);
+      if (params.sub_category_id != null) data.sub_category_id = Number(params.sub_category_id);
+      if (params.warehouse_id != null) data.warehouse_id = Number(params.warehouse_id);
+      if (params.stock_type?.trim()) {
+        data.stock_type = params.stock_type.trim();
+        filter.stock_type = params.stock_type.trim();
+      }
+      if (params.stock_status?.trim()) {
+        data.stock_status = params.stock_status.trim();
+        filter.stock_status = params.stock_status.trim();
+      }
+      if (Object.keys(filter).length) data.filter = filter;
+      return callWorxstreamAPI({
+        method: 'POST',
+        endpoint: '/inventory/stock/report/managed-warehouses',
+        data,
+      });
+    },
+  );
+
+  // Duplicate Serials Report
+  registerTool(
+    'generate_duplicate_serials_report',
+    {
+      title: 'Generate Duplicate Serials Report',
+      description:
+        'Warehouse Inventory duplicate-serials scan (Reports → Duplicate Serials). Finds serial numbers appearing more than once.',
+      inputSchema: {
+        warehouse_id: z.number().describe('Warehouse ID to scan'),
+        page: z.number().optional().describe('Page (default 1)'),
+        limit: z.number().optional().describe('Rows per page (default 50)'),
+      },
+    },
+    async ({ warehouse_id, page, limit }) => {
+      const { companyId, userId } = getWorxstreamContext();
+      return callWorxstreamAPI({
+        method: 'POST',
+        endpoint: '/inventory/serial-number/duplicate-scan',
+        data: {
+          company_id: companyId,
+          user_id: userId,
+          warehouse_id: Number(warehouse_id),
+          page: page ? Number(page) : 1,
+          limit: limit ? Number(limit) : 50,
+        },
+      });
+    },
+  );
+
+  // Motili Report
+  registerTool(
+    'generate_motili_report',
+    {
+      title: 'Generate Motili Report',
+      description:
+        'Motili Orders Report (Reports → Motili): lists Motili vendor orders. Same API as /reports/motili.',
+      inputSchema: {
+        page: z.number().optional().describe('Page (default 1)'),
+        limit: z.number().optional().describe('Rows per page (default 15)'),
+        sort: z.string().optional().describe('Optional sort string'),
+      },
+    },
+    async ({ page, limit, sort } = {}) => {
+      const { companyId, userId } = getWorxstreamContext();
+      const data = {
+        company_id: companyId,
+        user_id: userId,
+        page: page ? Number(page) : 1,
+        limit: limit ? Number(limit) : 15,
+      };
+      if (sort?.trim()) data.sort = sort.trim();
+      return callWorxstreamAPI({
+        method: 'POST',
+        endpoint: '/motili/orders/list',
+        data,
+      });
+    },
   );
 
   // Goal Reports

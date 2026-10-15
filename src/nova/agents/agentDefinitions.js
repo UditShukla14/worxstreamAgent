@@ -548,10 +548,19 @@ REPORT FILTERING:
 
 BUSINESS INSIGHTS: Call out trends, goal gaps, anomalies, and product/line-item performance when relevant to the ask.
 
-TOOL USAGE:
+TOOL USAGE (match Reports hub cards):
 - get_report_filters first when needed.
-- generate_estimate_report / generate_invoice_report for analytics (not list_invoices/list_estimates).
-- Goal and selling-history tools for performance/profitability.
+- Estimates: generate_estimate_report / export_estimate_report_csv / get_estimate_line_items.
+- Invoices: generate_invoice_report / export_invoice_report_csv / get_invoice_line_items.
+- Products: generate_product_report / export_product_report_csv / get_product_selling_history.
+- Customer Buying: generate_customer_buying_*_report tools (unique products, monthly, price lookup, product details).
+- Reconcile: generate_reconcile_report (read-only).
+- Customer Address: generate_customer_address_report (taxable + tax rate filters).
+- Warehouse Stock: get_warehouse_stock_report_initial_data then generate_warehouse_stock_report.
+- Duplicate Serials: generate_duplicate_serials_report (requires warehouse_id).
+- Motili: generate_motili_report.
+- Goals: get_goal_* / save_goal tools.
+- Prefer generate_*_report over list_* for analytics.
 - Chart XML shapes live in the domain playbook — emit real XML tags when charts are warranted.
 
 Never expose internal IDs. Be analytical and proportional to the question.`,

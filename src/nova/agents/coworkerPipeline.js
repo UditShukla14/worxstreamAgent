@@ -51,7 +51,12 @@ import {
 } from '../../utils/conversationSummary.js';
 import { detectClarificationNeeded } from './workingMemory.js';
 import { executeMcpTool } from '../../mcp/server.js';
-import { clearPendingConfirm, getPendingConfirm } from './pendingConfirm.js';
+import {
+  clearPendingConfirm,
+  fingerprintWriteInput,
+  getPendingConfirm,
+  storeRecentConfirmedWrite,
+} from './pendingConfirm.js';
 import UserPreferences from '../models/UserPreferences.js';
 import {
   appendConversationTurn,
@@ -67,6 +72,25 @@ function isContinueMessage(message) {
   const t = String(message || '').trim();
   if (!t) return false;
   return /^(continue|keep\s+going|resume|go\s+on|carry\s+on)[.!\s]*$/i.test(t);
+}
+
+/** Pause task so "continue" does not re-drive a gated write. */
+async function markTaskPendingConfirmation(ctxRef, fallbackGoal = '') {
+  const latest = await getContext(ctxRef);
+  await saveContext(ctxRef, {
+    ...latest,
+    workingSet: mergeWorkingSet(latest.workingSet, {
+      taskState: {
+        ...(latest.workingSet?.taskState || {
+          goal: String(fallbackGoal || '').slice(0, 200),
+          next: [],
+          completed: [],
+        }),
+        status: 'pending_confirmation',
+        updatedAt: Date.now(),
+      },
+    }),
+  });
 }
 
 function stripJsonCodeFence(text) {
@@ -581,6 +605,7 @@ export async function runCoworkerTurn({
     if (requestId) rex.agentFinished(requestId, nova.name, Date.now() - agentStart, result.usage ?? null);
 
     if (result.needsConfirmation) {
+      await markTaskPendingConfirmation(ctxRef, message);
       sse({
         type: 'done',
         agent: 'nova',
@@ -970,6 +995,7 @@ export async function runCoworkerTurn({
 
   let runResult = await runAgentsOnce();
   if (runResult.needsConfirmation) {
+    await markTaskPendingConfirmation(ctxRef, message);
     sse({
       type: 'done',
       agent: primaryKey,
@@ -997,6 +1023,7 @@ export async function runCoworkerTurn({
     await setPlanState(planRef, { attempts });
     runResult = await runAgentsOnce(`${message}\n\n${check.next_instruction}`);
     if (runResult.needsConfirmation) {
+      await markTaskPendingConfirmation(ctxRef, message);
       sse({ type: 'done', agent: plannedAgents.join(', '), pending_confirmation: true });
       return { conversation_id: convId, type: 'pending_confirmation', confirmationId: runResult.confirmationId };
     }
@@ -1099,8 +1126,33 @@ export async function runConfirmAction({
 
   await clearPendingConfirm(ctxRef);
 
+  const markTaskStatus = async (status) => {
+    const latest = await getContext(ctxRef);
+    const prev = latest.workingSet?.taskState;
+    if (!prev && status !== 'done') return;
+    await saveContext(ctxRef, {
+      ...latest,
+      workingSet: mergeWorkingSet(latest.workingSet, {
+        taskState: {
+          ...(prev || { goal: '', next: [], completed: [] }),
+          status,
+          next: status === 'done' ? [] : (prev?.next || []),
+          updatedAt: Date.now(),
+        },
+      }),
+    });
+  };
+
   if (!approved) {
-    return { success: true, approved: false, message: 'Write cancelled by user' };
+    await markTaskStatus('confirmation_rejected');
+    await updateContext(
+      ctxRef,
+      pending.agentKey || 'unknown',
+      [],
+      [],
+      { message: `[Rejected] ${pending.tool}` },
+    );
+    return { success: true, approved: false, message: 'Write cancelled by user', tool: pending.tool };
   }
 
   const result = await executeMcpTool(pending.tool, pending.input, {
@@ -1108,15 +1160,40 @@ export async function runConfirmAction({
     userMessage: pending.userMessage,
   });
 
+  // Cache only successful writes so a failed attempt can be retried after fix.
+  if (result?.success !== false) {
+    await storeRecentConfirmedWrite(ctxRef, {
+      tool: pending.tool,
+      input: pending.input,
+      inputFingerprint: fingerprintWriteInput(pending.tool, pending.input),
+      result,
+    });
+  }
+
+  // Write attempt finished — clear pending_confirmation / in_progress so a
+  // follow-up "continue" cannot re-drive the same gated tool call.
+  await markTaskStatus('done');
+
   await updateContext(
     ctxRef,
     pending.agentKey || 'unknown',
     [{ name: pending.tool, input: pending.input, success: result.success }],
     [result],
-    { message: `[Confirmed] ${pending.tool}` },
+    {
+      message: `[Confirmed] ${pending.tool}`,
+      assistantSummary: result.success === false
+        ? `Write ${pending.tool} failed: ${String(result.error || 'error').slice(0, 200)}`
+        : `Write ${pending.tool} completed after user approval.`,
+    },
   );
 
-  return { success: true, approved: true, tool: pending.tool, result };
+  return {
+    success: result?.success !== false,
+    approved: true,
+    tool: pending.tool,
+    result,
+    ...(result?.success === false && result.error ? { error: String(result.error) } : {}),
+  };
 }
 
 export async function deleteConversationFull(company_id, user_id, conversation_id) {

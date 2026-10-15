@@ -19,6 +19,8 @@ import {
 } from './policies/listPolicies.js';
 import { appendPlaybookToPrompt } from './playbooks.js';
 import {
+  fingerprintWriteInput,
+  getRecentConfirmedWrite,
   isWriteTool,
   shouldConfirmWrites,
   storePendingConfirm,
@@ -373,6 +375,33 @@ export class BaseAgent {
               ? normalizeListInput(originalInput)
               : originalInput;
             onEvent({ type: 'tool_use', tool: block.name, input: normalizedInput });
+
+            // Same write already UI-approved this conversation — reuse result
+            // (prevents approve → "continue" → re-confirm loops / duplicate creates).
+            if (isWriteTool(block.name) && !usesAgentChatConfirm(block.name)) {
+              const recent = await getRecentConfirmedWrite(context._planRef || {});
+              const fp = fingerprintWriteInput(block.name, normalizedInput);
+              if (recent && recent.tool === block.name && recent.inputFingerprint === fp) {
+                console.log(`  ♻️ [${this.name}] ${block.name} already confirmed — reusing result`);
+                const cached = recent.result || {
+                  success: true,
+                  message: 'Write already executed after user approval; do not call again.',
+                };
+                toolsUsed.push({
+                  name: block.name,
+                  input: normalizedInput,
+                  success: cached.success !== false,
+                });
+                toolResultPayloads.push(cached);
+                onEvent({ type: 'tool_result', tool: block.name, success: cached.success !== false });
+                toolResults.push({
+                  type: 'tool_result',
+                  tool_use_id: block.id,
+                  content: JSON.stringify(cached),
+                });
+                continue;
+              }
+            }
 
             if (
               shouldConfirmWrites(context)
