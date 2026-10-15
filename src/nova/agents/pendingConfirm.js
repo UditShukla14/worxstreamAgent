@@ -32,7 +32,9 @@ export function isWriteTool(toolName) {
   const n = String(toolName || '').toLowerCase();
   if (n.startsWith('create_') || n.startsWith('update_') || n.startsWith('delete_')) return true;
   // Outbound email still uses the env write gate when COWORKER_CONFIRM_WRITES=true
-  if (n === 'send_object_email') return true;
+  if (n === 'send_object_email' || n === 'send_email') return true;
+  // Scribe schedule mutations (create/pause/resume/delete/run/update)
+  if (n.startsWith('scribe_') && !n.includes('list') && !n.includes('get_')) return true;
   return false;
 }
 

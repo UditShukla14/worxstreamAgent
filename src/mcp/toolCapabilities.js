@@ -47,6 +47,14 @@ const ACTIONS = /** @type {const} */ ({
 const DOMAIN_RULES = [
   // Governance-only tools (must precede any generic match; not in chat router)
   ['relevant_policies', 'governance'],
+  // Scribe schedules — Nova-visible (not governance-gated)
+  ['scribe_', 'scribe'],
+  ['send_email', 'communications'],
+  ['send_object_email', 'communications'],
+  ['list_email_outbox', 'communications'],
+  ['list_notifications', 'communications'],
+  ['mark_notification_read', 'communications'],
+
   // Shopify Sales Channel — before purchase_order / tax / product / customer
   // so generate_shopify_purchase_order and calculate_shopify_draft_order_tax stay here
   ['shopify', 'shopify'],

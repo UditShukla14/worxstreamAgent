@@ -27,6 +27,7 @@ import { registerPriceComparisonTools } from './priceComparison.js';
 import { registerReportTools } from './reports.js';
 import { registerLookupTools } from './lookup.js';
 import { registerGovernanceTools } from '../../governance/tools/catalogTools.js';
+import { registerScribeTools } from '../../governance/tools/scribeTools.js';
 import { registerSalesOrderTools } from './salesOrders.js';
 import { registerInventoryTools } from './inventory.js';
 import { registerDealTools } from './deals.js';
@@ -117,6 +118,9 @@ export function registerAllTools() {
 
   registerGovernanceTools();
   console.log('  ✓ Governance tools registered (get_relevant_policies)');
+
+  registerScribeTools();
+  console.log('  ✓ Scribe schedule tools registered (Nova → Scribe handoff)');
 
   registerSalesOrderTools();
   console.log('  ✓ Sales order tools registered');

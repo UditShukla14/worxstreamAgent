@@ -19,6 +19,8 @@ const DOMAIN_FILES = {
   workflow: 'workflow.md',
   reports: 'reports.md',
   shopify: 'shopify.md',
+  scribe: 'schedules.md',
+  schedules: 'schedules.md',
 };
 
 /** Extra markdown fragments loaded after the domain playbook (e.g. chart XML). */

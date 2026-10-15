@@ -14,7 +14,7 @@ import { getAvailableTools } from './mcp/server.js';
 import { connectDB } from './db/connection.js';
 import { initializeAgents, getAgentKeys } from './nova/agents/index.js';
 import { initializeGovernanceAgents, getGovernanceAgentKeys, reconcileOrphanedRuns } from './governance/index.js';
-import { startReportScheduler } from './governance/reports/scheduler.js';
+import { startScheduleScheduler } from './governance/schedules/scheduler.js';
 
 // Import tools to trigger registration (must happen before agent init)
 import './mcp/tools/index.js';
@@ -95,7 +95,7 @@ async function startServer() {
     initializeAgents();
     initializeGovernanceAgents();
     await reconcileOrphanedRuns();
-    startReportScheduler();
+    startScheduleScheduler();
 
     app.listen(config.server.port, '0.0.0.0', () => {
       const agentKeys = getAgentKeys();

@@ -4,7 +4,7 @@ import {
   evaluateReportCriteria,
   needsCriteriaDetailEnrichment,
   readField,
-} from '../../src/governance/reports/criteria.js';
+} from '../../src/governance/schedules/criteria.js';
 
 describe('report criteria', () => {
   it('detects missing tracking fields', () => {

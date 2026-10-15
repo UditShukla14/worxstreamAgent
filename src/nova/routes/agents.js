@@ -23,6 +23,22 @@ import {
 } from '../agents/conversationTurns.js';
 import { requireWorxstreamAuth } from '../../middleware/requireWorxstreamAuth.js';
 import { resolveConversationTenantIds } from '../../utils/worxstreamCredentials.js';
+import ScheduleDefinition from '../../governance/models/ScheduleDefinition.js';
+import ScheduleRun from '../../governance/models/ScheduleRun.js';
+import {
+  activeQuery as scheduleActiveQuery,
+  definitionToApi as scheduleDefinitionToApi,
+  runToApi as scheduleRunToApi,
+  runDetailToApi as scheduleRunDetailToApi,
+} from '../../governance/schedules/routes.js';
+import {
+  computeNextRunAt,
+  queueScheduleDefinition,
+} from '../../governance/schedules/engine.js';
+import {
+  computeFlowNextRunAt,
+  isFlowRecipe,
+} from '../../governance/schedules/flowEngine.js';
 
 const router = Router();
 
@@ -402,11 +418,155 @@ router.post('/multi', async (req, res) => {
   }
 });
 
+// ── Scribe schedules (Nova UI) ───────────────────────────────────────
+router.get('/schedules', async (req, res) => {
+  try {
+    const tenant = requireConversationTenant(req, res);
+    if (!tenant) return;
+    const kind = String(req.query.kind || 'flow_recipe');
+    const filter = { company_id: tenant.company_id };
+    if (kind !== 'all') filter.kind = kind;
+    if (req.query.active_only === 'true' || req.query.active_only === '1') {
+      filter.active = true;
+    }
+    const rows = await ScheduleDefinition.find(scheduleActiveQuery(filter))
+      .sort({ updated_at: -1 })
+      .limit(Math.min(100, Math.max(1, parseInt(String(req.query.limit || '50'), 10) || 50)));
+    res.json({ success: true, data: rows.map(scheduleDefinitionToApi) });
+  } catch (error) {
+    console.error('❌ List schedules error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.get('/schedules/:id', async (req, res) => {
+  try {
+    const tenant = requireConversationTenant(req, res);
+    if (!tenant) return;
+    const doc = await ScheduleDefinition.findOne(scheduleActiveQuery({
+      _id: req.params.id,
+      company_id: tenant.company_id,
+    }));
+    if (!doc) return res.status(404).json({ success: false, error: 'Schedule not found' });
+    const runs = await ScheduleRun.find(scheduleActiveQuery({
+      company_id: tenant.company_id,
+      definition_id: doc._id,
+    }))
+      .sort({ generated_at: -1 })
+      .limit(20);
+    res.json({
+      success: true,
+      data: {
+        schedule: scheduleDefinitionToApi(doc),
+        runs: runs.map(scheduleRunToApi),
+      },
+    });
+  } catch (error) {
+    console.error('❌ Get schedule error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.get('/schedules/:id/runs/:runId', async (req, res) => {
+  try {
+    const tenant = requireConversationTenant(req, res);
+    if (!tenant) return;
+    const owned = await ScheduleDefinition.findOne(scheduleActiveQuery({
+      _id: req.params.id,
+      company_id: tenant.company_id,
+    }));
+    if (!owned) return res.status(404).json({ success: false, error: 'Schedule not found' });
+    const run = await ScheduleRun.findOne(scheduleActiveQuery({
+      _id: req.params.runId,
+      company_id: tenant.company_id,
+      definition_id: owned._id,
+    }));
+    if (!run) return res.status(404).json({ success: false, error: 'Run not found' });
+    res.json({ success: true, data: scheduleRunDetailToApi(run) });
+  } catch (error) {
+    console.error('❌ Get schedule run error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/schedules/:id/pause', async (req, res) => {
+  try {
+    const tenant = requireConversationTenant(req, res);
+    if (!tenant) return;
+    const doc = await ScheduleDefinition.findOne(scheduleActiveQuery({
+      _id: req.params.id,
+      company_id: tenant.company_id,
+    }));
+    if (!doc) return res.status(404).json({ success: false, error: 'Schedule not found' });
+    doc.active = false;
+    await doc.save();
+    res.json({ success: true, data: scheduleDefinitionToApi(doc) });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/schedules/:id/resume', async (req, res) => {
+  try {
+    const tenant = requireConversationTenant(req, res);
+    if (!tenant) return;
+    const doc = await ScheduleDefinition.findOne(scheduleActiveQuery({
+      _id: req.params.id,
+      company_id: tenant.company_id,
+    }));
+    if (!doc) return res.status(404).json({ success: false, error: 'Schedule not found' });
+    doc.active = true;
+    doc.next_run_at = isFlowRecipe(doc) ? computeFlowNextRunAt(doc) : computeNextRunAt(doc);
+    await doc.save();
+    res.json({ success: true, data: scheduleDefinitionToApi(doc) });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/schedules/:id/run', async (req, res) => {
+  try {
+    const tenant = requireConversationTenant(req, res);
+    if (!tenant) return;
+    const doc = await ScheduleDefinition.findOne(scheduleActiveQuery({
+      _id: req.params.id,
+      company_id: tenant.company_id,
+    }));
+    if (!doc) return res.status(404).json({ success: false, error: 'Schedule not found' });
+    const run = await queueScheduleDefinition(doc, {
+      companyId: tenant.company_id,
+      userId: tenant.user_id,
+      trigger: 'manual',
+    });
+    res.status(202).json({ success: true, data: scheduleRunDetailToApi(run) });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.delete('/schedules/:id', async (req, res) => {
+  try {
+    const tenant = requireConversationTenant(req, res);
+    if (!tenant) return;
+    const doc = await ScheduleDefinition.findOne({
+      _id: req.params.id,
+      company_id: tenant.company_id,
+    });
+    if (!doc) return res.status(404).json({ success: false, error: 'Schedule not found' });
+    doc.deleted_at = new Date();
+    doc.active = false;
+    await doc.save();
+    res.json({ success: true, data: { id: String(doc._id) } });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // ── POST /api/agents/:agentKey — direct specialist (same pipeline) ───
 router.post('/:agentKey', async (req, res) => {
   try {
     const { agentKey } = req.params;
-    if (['stream', 'route', 'multi', 'confirm', 'conversations', 'preferences'].includes(agentKey)) {
+    if (['stream', 'route', 'multi', 'confirm', 'conversations', 'preferences', 'schedules'].includes(agentKey)) {
       return res.status(404).json({ success: false, error: 'Not found' });
     }
 

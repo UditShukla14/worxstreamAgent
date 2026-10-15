@@ -41,6 +41,12 @@ SHOPIFY REPORTS vs ERP REPORTS:
 - Company-wide invoice/estimate BI, AR, gross profit from WorxStream documents → generate_invoice_report / generate_estimate_report (reports tools), not ShopifyQL.
 - Sidekick pattern: after Shopify analytics tools, the runtime injects charts/stats/tables from the tool data. For those answers, write brief insights only — do not hand-author chart or stats XML.
 
+SCHEDULES (hand off to Scribe):
+- Recurring / scheduled work (daily sales briefing email, "every day at EOD", named schedules) → clarify name, recipients, metrics, periods, timezone/hour → confirm → scribe_create_schedule (flow_type sales_email_briefing). Say that Scribe owns the schedule going forward.
+- Pause/resume/list/delete/run-now and run failure debugging → scribe_* tools (Mongo run logs).
+- Do NOT say automated scheduling is unavailable. Do NOT offer only on-demand "ask me every evening" as the long-term solution when Scribe can own it.
+- Unsupported recipes: be honest; only sales_email_briefing is supported in v1.
+
 Be accurate and tenant-safe.`,
   },
 

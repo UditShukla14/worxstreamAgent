@@ -7,12 +7,17 @@ import { callWorxstreamAPI } from '../../services/httpClient.js';
 import { getWorxstreamContext } from '../../config/index.js';
 import { runWithRequestContext } from '../../request/requestContext.js';
 import { readEnvApiToken } from '../../utils/worxstreamCredentials.js';
-import ReportRun from '../models/ReportRun.js';
+import ScheduleRun from '../models/ScheduleRun.js';
 import {
   buildRowSnapshot,
   evaluateReportCriteria,
   readField,
 } from './criteria.js';
+import {
+  executeFlowRecipe,
+  isFlowRecipe,
+  queueFlowRecipe,
+} from './flowEngine.js';
 
 const MAX_PAGES = 10;
 const PAGE_LIMIT = 50;
@@ -132,7 +137,7 @@ function extractEntityIds(listRows) {
   return ids;
 }
 
-function buildInitialProgress(definition, period) {
+function buildInitialCriteriaProgress(definition, period) {
   const entityTypes = Array.isArray(definition.entity_types) && definition.entity_types.length > 0
     ? definition.entity_types
     : ['estimate', 'invoice'];
@@ -311,33 +316,37 @@ function asEntityId(record) {
 }
 
 /**
- * @param {import('../models/ReportDefinition.js').default} definition
+ * @param {import('../models/ScheduleDefinition.js').default} definition
  * @param {{ periodStart: Date, periodEnd: Date }} period
  * @param {{ companyId?: string, userId?: string, trigger?: 'manual' | 'scheduled' }} [meta]
  */
-export async function createPendingReportRun(definition, period, meta = {}) {
+export async function createPendingScheduleRun(definition, period, meta = {}) {
   const companyId = String(meta.companyId || definition.company_id);
   const userId = String(meta.userId || definition.user_id || '');
-  return ReportRun.create({
+  return ScheduleRun.create({
     company_id: companyId,
     user_id: userId,
     definition_id: definition._id,
     definition_name: definition.name,
+    kind: 'criteria_report',
+    flow_type: null,
+    conversation_id: definition.conversation_id || null,
     trigger: meta.trigger === 'scheduled' ? 'scheduled' : 'manual',
     period_start: period.periodStart,
     period_end: period.periodEnd,
     status: 'running',
+    started_at: new Date(),
     generated_at: new Date(),
-    progress: buildInitialProgress(definition, period),
+    progress: buildInitialCriteriaProgress(definition, period),
   });
 }
 
 /**
- * @param {import('../models/ReportDefinition.js').default} definition
- * @param {import('../models/ReportRun.js').default} run
+ * @param {import('../models/ScheduleDefinition.js').default} definition
+ * @param {import('../models/ScheduleRun.js').default} run
  * @param {{ periodStart: Date, periodEnd: Date }} period
  */
-export async function fillReportRun(definition, run, period) {
+export async function fillScheduleRun(definition, run, period) {
   const { periodStart, periodEnd } = period;
   const entityTypes = Array.isArray(definition.entity_types) && definition.entity_types.length > 0
     ? definition.entity_types
@@ -496,6 +505,7 @@ export async function fillReportRun(definition, run, period) {
       invoices: matchedRows.filter((row) => row.entity_type === 'invoice').length,
     };
     run.rows = matchedRows;
+    run.finished_at = new Date();
 
     await upsertProgressStep(run, {
       key: 'finalize',
@@ -511,6 +521,8 @@ export async function fillReportRun(definition, run, period) {
     const message = error instanceof Error ? error.message : String(error);
     run.status = 'error';
     run.error_message = message;
+    run.error_stack = error instanceof Error ? (error.stack || '') : '';
+    run.finished_at = new Date();
     await upsertProgressStep(run, {
       key: 'finalize',
       status: 'error',
@@ -521,7 +533,7 @@ export async function fillReportRun(definition, run, period) {
   }
 }
 
-export function computeReportPeriod(definition, asOf = new Date()) {
+export function computeCriteriaPeriod(definition, asOf = new Date()) {
   const end = new Date(asOf);
   end.setUTCHours(23, 59, 59, 999);
   const start = new Date(end);
@@ -561,17 +573,43 @@ async function withDefinitionCredentials(definition, options, fn) {
 }
 
 /**
- * @param {import('../models/ReportDefinition.js').default} definition
+ * @param {import('../models/ScheduleDefinition.js').default} definition
  * @param {{ trigger?: 'scheduled' | 'manual', apiToken?: string, userId?: string }} [options]
  */
-export async function executeReportDefinition(definition, options = {}) {
-  const period = computeReportPeriod(definition);
-  const run = await createPendingReportRun(definition, period, {
+/**
+ * Unified Scribe entry — routes flow recipes vs criteria reports.
+ * @param {import('../models/ScheduleDefinition.js').default} definition
+ * @param {{ trigger?: 'scheduled' | 'manual', apiToken?: string, userId?: string }} [options]
+ */
+export async function executeScheduleDefinition(definition, options = {}) {
+  if (isFlowRecipe(definition)) {
+    return executeFlowRecipe(definition, options);
+  }
+  return executeCriteriaSchedule(definition, options);
+}
+
+export async function executeCriteriaSchedule(definition, options = {}) {
+  if (isFlowRecipe(definition)) {
+    return executeFlowRecipe(definition, options);
+  }
+  const period = computeCriteriaPeriod(definition);
+  const run = await createPendingScheduleRun(definition, period, {
     companyId: definition.company_id,
     userId: definition.user_id,
     trigger: options.trigger === 'scheduled' ? 'scheduled' : 'manual',
   });
-  await withDefinitionCredentials(definition, options, () => fillReportRun(definition, run, period));
+  try {
+    await withDefinitionCredentials(definition, options, () => fillScheduleRun(definition, run, period));
+  } catch (error) {
+    if (run.status === 'running') {
+      run.status = 'error';
+      run.error_message = error instanceof Error ? error.message : String(error);
+      run.error_stack = error instanceof Error ? (error.stack || '') : '';
+      run.finished_at = new Date();
+      await run.save().catch(() => {});
+    }
+    throw error;
+  }
   definition.last_run_at = new Date();
   definition.next_run_at = computeNextRunAt(definition, new Date());
   await definition.save();
@@ -580,16 +618,26 @@ export async function executeReportDefinition(definition, options = {}) {
 
 /**
  * Start a report run in the background and return the pending run immediately.
- * @param {import('../models/ReportDefinition.js').default} definition
+ * @param {import('../models/ScheduleDefinition.js').default} definition
  * @param {{ apiToken?: string, userId?: string }} options
  */
-export async function queueReportDefinition(definition, options = {}) {
-  const period = computeReportPeriod(definition);
+export async function queueScheduleDefinition(definition, options = {}) {
+  if (isFlowRecipe(definition)) {
+    return queueFlowRecipe(definition, options);
+  }
+  return queueCriteriaSchedule(definition, options);
+}
+
+export async function queueCriteriaSchedule(definition, options = {}) {
+  if (isFlowRecipe(definition)) {
+    return queueFlowRecipe(definition, options);
+  }
+  const period = computeCriteriaPeriod(definition);
   const companyId = String(options.companyId || definition.company_id);
   if (String(definition.company_id) !== companyId) {
     throw new Error('Report schedule does not belong to this company.');
   }
-  const run = await createPendingReportRun(definition, period, {
+  const run = await createPendingScheduleRun(definition, period, {
     companyId,
     userId: options.userId || definition.user_id,
     trigger: options.trigger === 'scheduled' ? 'scheduled' : 'manual',
@@ -597,7 +645,7 @@ export async function queueReportDefinition(definition, options = {}) {
 
   setImmediate(() => {
     withDefinitionCredentials(definition, options, async () => {
-      await fillReportRun(definition, run, period);
+      await fillScheduleRun(definition, run, period);
       definition.last_run_at = new Date();
       definition.next_run_at = computeNextRunAt(definition, new Date());
       await definition.save();
@@ -606,6 +654,8 @@ export async function queueReportDefinition(definition, options = {}) {
       if (run.status === 'running') {
         run.status = 'error';
         run.error_message = error instanceof Error ? error.message : String(error);
+        run.error_stack = error instanceof Error ? (error.stack || '') : '';
+        run.finished_at = new Date();
         await upsertProgressStep(run, {
           key: 'finalize',
           status: 'error',

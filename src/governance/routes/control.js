@@ -32,7 +32,7 @@ import { customerTypeFromPayload, entityLabelFromPayload, preparedByFromPayload 
 import { eventTypesFromRule, parseRuleEventTypes, ruleChunkContent } from '../pipeline/ruleEvents.js';
 import { requireControlAuth } from '../../middleware/requireControlAuth.js';
 import { agentStatFromRuns } from '../pipeline/dashboardStats.js';
-import { createReportRouter } from '../reports/routes.js';
+import { createScheduleRouter } from '../schedules/routes.js';
 import { SCRIBE_AGENT_DEFINITION, SCRIBE_AGENT_KEY } from '../agents/reporting.js';
 
 const router = Router();
@@ -877,6 +877,6 @@ router.get('/dashboard', async (req, res, next) => {
   }
 });
 
-router.use(createReportRouter());
+router.use(createScheduleRouter());
 
 export default router;
