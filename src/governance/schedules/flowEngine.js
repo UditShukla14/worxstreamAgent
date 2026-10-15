@@ -841,6 +841,8 @@ export async function fillFlowRun(definition, run) {
             companyId,
             userId,
             channel,
+            dateLabel,
+            timeZone,
           });
           novaAgentText = novaResult.response;
           novaToolsUsed = novaResult.toolsUsed;

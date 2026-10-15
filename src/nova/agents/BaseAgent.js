@@ -456,6 +456,29 @@ export class BaseAgent {
               continue;
             }
 
+            // Scheduled ticks need JSON report totals — CSV/XLSX exports are unreadable in-agent.
+            if (
+              String(message || '').includes('[Scheduled run:')
+              && /^export_.*_(csv|xlsx)$/i.test(String(block.name || ''))
+            ) {
+              const blocked = {
+                success: false,
+                error:
+                  `Scheduled runs cannot use ${block.name}. `
+                  + 'Use generate_invoice_report (or the matching generate_*_report) with from_date/to_date '
+                  + 'and read meta.totals / rows for real numbers, then draft the email/SMS.',
+              };
+              toolsUsed.push({ name: block.name, input: normalizedInput, success: false, error: blocked.error });
+              toolResultPayloads.push(blocked);
+              onEvent({ type: 'tool_result', tool: block.name, success: false });
+              toolResults.push({
+                type: 'tool_result',
+                tool_use_id: block.id,
+                content: JSON.stringify(blocked),
+              });
+              continue;
+            }
+
             const toolStart = Date.now();
             const result = await executeMcpTool(block.name, normalizedInput, {
               agent: this.name,

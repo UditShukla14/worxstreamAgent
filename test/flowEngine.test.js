@@ -76,9 +76,21 @@ describe('scheduled_message flow', () => {
     assert.equal(/\*\*/.test(draft.body), false);
   });
 
-  it('tells Nova to draft email or SMS', () => {
-    assert.match(buildChannelOutputInstructions('email'), /Draft the final email/);
-    assert.match(buildChannelOutputInstructions('sms'), /Draft the final SMS/);
+  it('treats schedule as chat-quality reply for email or SMS', () => {
+    const emailRules = buildChannelOutputInstructions('email');
+    assert.match(emailRules, /sent as email/);
+    assert.match(emailRules, /Subject:/);
+    assert.match(emailRules, /generate_\*_report/);
+    assert.match(buildChannelOutputInstructions('sms'), /sent as SMS/);
+  });
+
+  it('extracts Subject line from Nova email draft', () => {
+    const draft = unwrapNovaDeliveryDraft(
+      'Subject: 📊 Daily Briefing for Sales – Thursday, October 15, 2026\n\n<h2>Today</h2>',
+      'email',
+    );
+    assert.match(draft.subject, /Daily Briefing for Sales/);
+    assert.match(draft.body, /<h2>Today<\/h2>/);
   });
 
   it('resolves invoice process from periods', () => {

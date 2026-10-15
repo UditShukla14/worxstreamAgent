@@ -177,12 +177,10 @@ export function registerScribeTools() {
     {
       title: 'Create Scribe Schedule',
       description:
-        'Create a recurring schedule owned by Scribe. Default: freeze a PROMPT — on each tick '
-        + 'Nova re-runs with full tools, then Scribe emails/SMS the response. '
-        + 'Required: name, channel, recipients, prompt (the work to do each run), cadence. '
-        + 'Optional subject_template for email. '
-        + 'Send-only (no agent): omit prompt and set message_template. '
-        + 'Legacy no-LLM process (rare): set engine=process with steps/periods. '
+        'Schedule the same Nova chat request on a timer. Freeze prompt (= what the user would type in chat); '
+        + 'each tick Nova answers with full tools, then Scribe emails/SMS that reply. '
+        + 'Required: name, channel, recipients, prompt, cadence. Optional subject_template (email fallback). '
+        + 'Send-only (no Nova): message_template only. '
         + 'Confirm name, channel, recipients, prompt, cadence before calling.',
       inputSchema: {
         name: z.string().describe('Schedule display name'),
@@ -203,7 +201,7 @@ export function registerScribeTools() {
           .string()
           .optional()
           .describe(
-            'Work for Nova to perform each tick (preferred). Example: '
+            'Same text the user would send in Nova chat. Re-run on each tick. Example: '
             + '"Summarize today and month-to-date company sales (invoiced) and amount paid."',
           ),
         intent: z.string().optional().describe('Alias for prompt'),

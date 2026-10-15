@@ -30,10 +30,10 @@ export function resolveNovaPrompt(flow = {}) {
   return String(flow.prompt || flow.intent || flow.message_template || flow.message || '').trim();
 }
 
-/** Prescribed order: Nova drafts → prepare payload → deliver. */
+/** Same chat request → prepare → send. */
 export function novaScheduleSteps() {
   return [
-    { type: 'nova_run', key: 'nova', label: 'Nova drafts message' },
+    { type: 'nova_run', key: 'nova', label: 'Run Nova (same as chat)' },
     { type: 'compose', key: 'compose', label: 'Prepare delivery' },
     { type: 'deliver', key: 'deliver', label: 'Send' },
   ];
@@ -50,6 +50,8 @@ export async function runNovaScheduleTurn({
   companyId,
   userId,
   channel = 'email',
+  dateLabel,
+  timeZone,
 }) {
   const prompt = resolveNovaPrompt(flow);
   if (!prompt) {
@@ -57,9 +59,17 @@ export async function runNovaScheduleTurn({
   }
   const name = definition.name || 'Scheduled message';
   const conversationId = `schedule:${definition._id}:${run._id}`;
+  const tz = String(timeZone || flow.timezone || definition.timezone || 'UTC');
+  const asOf = dateLabel || undefined;
 
   const result = await runCoworkerTurn({
-    message: buildScheduledAgentMessage({ name, prompt, channel }),
+    message: buildScheduledAgentMessage({
+      name,
+      prompt,
+      channel,
+      dateLabel: asOf,
+      timeZone: tz,
+    }),
     company_id: String(companyId || definition.company_id),
     user_id: String(userId || definition.user_id || ''),
     conversation_id: conversationId,

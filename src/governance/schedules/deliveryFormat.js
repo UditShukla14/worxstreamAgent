@@ -1,49 +1,48 @@
 /**
  * Thin delivery helpers for Nova schedule runs.
- * Nova drafts the email HTML or SMS text. Scribe only unwraps and sends.
+ *
+ * A schedule is the same Nova request as chat, run on a timer.
+ * Nova answers normally; Scribe only unwraps and sends.
  */
 
 /**
- * Instructions so Nova drafts the final message for the channel.
- * Scribe does not rewrite or redesign this content.
+ * Light channel hint so Nova's reply is sendable. Not a separate product format.
  */
 export function buildChannelOutputInstructions(channel) {
   if (channel === 'sms') {
     return [
-      'YOUR JOB: Draft the final SMS body (plain text only).',
-      '- Reply with ONLY the SMS text to send — nothing else.',
-      '- No HTML, markdown tables, code fences, tool narration, or reasoning.',
-      '- Keep it concise (ideally under 600 characters; hard cap ~1200).',
-      '- Do not include STOP/opt-out text — the system appends that after you.',
+      'This reply will be sent as SMS (not shown in chat).',
+      '- Final answer: plain text only, concise.',
+      '- No HTML, code fences, or tool narration.',
+      '- Do not include STOP/opt-out — the system appends that.',
     ].join('\n');
   }
 
   return [
-    'YOUR JOB: Draft the final email body (HTML) for company mail / send_email.',
-    '- Reply with ONLY the email HTML to send — nothing else.',
-    '- Presentable like a polished chat answer: headings, tables, short prose.',
-    '- Use email-safe HTML with inline styles: <div>, <h2>, <p>, <strong>, <ul><li>, <table>, <tr>, <th>, <td>.',
-    '- Optional first line: Subject: Your subject here',
-    '- No tool narration, chain-of-thought, code fences, <chart>, or <workflow>.',
-    '- Prefer report tools with date ranges for accurate totals (not partial list pages).',
+    'This reply will be sent as email (not shown in chat).',
+    '- Final answer: email-safe HTML with inline styles (same quality as a polished chat answer).',
+    '- First line: Subject: <clear subject including the date when relevant>',
+    '- Use real numbers from tools. Prefer generate_*_report JSON (meta.totals / rows) over export_*_csv — exports are binary and useless here.',
+    '- No tool narration, chain-of-thought, or code fences in the final reply.',
   ].join('\n');
 }
 
-export function buildScheduledAgentMessage({ name, prompt, channel }) {
-  const channelLabel = channel === 'sms' ? 'SMS' : 'email';
+export function buildScheduledAgentMessage({ name, prompt, channel, dateLabel, timeZone } = {}) {
+  const when = dateLabel
+    ? `Current date (${timeZone || 'UTC'}): ${dateLabel}.`
+    : '';
   return [
     `[Scheduled run: ${name}]`,
-    `Use tools as needed, then draft the final ${channelLabel} message.`,
-    'The scheduler will send your draft as-is — do not ask it to format for you.',
-    'Do not ask clarifying questions.',
-    'Do not call send_email, SMS, or other delivery tools — the scheduler delivers after your reply.',
-    'Prefer read-only tools. Avoid creates/updates/deletes unless the request explicitly requires a write.',
+    'Run the user request exactly as you would in an interactive Nova chat (same tools, same quality of answer).',
+    'When finished, your final message is what gets delivered — the scheduler does not rewrite it.',
+    'Do not ask clarifying questions. Do not call send_email or SMS tools — delivery is handled after your reply.',
+    when,
     '',
     buildChannelOutputInstructions(channel),
     '',
     'USER REQUEST:',
     prompt,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 /**
@@ -54,7 +53,6 @@ export function unwrapNovaDeliveryDraft(text, channel = 'email') {
   let raw = String(text || '').trim();
   if (!raw) return { subject: null, body: '' };
 
-  // Optional fenced draft: ```html / ```email / ```sms
   const fenceRe = channel === 'sms'
     ? /```(?:sms|text|plain)?\s*([\s\S]*?)```/i
     : /```(?:html|email|htm)?\s*([\s\S]*?)```/i;
@@ -63,9 +61,9 @@ export function unwrapNovaDeliveryDraft(text, channel = 'email') {
 
   let subject = null;
   if (channel !== 'sms') {
-    const subjectLine = raw.match(/^Subject:\s*(.+)\s*\n+/i);
+    const subjectLine = raw.match(/^(?:Subject|SUBJECT)\s*:\s*(.+)\s*\n+/);
     if (subjectLine) {
-      subject = subjectLine[1].trim();
+      subject = subjectLine[1].trim().replace(/^["']|["']$/g, '');
       raw = raw.slice(subjectLine[0].length).trim();
     }
   }
@@ -85,7 +83,6 @@ export function unwrapNovaDeliveryDraft(text, channel = 'email') {
     return { subject: null, body };
   }
 
-  // Email: pass Nova HTML/text through. Only light wrap if there are no tags at all.
   let body = raw
     .replace(/<chart\b[\s\S]*?<\/chart>/gi, '')
     .replace(/<workflow\b[\s\S]*?<\/workflow>/gi, '')
@@ -110,7 +107,7 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;');
 }
 
-/** @deprecated use unwrapNovaDeliveryDraft — kept for older imports/tests */
+/** @deprecated use unwrapNovaDeliveryDraft */
 export function formatNovaResponseForDelivery(text, channel = 'email') {
   return unwrapNovaDeliveryDraft(text, channel).body;
 }
