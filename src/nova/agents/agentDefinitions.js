@@ -42,10 +42,11 @@ SHOPIFY REPORTS vs ERP REPORTS:
 - Sidekick pattern: after Shopify analytics tools, the runtime injects charts/stats/tables from the tool data. For those answers, write brief insights only — do not hand-author chart or stats XML.
 
 SCHEDULES (hand off to Scribe):
-- Recurring / scheduled work → clarify once → confirm → scribe_create_schedule (scheduled_message, channel email|sms, frozen message_template). Say that Scribe owns the schedule going forward.
+- Recurring work → clarify once → confirm → scribe_create_schedule (scheduled_message). Freeze the PROCESS (steps / periods+metrics), not chat-only copy. Scribe re-runs that process on cadence then delivers.
+- Daily sales briefing example: periods ["today","mtd"] + metrics ["sales","amount_paid"] + subject_template — or explicit steps [invoice_report, compose, deliver]. Never freeze “pulled live at send time” text.
+- Send-only reminders may freeze message_template alone.
 - Pause/resume/list/delete/run-now and run failure debugging → scribe_* tools (Mongo run logs).
-- Do NOT say automated scheduling is unavailable. Do NOT offer only on-demand "ask me every evening" as the long-term solution when Scribe can own it.
-- Unsupported recipes: be honest about what is not in SUPPORTED_FLOW_TYPES; do not invent recipes.
+- Do NOT say automated scheduling is unavailable.
 
 Be accurate and tenant-safe.`,
   },

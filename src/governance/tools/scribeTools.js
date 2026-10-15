@@ -42,13 +42,59 @@ function resolveChannel(input) {
   return raw === 'sms' ? 'sms' : 'email';
 }
 
+function parseStringList(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((item) => String(item).trim().toLowerCase()).filter(Boolean);
+}
+
+function parseSteps(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((step) => {
+      if (!step || typeof step !== 'object') return null;
+      const type = String(step.type || '').toLowerCase().trim();
+      if (type === 'invoice_report' || type === 'report') {
+        return {
+          type: 'invoice_report',
+          period: String(step.period || 'today').toLowerCase().trim(),
+          key: step.key ? String(step.key) : undefined,
+          label: step.label ? String(step.label) : undefined,
+        };
+      }
+      if (type === 'tool') {
+        const tool = String(step.tool || '').trim();
+        if (!tool) return null;
+        return {
+          type: 'tool',
+          tool,
+          args: step.args && typeof step.args === 'object' ? step.args : {},
+          as: step.as ? String(step.as) : undefined,
+          key: step.key ? String(step.key) : undefined,
+          label: step.label ? String(step.label) : undefined,
+        };
+      }
+      if (type === 'compose' || type === 'deliver' || type === 'send') {
+        return {
+          type: type === 'send' ? 'deliver' : type,
+          key: step.key ? String(step.key) : undefined,
+          label: step.label ? String(step.label) : undefined,
+        };
+      }
+      return null;
+    })
+    .filter(Boolean);
+}
+
 function buildFlow(input) {
   const timezone = String(input.timezone || 'UTC').trim() || 'UTC';
   const channel = resolveChannel(input);
   const cadenceType = String(input.cadence_type || 'interval').toLowerCase() === 'monthly'
     ? 'monthly'
     : 'interval';
-  return {
+  const periods = parseStringList(input.periods);
+  const metrics = parseStringList(input.metrics);
+  const steps = parseSteps(input.steps);
+  const flow = {
     recipients: parseRecipients(input.recipients),
     channel,
     timezone,
@@ -56,6 +102,14 @@ function buildFlow(input) {
     subject_template: String(input.subject_template || input.subject || '').trim(),
     message_template: String(input.message_template || input.body || input.message || '').trim(),
   };
+  if (steps.length) flow.steps = steps;
+  if (periods.length) flow.periods = periods;
+  if (metrics.length) flow.metrics = metrics;
+  if (input.scope != null) flow.scope = String(input.scope).trim() || 'company_totals';
+  if (input.data_source != null) {
+    flow.data_source = String(input.data_source).trim().toLowerCase();
+  }
+  return flow;
 }
 
 function validateRecipientsForChannel(channel, recipients) {
@@ -85,16 +139,17 @@ export function registerScribeTools() {
     {
       title: 'Create Scribe Schedule',
       description:
-        'Hand any recurring notification to Scribe. Freezes channel + recipients + message — '
-        + 'Scribe sends on cadence with no LLM on the tick. '
-        + 'flow_type: scheduled_message. '
-        + 'channel: email or sms. '
-        + 'SMS uses Telnyx on the tick (not draft_sms/send_sms chat confirms) — freeze E.164 phones. '
-        + 'Email uses send_email. '
-        + 'Cadence: interval (days + UTC hour) or monthly (day_of_month + local hour in timezone). '
-        + 'message_template / subject_template support {{date}} and {{name}}. '
-        + 'Clarify content with the user first (pull live data in chat if needed, then freeze the message). '
-        + 'Confirm name, channel, recipients, message, and cadence before calling.',
+        'Hand recurring work to Scribe as a frozen PROCESS (steps), not chat-only. '
+        + 'On each tick Scribe re-runs the frozen steps then delivers — no LLM. '
+        + 'flow_type: scheduled_message. channel: email|sms. '
+        + 'steps: ordered process, e.g. '
+        + '[{type:"invoice_report",period:"today"},{type:"invoice_report",period:"mtd"},'
+        + '{type:"compose"},{type:"deliver"}]. '
+        + 'Also accept periods+metrics shorthand (today|mtd|qtd + sales|amount_paid). '
+        + 'Or type:"tool" with any MCP tool name + args ({{date}} ok). '
+        + 'Send-only: omit steps and freeze message_template. '
+        + 'Do NOT put "pulled live at send time" in message_template — freeze steps/periods instead. '
+        + 'Confirm name, channel, recipients, process, cadence before calling.',
       inputSchema: {
         name: z.string().describe('Schedule display name'),
         description: z.string().optional().describe('Optional description'),
@@ -116,7 +171,27 @@ export function registerScribeTools() {
           .describe('Email subject (also used as SMS label). Supports {{date}} {{name}}'),
         message_template: z
           .string()
-          .describe('Frozen message body. Supports {{date}} {{name}}. For SMS keep it short.'),
+          .optional()
+          .describe(
+            'Optional frozen body for send-only, or custom body with {{sales_today}} etc. '
+            + 'When periods/steps gather data and this has no live placeholders, Scribe builds a totals table.',
+          ),
+        steps: z
+          .array(z.record(z.any()))
+          .optional()
+          .describe(
+            'Frozen process steps. Types: invoice_report (period), tool (tool+args), compose, deliver.',
+          ),
+        periods: z
+          .array(z.string())
+          .optional()
+          .describe('Shorthand live invoice windows: today, mtd, qtd (implies invoice_report steps)'),
+        metrics: z
+          .array(z.string())
+          .optional()
+          .describe('For invoice compose table: sales, amount_paid'),
+        scope: z.string().optional().describe('e.g. company_totals'),
+        data_source: z.string().optional().describe('Set invoice_report to force live invoice process'),
         timezone: z.string().optional().describe('IANA timezone, e.g. America/New_York'),
         cadence_type: z
           .enum(['interval', 'monthly'])
@@ -144,10 +219,18 @@ export function registerScribeTools() {
         });
       }
       const flow = buildFlow(input);
-      if (!flow.message_template) {
+      const hasProcess = Boolean(
+        (flow.steps && flow.steps.length)
+        || (flow.periods && flow.periods.length)
+        || (flow.metrics && flow.metrics.length)
+        || flow.data_source === 'invoice_report',
+      );
+      if (!flow.message_template && !hasProcess) {
         return asText({
           success: false,
-          error: 'message_template is required (freeze the message text to send each run)',
+          error:
+            'Freeze a process (steps or periods/metrics) and/or message_template — '
+            + 'Scribe must know what to run on each tick',
         });
       }
       const recipientError = validateRecipientsForChannel(flow.channel, flow.recipients);
@@ -340,7 +423,7 @@ export function registerScribeTools() {
     {
       title: 'Update Scribe Schedule',
       description:
-        'Update a Scribe flow schedule (name, channel, recipients, message, cadence). '
+        'Update a Scribe flow schedule (name, channel, recipients, steps/periods, message, cadence). '
         + 'Does not change flow_type.',
       inputSchema: {
         schedule_id: z.string(),
@@ -350,6 +433,11 @@ export function registerScribeTools() {
         recipients: z.array(z.string()).optional(),
         subject_template: z.string().optional(),
         message_template: z.string().optional(),
+        steps: z.array(z.record(z.any())).optional(),
+        periods: z.array(z.string()).optional(),
+        metrics: z.array(z.string()).optional(),
+        scope: z.string().optional(),
+        data_source: z.string().optional(),
         timezone: z.string().optional(),
         cadence_type: z.enum(['interval', 'monthly']).optional(),
         interval_days: z.number().optional(),
@@ -392,6 +480,25 @@ export function registerScribeTools() {
       }
       if (input.message_template != null) {
         flow.message_template = String(input.message_template).trim();
+      }
+      if (input.steps != null) {
+        const steps = parseSteps(input.steps);
+        if (steps.length) flow.steps = steps;
+        else delete flow.steps;
+      }
+      if (input.periods != null) {
+        const periods = parseStringList(input.periods);
+        if (periods.length) flow.periods = periods;
+        else delete flow.periods;
+      }
+      if (input.metrics != null) {
+        const metrics = parseStringList(input.metrics);
+        if (metrics.length) flow.metrics = metrics;
+        else delete flow.metrics;
+      }
+      if (input.scope != null) flow.scope = String(input.scope).trim() || 'company_totals';
+      if (input.data_source != null) {
+        flow.data_source = String(input.data_source).trim().toLowerCase();
       }
       if (input.cadence_type != null) {
         const cadence = String(input.cadence_type).toLowerCase() === 'monthly' ? 'monthly' : 'interval';

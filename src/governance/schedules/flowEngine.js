@@ -2,8 +2,11 @@
  * Deterministic Scribe flow-recipe executor.
  * Generic scheduled message — email or SMS channel. No LLM at fire time.
  * Frozen: recipients, channel, subject/body templates, cadence.
+ * Optional live invoice totals: freeze periods + metrics → pull on tick.
  */
 
+import { callWorxstreamAPI } from '../../services/httpClient.js';
+import { getWorxstreamContext } from '../../config/index.js';
 import { runWithRequestContext } from '../../request/requestContext.js';
 import { readEnvApiToken } from '../../utils/worxstreamCredentials.js';
 import ScheduleRun from '../models/ScheduleRun.js';
@@ -16,8 +19,9 @@ import {
 import { withSmsOptOutFooter } from '../../mcp/tools/sms.js';
 
 /**
- * Generic notification schedule. Legacy `sales_email_briefing` still accepted
- * and runs the same path (message templates only — no invoice-report logic).
+ * Generic notification schedule. Legacy `sales_email_briefing` still accepted.
+ * When flow.periods/metrics (or data_source=invoice_report) are set, tick pulls
+ * invoice report totals — not stuck to a sales-only flow_type.
  */
 const SUPPORTED_FLOW_TYPES = new Set(['scheduled_message', 'sales_email_briefing']);
 const MAX_ACTIVE_FLOW_SCHEDULES = 25;
@@ -26,6 +30,286 @@ const MAX_ACTIVE_FLOW_SCHEDULES = 25;
 export function resolveFlowChannel(flow = {}) {
   const raw = String(flow.channel || 'email').toLowerCase().trim();
   return raw === 'sms' ? 'sms' : 'email';
+}
+
+function peel(value) {
+  let current = value;
+  for (let i = 0; i < 5; i += 1) {
+    if (!current || typeof current !== 'object') return current;
+    if (Array.isArray(current)) return current;
+    const inner = current.data ?? current.item ?? current.result;
+    if (inner == null) return current;
+    current = inner;
+  }
+  return current;
+}
+
+function asNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function formatMoney(n) {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 2,
+  }).format(asNumber(n));
+}
+
+/**
+ * Normalize frozen process steps. Tick re-runs this pipeline (not send-only).
+ * Supported step types:
+ * - invoice_report { period: today|mtd|qtd }
+ * - tool { tool: mcp_tool_name, args?: object }
+ * - compose  (build subject/body from prior outputs + templates)
+ * - deliver  (send via channel)
+ *
+ * Legacy: flow.periods / flow.metrics / "pulled live at send time" → invoice_report steps.
+ * Plain message_template only → compose + deliver.
+ */
+export function resolveFlowSteps(flow = {}) {
+  const rawSteps = Array.isArray(flow.steps) ? flow.steps : [];
+  if (rawSteps.length > 0) {
+    const steps = rawSteps.map((step, index) => normalizeFlowStep(step, index)).filter(Boolean);
+    const hasDeliver = steps.some((s) => s.type === 'deliver');
+    const hasCompose = steps.some((s) => s.type === 'compose');
+    if (!hasCompose) steps.push({ type: 'compose', key: 'compose', label: 'Compose' });
+    if (!hasDeliver) steps.push({ type: 'deliver', key: 'deliver', label: 'Send' });
+    return steps;
+  }
+
+  const msg = String(flow.message_template || flow.body || flow.message || '');
+  const explicitPeriods = Array.isArray(flow.periods)
+    ? flow.periods.map((p) => String(p).toLowerCase().trim()).filter(Boolean)
+    : [];
+  const explicitMetrics = Array.isArray(flow.metrics)
+    ? flow.metrics.map((m) => String(m).toLowerCase().trim()).filter(Boolean)
+    : [];
+  const dataSource = String(flow.data_source || flow.dataSource || '').toLowerCase();
+  const wantsInvoiceProcess = dataSource === 'invoice_report'
+    || explicitPeriods.length > 0
+    || explicitMetrics.length > 0
+    || /pulled live at send time/i.test(msg);
+
+  if (wantsInvoiceProcess) {
+    let periods = [...explicitPeriods];
+    if (!periods.length) {
+      if (/quarter-to-date|\bqtd\b/i.test(msg)) periods.push('qtd');
+      if (/month-to-date|\bmtd\b/i.test(msg)) periods.push('mtd');
+      if (/today|daily/i.test(msg) || periods.length === 0) periods.unshift('today');
+      periods = [...new Set(periods)];
+    }
+    if (!periods.length) periods = ['today', 'mtd'];
+    return [
+      ...periods.map((period) => normalizeFlowStep({ type: 'invoice_report', period })),
+      { type: 'compose', key: 'compose', label: 'Compose' },
+      { type: 'deliver', key: 'deliver', label: 'Send' },
+    ];
+  }
+
+  return [
+    { type: 'compose', key: 'compose', label: 'Compose' },
+    { type: 'deliver', key: 'deliver', label: 'Send' },
+  ];
+}
+
+function normalizeFlowStep(step, index = 0) {
+  if (!step || typeof step !== 'object') return null;
+  const type = String(step.type || step.kind || '').toLowerCase().trim();
+  if (type === 'invoice_report' || type === 'report') {
+    const period = String(step.period || step.as || 'today').toLowerCase().trim();
+    const labels = { today: 'Today', mtd: 'Month-to-date', qtd: 'Quarter-to-date' };
+    return {
+      type: 'invoice_report',
+      key: String(step.key || `report-${period}`),
+      label: String(step.label || `Invoice report (${labels[period] || period})`),
+      period,
+    };
+  }
+  if (type === 'tool' || step.tool) {
+    const tool = String(step.tool || '').trim();
+    if (!tool) return null;
+    return {
+      type: 'tool',
+      key: String(step.key || `tool-${tool}-${index}`),
+      label: String(step.label || `Run ${tool}`),
+      tool,
+      args: step.args && typeof step.args === 'object' ? step.args : {},
+      as: step.as ? String(step.as) : tool,
+    };
+  }
+  if (type === 'compose') {
+    return { type: 'compose', key: String(step.key || 'compose'), label: String(step.label || 'Compose') };
+  }
+  if (type === 'deliver' || type === 'send') {
+    return { type: 'deliver', key: String(step.key || 'deliver'), label: String(step.label || 'Send') };
+  }
+  return null;
+}
+
+function flowMetrics(flow = {}) {
+  const metrics = Array.isArray(flow.metrics)
+    ? flow.metrics.map((m) => String(m).toLowerCase().trim()).filter(Boolean)
+    : [];
+  return metrics.length > 0 ? metrics : ['sales', 'amount_paid'];
+}
+
+/**
+ * Resolve today / mtd / qtd date windows in the schedule timezone.
+ */
+export function resolvePeriodWindows(periods, timeZone = 'UTC', asOf = new Date()) {
+  const today = formatDateInZone(asOf, timeZone);
+  const [y, m] = today.split('-').map(Number);
+  const monthStart = `${y}-${String(m).padStart(2, '0')}-01`;
+  const quarterMonth = Math.floor((m - 1) / 3) * 3 + 1;
+  const quarterStart = `${y}-${String(quarterMonth).padStart(2, '0')}-01`;
+  const map = {
+    today: { from: today, to: today, label: 'Today' },
+    mtd: { from: monthStart, to: today, label: 'Month-to-date' },
+    qtd: { from: quarterStart, to: today, label: 'Quarter-to-date' },
+  };
+  const keys = (periods || []).map((p) => String(p).toLowerCase().trim()).filter(Boolean);
+  const use = keys.length > 0 ? keys : ['today'];
+  return use.filter((k) => map[k]).map((k) => ({ key: k, ...map[k] }));
+}
+
+async function fetchInvoicePeriodTotals(range) {
+  const { companyId, userId } = getWorxstreamContext();
+  const result = await callWorxstreamAPI({
+    method: 'POST',
+    endpoint: '/report/invoice/generate',
+    data: {
+      company_id: companyId,
+      user_id: userId,
+      from_date: range.from,
+      to_date: range.to,
+      lineItems: false,
+      page: 1,
+      per_page: 100,
+    },
+  });
+  if (result?.success === false) {
+    throw new Error(result?.error || result?.message || 'Invoice report failed');
+  }
+
+  const envelope = peel(result?.data ?? result) || {};
+  const meta = envelope.meta || envelope;
+  const totalsRaw = meta.totals || {};
+  const sales = asNumber(
+    totalsRaw.grandTotal ?? totalsRaw.grand_total ?? totalsRaw.sales,
+  );
+  const rows = Array.isArray(envelope.data)
+    ? envelope.data
+    : (Array.isArray(envelope.rows) ? envelope.rows : []);
+
+  let amountPaid = asNumber(
+    totalsRaw.amountPaid
+    ?? totalsRaw.amount_paid
+    ?? totalsRaw.totalPaid
+    ?? totalsRaw.total_paid,
+  );
+  if (!amountPaid && rows.length > 0) {
+    amountPaid = rows.reduce((sum, row) => {
+      const payments = Array.isArray(row?.payments) ? row.payments : [];
+      const rowPaid = payments.reduce((s, p) => s + asNumber(p?.amount), 0);
+      if (rowPaid > 0) return sum + rowPaid;
+      return sum + asNumber(row?.amountPaid ?? row?.amount_paid ?? row?.totalPaid);
+    }, 0);
+  }
+
+  const pagination = envelope.pagination || meta.pagination || {};
+  const lastPage = Math.max(1, asNumber(pagination.lastPage ?? pagination.last_page) || 1);
+  if (
+    lastPage > 1
+    && !asNumber(totalsRaw.amountPaid ?? totalsRaw.amount_paid)
+    && rows.length > 0
+  ) {
+    for (let page = 2; page <= Math.min(lastPage, 20); page += 1) {
+      const pageResult = await callWorxstreamAPI({
+        method: 'POST',
+        endpoint: '/report/invoice/generate',
+        data: {
+          company_id: companyId,
+          user_id: userId,
+          from_date: range.from,
+          to_date: range.to,
+          lineItems: false,
+          page,
+          per_page: 100,
+        },
+      });
+      const pageEnv = peel(pageResult?.data ?? pageResult) || {};
+      const pageRows = Array.isArray(pageEnv.data) ? pageEnv.data : [];
+      amountPaid += pageRows.reduce((sum, row) => {
+        const payments = Array.isArray(row?.payments) ? row.payments : [];
+        const rowPaid = payments.reduce((s, p) => s + asNumber(p?.amount), 0);
+        if (rowPaid > 0) return sum + rowPaid;
+        return sum + asNumber(row?.amountPaid ?? row?.amount_paid ?? row?.totalPaid);
+      }, 0);
+    }
+  }
+
+  return {
+    from: range.from,
+    to: range.to,
+    sales,
+    amount_paid: amountPaid,
+    invoice_count: asNumber(pagination.total ?? meta.total ?? rows.length),
+  };
+}
+
+export function composeSalesBriefingEmail(opts) {
+  const metrics = (opts.metrics || ['sales', 'amount_paid']).map((m) => String(m).toLowerCase());
+  const showSales = metrics.includes('sales') || metrics.includes('cumulative_sales');
+  const showPaid = metrics.includes('amount_paid') || metrics.includes('paid');
+
+  const rowsHtml = (opts.periods || []).map((p) => {
+    const cells = [
+      `<td style="padding:8px;border:1px solid #ddd;">${p.label}<br/><span style="color:#666;font-size:12px;">${p.from} → ${p.to}</span></td>`,
+    ];
+    if (showSales) {
+      cells.push(`<td style="padding:8px;border:1px solid #ddd;text-align:right;">${formatMoney(p.sales)}</td>`);
+    }
+    if (showPaid) {
+      cells.push(`<td style="padding:8px;border:1px solid #ddd;text-align:right;">${formatMoney(p.amount_paid)}</td>`);
+    }
+    return `<tr>${cells.join('')}</tr>`;
+  }).join('');
+
+  const headers = ['Period'];
+  if (showSales) headers.push('Cumulative sales (invoiced)');
+  if (showPaid) headers.push('Amount paid');
+  const headHtml = headers
+    .map((h) => `<th style="padding:8px;border:1px solid #ddd;text-align:left;background:#f5f5f5;">${h}</th>`)
+    .join('');
+
+  const subject = String(opts.subject || `${opts.name} — ${opts.periods?.[0]?.to || ''}`.trim());
+  const body = `
+<div style="font-family:system-ui,-apple-system,sans-serif;color:#222;line-height:1.45;">
+  <h2 style="margin:0 0 8px;">${opts.name}</h2>
+  <p style="margin:0 0 16px;color:#555;">Company-wide totals (${opts.scope || 'company_totals'}). Generated automatically by Scribe.</p>
+  <table style="border-collapse:collapse;width:100%;max-width:640px;">
+    <thead><tr>${headHtml}</tr></thead>
+    <tbody>${rowsHtml}</tbody>
+  </table>
+</div>`.trim();
+
+  return { subject, body };
+}
+
+function liveMetricVars(periodResults) {
+  const vars = {};
+  for (const p of periodResults) {
+    vars[`sales_${p.key}`] = formatMoney(p.sales);
+    vars[`amount_paid_${p.key}`] = formatMoney(p.amount_paid);
+    vars[`invoice_count_${p.key}`] = String(p.invoice_count ?? 0);
+  }
+  return vars;
+}
+
+function templateWantsLivePlaceholders(template) {
+  return /\{\{\s*(sales_|amount_paid_|invoice_count_)/i.test(String(template || ''));
 }
 
 function getZonedParts(date, timeZone) {
@@ -328,15 +612,26 @@ async function upsertProgressStep(run, update) {
   });
 }
 
-function buildInitialFlowProgress(channel) {
+function buildInitialFlowProgress(channel, processSteps = []) {
   const composeLabel = channel === 'sms' ? 'Compose SMS' : 'Compose email';
   const sendLabel = channel === 'sms' ? 'Send SMS' : 'Send email';
+  const mapped = processSteps.map((step) => {
+    let label = step.label;
+    if (step.type === 'compose') label = composeLabel;
+    if (step.type === 'deliver') label = sendLabel;
+    return {
+      key: step.key,
+      label,
+      status: 'pending',
+      detail: '',
+      at: new Date(),
+    };
+  });
   return {
     phase: 'starting',
     steps: [
       { key: 'init', label: 'Start run', status: 'pending', detail: '', at: new Date() },
-      { key: 'compose', label: composeLabel, status: 'pending', detail: '', at: new Date() },
-      { key: 'send', label: sendLabel, status: 'pending', detail: '', at: new Date() },
+      ...mapped,
       { key: 'finalize', label: 'Finalize', status: 'pending', detail: '', at: new Date() },
     ],
   };
@@ -372,18 +667,33 @@ export function assertSupportedFlow(definition) {
       throw new Error(`Invalid SMS recipients (need E.164): ${bad.slice(0, 3).join(', ')}`);
     }
   }
+  const steps = resolveFlowSteps(flow);
+  const hasProcess = steps.some((s) => s.type === 'invoice_report' || s.type === 'tool');
   const hasBody = Boolean(
     String(flow.message_template || flow.body || flow.message || '').trim()
     || String(flow.subject_template || flow.subject || '').trim(),
   );
-  if (!hasBody && !definition.name) {
-    throw new Error('flow.message_template (or body) is required');
+  if (!hasBody && !hasProcess && !definition.name) {
+    throw new Error('flow must include steps (process) and/or message_template');
   }
-  return { flowType, flow, recipients, channel };
+  return { flowType, flow, recipients, channel, steps };
+}
+
+function deepRenderArgs(value, vars) {
+  if (typeof value === 'string') {
+    return renderScheduleTemplate(value, { vars, dateLabel: vars.date, name: vars.name });
+  }
+  if (Array.isArray(value)) return value.map((v) => deepRenderArgs(v, vars));
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) out[k] = deepRenderArgs(v, vars);
+    return out;
+  }
+  return value;
 }
 
 export async function createPendingFlowRun(definition, meta = {}) {
-  const { flow, channel } = assertSupportedFlow(definition);
+  const { flow, channel, steps } = assertSupportedFlow(definition);
   const timeZone = String(flow.timezone || definition.timezone || 'UTC');
   const today = formatDateInZone(new Date(), timeZone);
   const periodStart = new Date(`${today}T00:00:00.000Z`);
@@ -403,7 +713,7 @@ export async function createPendingFlowRun(definition, meta = {}) {
     status: 'running',
     started_at: new Date(),
     generated_at: new Date(),
-    progress: buildInitialFlowProgress(channel),
+    progress: buildInitialFlowProgress(channel, steps),
   });
 }
 
@@ -412,85 +722,223 @@ export async function createPendingFlowRun(definition, meta = {}) {
  * @param {import('../models/ScheduleRun.js').default} run
  */
 export async function fillFlowRun(definition, run) {
-  const { flow, recipients, channel } = assertSupportedFlow(definition);
+  const { flow, recipients, channel, steps } = assertSupportedFlow(definition);
   const timeZone = String(flow.timezone || definition.timezone || 'UTC');
+  const dateLabel = formatDateInZone(new Date(), timeZone);
+  const name = definition.name || 'Scheduled message';
+  const metrics = flowMetrics(flow);
+  const periodResults = [];
+  const toolOutputs = {};
+  let composed = null;
+
+  // Ensure progress steps exist for this process (older queued runs may lack them)
+  if (!run.progress?.steps?.length) {
+    run.progress = buildInitialFlowProgress(channel, steps);
+    run.markModified('progress');
+  }
 
   try {
     await upsertProgressStep(run, {
       key: 'init',
       status: 'done',
-      detail: `channel=${channel} tz=${timeZone}`,
-      phase: 'composing',
+      detail: `channel=${channel} tz=${timeZone} steps=${steps.length}`,
+      phase: 'running',
     });
 
-    await upsertProgressStep(run, {
-      key: 'compose',
-      status: 'running',
-      phase: 'composing',
-    });
-
-    const composed = composeScheduledMessage(flow, definition, timeZone);
-
-    await upsertProgressStep(run, {
-      key: 'compose',
-      status: 'done',
-      detail: channel === 'sms' ? `chars=${composed.body.length}` : composed.subject,
-      output_summary: {
-        channel,
-        subject: composed.subject,
-        preview: composed.body.slice(0, 160),
-      },
-    });
-
-    await upsertProgressStep(run, {
-      key: 'send',
-      status: 'running',
-      phase: 'sending',
-    });
-
-    const delivered = await deliverToRecipients({
-      channel,
-      recipients,
-      subject: composed.subject,
-      body: composed.body,
-    });
-    run.delivery = delivered.delivery;
-    run.markModified('delivery');
-    if (!delivered.ok) {
-      run.failed_step = 'send';
+    for (const step of steps) {
       await upsertProgressStep(run, {
-        key: 'send',
-        status: 'error',
-        detail: delivered.error || 'send failed',
+        key: step.key,
+        status: 'running',
+        phase: step.type === 'deliver' ? 'sending' : 'running',
       });
-      throw new Error(delivered.error || 'send failed');
-    }
-    await upsertProgressStep(run, {
-      key: 'send',
-      status: delivered.partial ? 'warn' : 'done',
-      detail: delivered.delivery.detail,
-      output_summary: { channel, to: recipients },
-    });
 
-    run.status = delivered.partial ? 'partial' : 'completed';
-    run.error_message = delivered.partial ? delivered.delivery.detail : '';
+      try {
+        if (step.type === 'invoice_report') {
+          const windows = resolvePeriodWindows([step.period], timeZone);
+          const window = windows[0];
+          if (!window) throw new Error(`Unknown period "${step.period}"`);
+          const totals = await fetchInvoicePeriodTotals(window);
+          const row = {
+            key: window.key,
+            label: window.label,
+            from: totals.from,
+            to: totals.to,
+            sales: totals.sales,
+            amount_paid: totals.amount_paid,
+            invoice_count: totals.invoice_count,
+          };
+          periodResults.push(row);
+          toolOutputs[window.key] = row;
+          await upsertProgressStep(run, {
+            key: step.key,
+            status: 'done',
+            detail: `sales=${totals.sales} paid=${totals.amount_paid}`,
+            output_summary: row,
+          });
+          continue;
+        }
+
+        if (step.type === 'tool') {
+          const baseVars = { date: dateLabel, name, ...liveMetricVars(periodResults) };
+          const args = deepRenderArgs(step.args || {}, baseVars);
+          // Expand period shortcuts on tool args
+          if (step.args?.period || args.period) {
+            const period = String(step.args?.period || args.period).toLowerCase();
+            const windows = resolvePeriodWindows([period], timeZone);
+            if (windows[0]) {
+              if (args.from_date == null) args.from_date = windows[0].from;
+              if (args.to_date == null) args.to_date = windows[0].to;
+              delete args.period;
+            }
+          }
+          const result = await executeMcpTool(step.tool, args);
+          if (result?.success === false) {
+            throw new Error(result.error || result.message || `${step.tool} failed`);
+          }
+          toolOutputs[step.as || step.tool] = result;
+          await upsertProgressStep(run, {
+            key: step.key,
+            status: 'done',
+            detail: step.tool,
+            output_summary: { tool: step.tool },
+          });
+          continue;
+        }
+
+        if (step.type === 'compose') {
+          const subjectTemplate = String(flow.subject_template || flow.subject || '').trim();
+          const messageTemplate = String(
+            flow.message_template || flow.body || flow.message || '',
+          ).trim();
+          const liveVars = liveMetricVars(periodResults);
+
+          if (periodResults.length > 0 && !templateWantsLivePlaceholders(messageTemplate)) {
+            const briefing = composeSalesBriefingEmail({
+              name,
+              periods: periodResults,
+              metrics,
+              scope: String(flow.scope || 'company_totals'),
+              subject: renderScheduleTemplate(
+                subjectTemplate || `${name} — {{date}}`,
+                { name, dateLabel, timeZone, vars: liveVars },
+              ),
+            });
+            composed = {
+              channel,
+              subject: briefing.subject,
+              body: briefing.body,
+              dateLabel,
+            };
+          } else if (messageTemplate && templateWantsLivePlaceholders(messageTemplate)) {
+            composed = composeScheduledMessage(
+              {
+                ...flow,
+                subject_template: subjectTemplate || `${name} — {{date}}`,
+                message_template: messageTemplate,
+              },
+              definition,
+              timeZone,
+            );
+            composed.subject = renderScheduleTemplate(composed.subject, {
+              name,
+              dateLabel,
+              timeZone,
+              vars: liveVars,
+            });
+            composed.body = renderScheduleTemplate(composed.body, {
+              name,
+              dateLabel,
+              timeZone,
+              vars: liveVars,
+            });
+          } else {
+            composed = composeScheduledMessage(flow, definition, timeZone);
+          }
+
+          if (channel === 'sms' && composed.body && !/STOP/i.test(composed.body)) {
+            const { text } = withSmsOptOutFooter(composed.body);
+            composed.body = text;
+          }
+
+          await upsertProgressStep(run, {
+            key: step.key,
+            status: 'done',
+            detail: channel === 'sms' ? `chars=${composed.body.length}` : composed.subject,
+            output_summary: {
+              channel,
+              subject: composed.subject,
+              preview: String(composed.body || '').slice(0, 160),
+              period_count: periodResults.length,
+            },
+          });
+          continue;
+        }
+
+        if (step.type === 'deliver') {
+          if (!composed) {
+            composed = composeScheduledMessage(flow, definition, timeZone);
+          }
+          const delivered = await deliverToRecipients({
+            channel,
+            recipients,
+            subject: composed.subject,
+            body: composed.body,
+          });
+          run.delivery = delivered.delivery;
+          run.markModified('delivery');
+          if (!delivered.ok) {
+            run.failed_step = step.key;
+            await upsertProgressStep(run, {
+              key: step.key,
+              status: 'error',
+              detail: delivered.error || 'send failed',
+            });
+            throw new Error(delivered.error || 'send failed');
+          }
+          await upsertProgressStep(run, {
+            key: step.key,
+            status: delivered.partial ? 'warn' : 'done',
+            detail: delivered.delivery.detail,
+            output_summary: { channel, to: recipients },
+          });
+          run.status = delivered.partial ? 'partial' : 'completed';
+          run.error_message = delivered.partial ? delivered.delivery.detail : '';
+          continue;
+        }
+
+        throw new Error(`Unsupported step type "${step.type}"`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!run.failed_step) run.failed_step = step.key;
+        await upsertProgressStep(run, {
+          key: step.key,
+          status: 'error',
+          detail: message,
+        });
+        throw error;
+      }
+    }
+
     run.summary = {
       scanned: 0,
       matched: 0,
       estimates: 0,
-      invoices: 0,
+      invoices: periodResults.reduce((sum, p) => sum + asNumber(p.invoice_count), 0),
       metrics: {
         channel,
-        as_of: composed.dateLabel,
+        as_of: dateLabel,
+        periods: periodResults,
+        tools: Object.keys(toolOutputs),
       },
     };
     run.markModified('summary');
+    if (!run.status || run.status === 'running') run.status = 'completed';
     run.finished_at = new Date();
 
     await upsertProgressStep(run, {
       key: 'finalize',
       status: 'done',
-      detail: `Sent via ${channel}`,
+      detail: `Process complete (${steps.length} steps)`,
       phase: 'done',
     });
 

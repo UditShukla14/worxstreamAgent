@@ -1,11 +1,14 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  composeSalesBriefingEmail,
   composeScheduledMessage,
   computeMonthlyNextRunAt,
   formatDateInZone,
   renderScheduleTemplate,
   resolveFlowChannel,
+  resolveFlowSteps,
+  resolvePeriodWindows,
   SUPPORTED_FLOW_TYPES,
 } from '../src/governance/schedules/flowEngine.js';
 
@@ -18,6 +21,67 @@ describe('scheduled_message flow', () => {
   it('resolves channel', () => {
     assert.equal(resolveFlowChannel({ channel: 'sms' }), 'sms');
     assert.equal(resolveFlowChannel({}), 'email');
+  });
+
+  it('resolves send-only process when only message_template', () => {
+    const steps = resolveFlowSteps({ message_template: 'Hello {{date}}' });
+    assert.deepEqual(steps.map((s) => s.type), ['compose', 'deliver']);
+  });
+
+  it('resolves invoice process from periods', () => {
+    const steps = resolveFlowSteps({
+      periods: ['today', 'mtd'],
+      metrics: ['sales', 'amount_paid'],
+    });
+    assert.deepEqual(steps.map((s) => s.type), [
+      'invoice_report',
+      'invoice_report',
+      'compose',
+      'deliver',
+    ]);
+    assert.equal(steps[0].period, 'today');
+    assert.equal(steps[1].period, 'mtd');
+  });
+
+  it('resolves invoice process from pulled-live prose', () => {
+    const steps = resolveFlowSteps({
+      message_template: 'Sales today pulled live at send time. MTD also.',
+    });
+    assert.ok(steps.some((s) => s.type === 'invoice_report' && s.period === 'today'));
+    assert.ok(steps.some((s) => s.type === 'invoice_report' && s.period === 'mtd'));
+    assert.ok(steps.some((s) => s.type === 'deliver'));
+  });
+
+  it('resolves explicit steps including tool', () => {
+    const steps = resolveFlowSteps({
+      steps: [
+        { type: 'tool', tool: 'generate_invoice_report', args: { period: 'today' } },
+        { type: 'compose' },
+        { type: 'deliver' },
+      ],
+    });
+    assert.equal(steps[0].type, 'tool');
+    assert.equal(steps[0].tool, 'generate_invoice_report');
+  });
+
+  it('resolves period windows', () => {
+    const windows = resolvePeriodWindows(['today', 'mtd'], 'UTC', new Date('2026-10-15T12:00:00Z'));
+    assert.equal(windows[0].from, '2026-10-15');
+    assert.equal(windows[1].from, '2026-10-01');
+  });
+
+  it('composes sales briefing table', () => {
+    const { subject, body } = composeSalesBriefingEmail({
+      name: 'Daily Briefing',
+      metrics: ['sales', 'amount_paid'],
+      periods: [
+        { key: 'today', label: 'Today', from: '2026-10-15', to: '2026-10-15', sales: 100, amount_paid: 40 },
+      ],
+      subject: 'Daily Briefing — 2026-10-15',
+    });
+    assert.match(subject, /Daily Briefing/);
+    assert.match(body, /\$100/);
+    assert.match(body, /\$40/);
   });
 
   it('renders template placeholders', () => {
