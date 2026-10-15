@@ -104,13 +104,15 @@ function buildFlow(input) {
   const metrics = parseStringList(input.metrics);
   const steps = parseSteps(input.steps);
   const prompt = String(input.prompt || input.intent || '').trim();
+  const messageIntent = String(input.message || '').trim();
+  const requestedIntent = prompt || messageIntent;
   const engineHint = String(input.engine || '').toLowerCase().trim();
   const messageTemplate = String(
     input.message_template || input.body || '',
   ).trim();
   // Every new schedule must use a deterministic process. A prompt is retained
   // only as human-readable intent/audit context; it is never re-run as Nova.
-  const looksLikeInvoiceBriefing = /\b(invoice|sales|revenue|amount\s*paid|paid|sales\s+briefing|financial\s+briefing)\b/i.test(prompt);
+  const looksLikeInvoiceBriefing = /\b(invoice|sales|revenue|amount\s*paid|paid|sales\s+briefing|financial\s+briefing)\b/i.test(requestedIntent);
   const wantsProcess = engineHint === 'process'
     || engineHint === 'flow'
     || engineHint === 'steps'
@@ -122,15 +124,15 @@ function buildFlow(input) {
   const inferredPeriods = periods.length
     ? periods
     : [
-      /\b(today|daily|day)\b/i.test(prompt) ? 'today' : null,
-      /\b(month[- ]to[- ]date|mtd|month)\b/i.test(prompt) ? 'mtd' : null,
-      /\b(quarter[- ]to[- ]date|qtd|quarter)\b/i.test(prompt) ? 'qtd' : null,
+      /\b(today|daily|day)\b/i.test(requestedIntent) ? 'today' : null,
+      /\b(month[- ]to[- ]date|mtd|month)\b/i.test(requestedIntent) ? 'mtd' : null,
+      /\b(quarter[- ]to[- ]date|qtd|quarter)\b/i.test(requestedIntent) ? 'qtd' : null,
     ].filter(Boolean);
   const inferredMetrics = metrics.length
     ? metrics
     : [
-      /\b(sales|revenue|invoiced|cumulative)\b/i.test(prompt) ? 'sales' : null,
-      /\b(amount\s*paid|paid|payments?)\b/i.test(prompt) ? 'amount_paid' : null,
+      /\b(sales|revenue|invoiced|cumulative)\b/i.test(requestedIntent) ? 'sales' : null,
+      /\b(amount\s*paid|paid|payments?)\b/i.test(requestedIntent) ? 'amount_paid' : null,
     ].filter(Boolean);
   const wantsInvoiceProcess = wantsProcess && (
     String(input.data_source || '').toLowerCase() === 'invoice_report'
@@ -138,8 +140,7 @@ function buildFlow(input) {
     || inferredMetrics.length > 0
     || looksLikeInvoiceBriefing
   );
-  const requestedPrompt = prompt
-    || (!wantsProcess && !messageTemplate && String(input.message || '').trim())
+  const requestedPrompt = requestedIntent
     || '';
 
   const flow = {
