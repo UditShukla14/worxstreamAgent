@@ -15,6 +15,7 @@ import {
   SUPPORTED_FLOW_TYPES,
   computeFlowNextRunAt,
   isFlowRecipe,
+  normalizeCadenceType,
   resolveFlowSteps,
 } from './flowEngine.js';
 
@@ -57,8 +58,10 @@ function definitionToApi(doc) {
     flow,
     timezone: doc.timezone || 'UTC',
     cadenceType: doc.cadence_type || 'interval',
-    intervalDays: doc.interval_days,
-    runAtHourUtc: doc.run_at_hour_utc,
+    intervalDays: doc.interval_days ?? null,
+    runAtHourUtc: doc.run_at_hour_utc ?? null,
+    runWindowStartUtc: doc.run_window_start_utc ?? null,
+    runWindowEndUtc: doc.run_window_end_utc ?? null,
     dayOfMonth: doc.day_of_month ?? null,
     runAtHourLocal: doc.run_at_hour_local ?? null,
     active: Boolean(doc.active),
@@ -203,14 +206,12 @@ function flowFromBody(body) {
   );
   const timezone = String(flowIn.timezone ?? body.timezone ?? 'UTC').trim() || 'UTC';
   const channelRaw = String(flowIn.channel ?? body.channel ?? 'email').toLowerCase().trim();
-  const cadenceRaw = String(
-    flowIn.cadence_type ?? body.cadenceType ?? body.cadence_type ?? 'interval',
-  ).toLowerCase();
+  const cadenceRaw = flowIn.cadence_type ?? body.cadenceType ?? body.cadence_type ?? 'interval';
   const flow = {
     recipients,
     channel: channelRaw === 'sms' ? 'sms' : 'email',
     timezone,
-    cadence_type: cadenceRaw === 'monthly' ? 'monthly' : 'interval',
+    cadence_type: normalizeCadenceType(cadenceRaw),
     subject_template: String(
       flowIn.subject_template ?? flowIn.subjectTemplate ?? body.subject_template ?? body.subject ?? '',
     ).trim(),
@@ -301,25 +302,57 @@ function definitionFieldsFromBody(body, partial = false) {
     }
   }
 
-  if (!partial || body.intervalDays != null || body.interval_days != null) {
-    const days = Number(body.intervalDays ?? body.interval_days);
-    out.interval_days = Number.isFinite(days) ? Math.min(90, Math.max(1, Math.round(days))) : 1;
-  }
-  if (!partial || body.runAtHourUtc != null || body.run_at_hour_utc != null) {
-    const hour = Number(body.runAtHourUtc ?? body.run_at_hour_utc);
-    out.run_at_hour_utc = Number.isFinite(hour) ? Math.min(23, Math.max(0, Math.round(hour))) : 23;
-  }
   if (!partial || body.cadenceType != null || body.cadence_type != null) {
-    const cadence = String(body.cadenceType ?? body.cadence_type ?? 'interval').toLowerCase();
-    out.cadence_type = cadence === 'monthly' ? 'monthly' : 'interval';
+    out.cadence_type = normalizeCadenceType(body.cadenceType ?? body.cadence_type ?? 'interval');
   }
-  if (!partial || body.dayOfMonth != null || body.day_of_month != null) {
-    const day = Number(body.dayOfMonth ?? body.day_of_month);
-    out.day_of_month = Number.isFinite(day) ? Math.min(28, Math.max(1, Math.round(day))) : 1;
-  }
-  if (!partial || body.runAtHourLocal != null || body.run_at_hour_local != null) {
-    const hour = Number(body.runAtHourLocal ?? body.run_at_hour_local);
-    out.run_at_hour_local = Number.isFinite(hour) ? Math.min(23, Math.max(0, Math.round(hour))) : 9;
+
+  const cadenceForFields = normalizeCadenceType(
+    out.cadence_type
+    ?? body.cadenceType
+    ?? body.cadence_type
+    ?? (partial ? undefined : 'interval'),
+  );
+
+  if (cadenceForFields === 'hourly') {
+    if (!partial || body.runWindowStartUtc != null || body.run_window_start_utc != null) {
+      const hour = Number(body.runWindowStartUtc ?? body.run_window_start_utc);
+      out.run_window_start_utc = Number.isFinite(hour)
+        ? Math.min(23, Math.max(0, Math.round(hour)))
+        : 0;
+    }
+    if (!partial || body.runWindowEndUtc != null || body.run_window_end_utc != null) {
+      const hour = Number(body.runWindowEndUtc ?? body.run_window_end_utc);
+      out.run_window_end_utc = Number.isFinite(hour)
+        ? Math.min(23, Math.max(0, Math.round(hour)))
+        : 23;
+    }
+    if (!partial || body.cadenceType != null || body.cadence_type != null) {
+      out.interval_days = null;
+      out.run_at_hour_utc = null;
+      out.day_of_month = null;
+      out.run_at_hour_local = null;
+    }
+  } else {
+    if (!partial || body.intervalDays != null || body.interval_days != null) {
+      const days = Number(body.intervalDays ?? body.interval_days);
+      out.interval_days = Number.isFinite(days) ? Math.min(90, Math.max(1, Math.round(days))) : 1;
+    }
+    if (!partial || body.runAtHourUtc != null || body.run_at_hour_utc != null) {
+      const hour = Number(body.runAtHourUtc ?? body.run_at_hour_utc);
+      out.run_at_hour_utc = Number.isFinite(hour) ? Math.min(23, Math.max(0, Math.round(hour))) : 23;
+    }
+    if (!partial || body.dayOfMonth != null || body.day_of_month != null) {
+      const day = Number(body.dayOfMonth ?? body.day_of_month);
+      out.day_of_month = Number.isFinite(day) ? Math.min(28, Math.max(1, Math.round(day))) : 1;
+    }
+    if (!partial || body.runAtHourLocal != null || body.run_at_hour_local != null) {
+      const hour = Number(body.runAtHourLocal ?? body.run_at_hour_local);
+      out.run_at_hour_local = Number.isFinite(hour) ? Math.min(23, Math.max(0, Math.round(hour))) : 9;
+    }
+    if (!partial || body.cadenceType != null || body.cadence_type != null) {
+      out.run_window_start_utc = null;
+      out.run_window_end_utc = null;
+    }
   }
   if (!partial || body.timezone != null) {
     out.timezone = String(body.timezone || 'UTC').trim() || 'UTC';
@@ -333,6 +366,12 @@ function nextRunFor(fields, existing = null) {
     cadence_type: fields.cadence_type ?? existing?.cadence_type ?? 'interval',
     interval_days: fields.interval_days ?? existing?.interval_days ?? 1,
     run_at_hour_utc: fields.run_at_hour_utc ?? existing?.run_at_hour_utc ?? 23,
+    run_window_start_utc: fields.run_window_start_utc
+      ?? existing?.run_window_start_utc
+      ?? 0,
+    run_window_end_utc: fields.run_window_end_utc
+      ?? existing?.run_window_end_utc
+      ?? 23,
     day_of_month: fields.day_of_month ?? existing?.day_of_month ?? 1,
     run_at_hour_local: fields.run_at_hour_local ?? existing?.run_at_hour_local ?? 9,
     timezone: fields.timezone ?? existing?.timezone ?? 'UTC',

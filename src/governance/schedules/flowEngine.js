@@ -403,6 +403,62 @@ export function zonedLocalToUtc(
   return new Date(guess);
 }
 
+export function normalizeCadenceType(raw) {
+  const cadence = String(raw || 'interval').toLowerCase().trim();
+  if (cadence === 'monthly') return 'monthly';
+  if (cadence === 'hourly') return 'hourly';
+  return 'interval';
+}
+
+function clampUtcHour(value, fallback) {
+  const hour = Number(value);
+  if (!Number.isFinite(hour)) return fallback;
+  return Math.min(23, Math.max(0, Math.round(hour)));
+}
+
+/** True when UTC hour H is inside inclusive [start, end], supporting overnight wrap. */
+export function isUtcHourInWindow(hour, start, end) {
+  const h = clampUtcHour(hour, 0);
+  const s = clampUtcHour(start, 0);
+  const e = clampUtcHour(end, 23);
+  if (s === e) return true; // full day when start === end
+  if (s < e) return h >= s && h <= e;
+  return h >= s || h <= e;
+}
+
+/**
+ * Hourly cadence: next top-of-hour UTC inside [run_window_start_utc, run_window_end_utc].
+ * Defaults to full day (0–23) when window fields are omitted.
+ */
+export function computeHourlyNextRunAt(definition, fromDate = new Date()) {
+  const start = clampUtcHour(
+    definition.run_window_start_utc
+      ?? definition.flow?.run_window_start_utc
+      ?? 0,
+    0,
+  );
+  const end = clampUtcHour(
+    definition.run_window_end_utc
+      ?? definition.flow?.run_window_end_utc
+      ?? 23,
+    23,
+  );
+  const candidate = new Date(fromDate);
+  candidate.setUTCMinutes(0, 0, 0);
+  candidate.setUTCSeconds(0, 0);
+  candidate.setUTCMilliseconds(0);
+  if (candidate <= fromDate) {
+    candidate.setUTCHours(candidate.getUTCHours() + 1);
+  }
+  for (let i = 0; i < 48; i += 1) {
+    if (isUtcHourInWindow(candidate.getUTCHours(), start, end)) {
+      return candidate;
+    }
+    candidate.setUTCHours(candidate.getUTCHours() + 1);
+  }
+  return candidate;
+}
+
 export function computeMonthlyNextRunAt(definition, fromDate = new Date()) {
   const timeZone = String(
     definition.timezone
@@ -441,13 +497,16 @@ export function computeMonthlyNextRunAt(definition, fromDate = new Date()) {
   return candidate;
 }
 
-/** Interval (UTC hour + days) or monthly (local day/hour in timezone). */
+/** Interval (UTC hour + days), monthly (local day/hour), or hourly (UTC window). */
 export function computeFlowNextRunAt(definition, fromDate = new Date()) {
-  const cadence = String(
+  const cadence = normalizeCadenceType(
     definition.cadence_type || definition.flow?.cadence_type || 'interval',
-  ).toLowerCase();
+  );
   if (cadence === 'monthly') {
     return computeMonthlyNextRunAt(definition, fromDate);
+  }
+  if (cadence === 'hourly') {
+    return computeHourlyNextRunAt(definition, fromDate);
   }
   const anchor = new Date(fromDate);
   const hour = Number.isFinite(definition.run_at_hour_utc)

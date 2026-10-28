@@ -51,14 +51,24 @@ const scheduleDefinitionSchema = new mongoose.Schema({
   flow: { type: mongoose.Schema.Types.Mixed, default: null },
 
   // ── cadence (shared) ───────────────────────────────────────────────
-  /** interval = every N days at run_at_hour_utc; monthly = day_of_month at run_at_hour_local in timezone */
+  /**
+   * interval = every N days at run_at_hour_utc;
+   * monthly = day_of_month at run_at_hour_local in timezone;
+   * hourly = every hour in [run_window_start_utc, run_window_end_utc] (UTC, inclusive).
+   */
   cadence_type: {
     type: String,
-    enum: ['interval', 'monthly'],
+    enum: ['interval', 'monthly', 'hourly'],
     default: 'interval',
   },
+  /** Used when cadence_type=interval. Null for hourly. */
   interval_days: { type: Number, default: 1, min: 1, max: 90 },
+  /** Used when cadence_type=interval. Null for hourly. */
   run_at_hour_utc: { type: Number, default: 23, min: 0, max: 23 },
+  /** Inclusive UTC hour 0–23 when cadence_type=hourly (with run_window_end_utc). */
+  run_window_start_utc: { type: Number, default: null, min: 0, max: 23 },
+  /** Inclusive UTC hour 0–23 when cadence_type=hourly. */
+  run_window_end_utc: { type: Number, default: null, min: 0, max: 23 },
   /** 1–28 for monthly cadence (avoids end-of-month drift). */
   day_of_month: { type: Number, default: null, min: 1, max: 28 },
   /** Local hour 0–23 when cadence_type=monthly (uses timezone). */

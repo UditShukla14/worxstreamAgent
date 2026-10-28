@@ -18,6 +18,7 @@ import {
   SUPPORTED_FLOW_TYPES,
   computeFlowNextRunAt,
   isFlowRecipe,
+  normalizeCadenceType,
 } from '../schedules/flowEngine.js';
 import { isE164 } from '../../services/telnyxClient.js';
 import {
@@ -101,12 +102,94 @@ function parseSteps(raw) {
     .filter(Boolean);
 }
 
+function clampUtcHour(value, fallback) {
+  const hour = Number(value);
+  if (!Number.isFinite(hour)) return fallback;
+  return Math.min(23, Math.max(0, Math.round(hour)));
+}
+
+function buildCadenceFields(input, flow, cloneSource = null) {
+  const cadence_type = normalizeCadenceType(
+    input.cadence_type ?? cloneSource?.cadence_type ?? flow.cadence_type ?? 'interval',
+  );
+  flow.cadence_type = cadence_type;
+
+  if (cadence_type === 'hourly') {
+    return {
+      cadence_type,
+      interval_days: null,
+      run_at_hour_utc: null,
+      day_of_month: null,
+      run_at_hour_local: null,
+      run_window_start_utc: clampUtcHour(
+        input.run_window_start_utc
+          ?? cloneSource?.run_window_start_utc
+          ?? 0,
+        0,
+      ),
+      run_window_end_utc: clampUtcHour(
+        input.run_window_end_utc
+          ?? cloneSource?.run_window_end_utc
+          ?? 23,
+        23,
+      ),
+      timezone: flow.timezone,
+    };
+  }
+
+  if (cadence_type === 'monthly') {
+    return {
+      cadence_type,
+      interval_days: Math.min(
+        90,
+        Math.max(1, Math.round(Number(
+          input.interval_days ?? cloneSource?.interval_days ?? 1,
+        ) || 1)),
+      ),
+      run_at_hour_utc: clampUtcHour(
+        input.run_at_hour_utc ?? cloneSource?.run_at_hour_utc ?? 23,
+        23,
+      ),
+      day_of_month: Math.min(
+        28,
+        Math.max(1, Math.round(Number(
+          input.day_of_month ?? cloneSource?.day_of_month ?? 1,
+        ) || 1)),
+      ),
+      run_at_hour_local: clampUtcHour(
+        input.run_at_hour_local ?? cloneSource?.run_at_hour_local ?? 9,
+        9,
+      ),
+      run_window_start_utc: null,
+      run_window_end_utc: null,
+      timezone: flow.timezone,
+    };
+  }
+
+  return {
+    cadence_type: 'interval',
+    interval_days: Math.min(
+      90,
+      Math.max(1, Math.round(Number(
+        input.interval_days ?? cloneSource?.interval_days ?? 1,
+      ) || 1)),
+    ),
+    run_at_hour_utc: clampUtcHour(
+      input.run_at_hour_utc ?? cloneSource?.run_at_hour_utc ?? 23,
+      23,
+    ),
+    day_of_month: null,
+    run_at_hour_local: null,
+    run_window_start_utc: null,
+    run_window_end_utc: null,
+    timezone: flow.timezone,
+  };
+}
+
 function buildFlow(input) {
   const timezone = String(input.timezone || 'UTC').trim() || 'UTC';
   const channel = resolveChannel(input);
-  const cadenceType = String(input.cadence_type || 'interval').toLowerCase() === 'monthly'
-    ? 'monthly'
-    : 'interval';
+  const cadenceType = normalizeCadenceType(input.cadence_type || 'interval');
   const periods = parseStringList(input.periods);
   const metrics = parseStringList(input.metrics);
   const steps = parseSteps(input.steps);
@@ -267,11 +350,19 @@ export function registerScribeTools() {
         data_source: z.string().optional().describe('Legacy: invoice_report'),
         timezone: z.string().optional().describe('IANA timezone, e.g. America/New_York'),
         cadence_type: z
-          .enum(['interval', 'monthly'])
+          .enum(['interval', 'monthly', 'hourly'])
           .optional()
-          .describe('interval (default) or monthly'),
+          .describe('interval (default), monthly, or hourly'),
         interval_days: z.number().optional().describe('When cadence_type=interval: every N days'),
         run_at_hour_utc: z.number().optional().describe('When cadence_type=interval: hour UTC 0-23'),
+        run_window_start_utc: z
+          .number()
+          .optional()
+          .describe('When cadence_type=hourly: inclusive UTC start hour 0-23 (e.g. 14 = 9am ET)'),
+        run_window_end_utc: z
+          .number()
+          .optional()
+          .describe('When cadence_type=hourly: inclusive UTC end hour 0-23 (e.g. 22 = 5pm ET)'),
         day_of_month: z.number().optional().describe('When cadence_type=monthly: 1-28'),
         run_at_hour_local: z
           .number()
@@ -351,28 +442,7 @@ export function registerScribeTools() {
         });
       }
 
-      const isMonthly = flow.cadence_type === 'monthly';
-      const cadence_type = isMonthly ? 'monthly' : 'interval';
-      const interval_days = Math.min(90, Math.max(1, Math.round(Number(input.interval_days) || 1)));
-      const run_at_hour_utc = Math.min(
-        23,
-        Math.max(0, Math.round(Number(input.run_at_hour_utc ?? 23))),
-      );
-      const day_of_month = isMonthly
-        ? Math.min(28, Math.max(1, Math.round(Number(input.day_of_month) || 1)))
-        : null;
-      const run_at_hour_local = isMonthly
-        ? Math.min(23, Math.max(0, Math.round(Number(input.run_at_hour_local ?? 9))))
-        : null;
-
-      const cadenceFields = {
-        cadence_type,
-        interval_days: input.interval_days ?? cloneSource?.interval_days ?? interval_days,
-        run_at_hour_utc: input.run_at_hour_utc ?? cloneSource?.run_at_hour_utc ?? run_at_hour_utc,
-        day_of_month: input.day_of_month ?? cloneSource?.day_of_month ?? day_of_month,
-        run_at_hour_local: input.run_at_hour_local ?? cloneSource?.run_at_hour_local ?? run_at_hour_local,
-        timezone: flow.timezone,
-      };
+      const cadenceFields = buildCadenceFields(input, flow, cloneSource);
 
       const doc = await ScheduleDefinition.create({
         company_id: String(companyId),
@@ -393,7 +463,7 @@ export function registerScribeTools() {
         success: true,
         message:
           `Scribe owns schedule "${doc.name}" `
-          + `(${flow.channel}, ${cadence_type}`
+          + `(${flow.channel}, ${cadenceFields.cadence_type}`
           + `${flow.engine === 'nova' ? ', Nova agent each tick' : ''}).`,
         data: definitionToApi(doc),
       });
@@ -542,9 +612,13 @@ export function registerScribeTools() {
         scope: z.string().optional(),
         data_source: z.string().optional(),
         timezone: z.string().optional(),
-        cadence_type: z.enum(['interval', 'monthly']).optional(),
+        cadence_type: z.enum(['interval', 'monthly', 'hourly']).optional(),
         interval_days: z.number().optional(),
         run_at_hour_utc: z.number().optional(),
+        run_window_start_utc: z.number().optional()
+          .describe('When cadence_type=hourly: inclusive UTC start hour 0-23'),
+        run_window_end_utc: z.number().optional()
+          .describe('When cadence_type=hourly: inclusive UTC end hour 0-23'),
         day_of_month: z.number().optional(),
         run_at_hour_local: z.number().optional(),
         active: z.boolean().optional(),
@@ -654,26 +728,41 @@ export function registerScribeTools() {
           error: 'A recurring Nova schedule requires the saved user intent or legacy periods/metrics.',
         });
       }
-      if (input.cadence_type != null) {
-        const cadence = String(input.cadence_type).toLowerCase() === 'monthly' ? 'monthly' : 'interval';
-        flow.cadence_type = cadence;
-        doc.cadence_type = cadence;
+      const cadenceInputChanged = input.cadence_type != null
+        || input.interval_days != null
+        || input.run_at_hour_utc != null
+        || input.run_window_start_utc != null
+        || input.run_window_end_utc != null
+        || input.day_of_month != null
+        || input.run_at_hour_local != null;
+
+      if (cadenceInputChanged) {
+        const cadenceFields = buildCadenceFields(
+          {
+            cadence_type: input.cadence_type ?? doc.cadence_type,
+            interval_days: input.interval_days,
+            run_at_hour_utc: input.run_at_hour_utc,
+            run_window_start_utc: input.run_window_start_utc,
+            run_window_end_utc: input.run_window_end_utc,
+            day_of_month: input.day_of_month,
+            run_at_hour_local: input.run_at_hour_local,
+          },
+          flow,
+          {
+            cadence_type: doc.cadence_type,
+            interval_days: doc.interval_days,
+            run_at_hour_utc: doc.run_at_hour_utc,
+            run_window_start_utc: doc.run_window_start_utc,
+            run_window_end_utc: doc.run_window_end_utc,
+            day_of_month: doc.day_of_month,
+            run_at_hour_local: doc.run_at_hour_local,
+          },
+        );
+        Object.assign(doc, cadenceFields);
       }
+
       doc.flow = flow;
       doc.markModified('flow');
-
-      if (input.interval_days != null) {
-        doc.interval_days = Math.min(90, Math.max(1, Math.round(Number(input.interval_days) || 1)));
-      }
-      if (input.run_at_hour_utc != null) {
-        doc.run_at_hour_utc = Math.min(23, Math.max(0, Math.round(Number(input.run_at_hour_utc))));
-      }
-      if (input.day_of_month != null) {
-        doc.day_of_month = Math.min(28, Math.max(1, Math.round(Number(input.day_of_month) || 1)));
-      }
-      if (input.run_at_hour_local != null) {
-        doc.run_at_hour_local = Math.min(23, Math.max(0, Math.round(Number(input.run_at_hour_local))));
-      }
       doc.next_run_at = computeFlowNextRunAt(doc);
       await doc.save();
       return asText({ success: true, data: definitionToApi(doc) });

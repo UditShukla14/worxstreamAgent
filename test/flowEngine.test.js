@@ -3,8 +3,11 @@ import assert from 'node:assert/strict';
 import {
   composeSalesBriefingEmail,
   composeScheduledMessage,
+  computeHourlyNextRunAt,
   computeMonthlyNextRunAt,
   formatDateInZone,
+  isUtcHourInWindow,
+  normalizeCadenceType,
   renderScheduleTemplate,
   resolveFlowChannel,
   resolveFlowSteps,
@@ -34,7 +37,7 @@ describe('scheduled_message flow', () => {
     assert.deepEqual(steps.map((s) => s.type), ['compose', 'deliver']);
   });
 
-  it('resolves Nova steps as run + send (same chat prompt)', () => {
+  it('resolves Nova steps as one same-chat run (including delivery)', () => {
     assert.equal(
       isNovaScheduleFlow({
         engine: 'nova',
@@ -47,7 +50,7 @@ describe('scheduled_message flow', () => {
       prompt: 'Summarize today and MTD sales',
       channel: 'email',
     });
-    assert.deepEqual(steps.map((s) => s.type), ['nova_run', 'deliver']);
+    assert.deepEqual(steps.map((s) => s.type), ['nova_run']);
   });
 
   it('preserves the frozen prompt and appends the channel delivery contract', () => {
@@ -185,6 +188,59 @@ describe('scheduled_message flow', () => {
     );
     assert.ok(next > new Date('2026-10-15T18:00:00.000Z'));
     assert.equal(formatDateInZone(next, 'America/New_York'), '2026-11-01');
+  });
+
+  it('normalizes cadence types including hourly', () => {
+    assert.equal(normalizeCadenceType('hourly'), 'hourly');
+    assert.equal(normalizeCadenceType('monthly'), 'monthly');
+    assert.equal(normalizeCadenceType('interval'), 'interval');
+    assert.equal(normalizeCadenceType('other'), 'interval');
+  });
+
+  it('detects UTC hours inside inclusive windows (incl. overnight wrap)', () => {
+    assert.equal(isUtcHourInWindow(14, 14, 22), true);
+    assert.equal(isUtcHourInWindow(22, 14, 22), true);
+    assert.equal(isUtcHourInWindow(13, 14, 22), false);
+    assert.equal(isUtcHourInWindow(23, 14, 22), false);
+    assert.equal(isUtcHourInWindow(23, 22, 6), true);
+    assert.equal(isUtcHourInWindow(3, 22, 6), true);
+    assert.equal(isUtcHourInWindow(12, 22, 6), false);
+  });
+
+  it('computes next hourly run inside the UTC window', () => {
+    const next = computeHourlyNextRunAt(
+      {
+        cadence_type: 'hourly',
+        run_window_start_utc: 14,
+        run_window_end_utc: 22,
+      },
+      new Date('2026-10-27T15:30:00.000Z'),
+    );
+    assert.equal(next.toISOString(), '2026-10-27T16:00:00.000Z');
+  });
+
+  it('skips to next day window start when past hourly end', () => {
+    const next = computeHourlyNextRunAt(
+      {
+        cadence_type: 'hourly',
+        run_window_start_utc: 14,
+        run_window_end_utc: 22,
+      },
+      new Date('2026-10-27T22:00:00.000Z'),
+    );
+    assert.equal(next.toISOString(), '2026-10-28T14:00:00.000Z');
+  });
+
+  it('lands on window start when before hourly window', () => {
+    const next = computeHourlyNextRunAt(
+      {
+        cadence_type: 'hourly',
+        run_window_start_utc: 14,
+        run_window_end_utc: 22,
+      },
+      new Date('2026-10-27T10:15:00.000Z'),
+    );
+    assert.equal(next.toISOString(), '2026-10-27T14:00:00.000Z');
   });
 
   it('unwraps invoice report without peeling into rows (keeps meta.totals)', () => {

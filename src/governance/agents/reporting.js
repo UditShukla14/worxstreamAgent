@@ -43,7 +43,8 @@ When translating a Nova request into a schedule, collect:
 - channel (email or sms) + recipients
    - user intent/prompt (Nova plans the tools at run time)
 - subject_template (email)
-- cadence: interval or monthly
+- cadence: interval (every N days + run_at_hour_utc), monthly (day_of_month + local hour),
+  or hourly (run_window_start_utc + run_window_end_utc inclusive UTC hours; e.g. 14–22 for 9am–5pm ET)
 
 Echo the saved intent and cadence, then scribe_create_schedule with engine=nova.
 
