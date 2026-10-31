@@ -168,59 +168,6 @@ export function registerReportTools() {
     }
   );
 
-  // Export invoice report CSV
-  registerTool(
-    'export_invoice_report_csv',
-    {
-      title: 'Export Invoice Report CSV',
-      description: 'Exports invoice report data as CSV for a date range (same as Reports → Invoice Report export).',
-      inputSchema: {
-        from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('Start date YYYY-MM-DD'),
-        to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('End date YYYY-MM-DD'),
-      },
-    },
-    async ({ from_date, to_date }) => {
-      const { companyId, userId } = getWorxstreamContext();
-      return await callWorxstreamAPI({
-        method: 'POST',
-        endpoint: '/report/invoice/export-csv',
-        data: {
-          company_id: companyId,
-          user_id: userId,
-          from_date,
-          to_date,
-        },
-        responseType: 'blob',
-      });
-    },
-  );
-
-  registerTool(
-    'export_estimate_report_csv',
-    {
-      title: 'Export Estimate Report CSV',
-      description: 'Exports estimate report data as CSV for a date range (Reports → Estimate Report).',
-      inputSchema: {
-        from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('Start date YYYY-MM-DD'),
-        to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('End date YYYY-MM-DD'),
-      },
-    },
-    async ({ from_date, to_date }) => {
-      const { companyId, userId } = getWorxstreamContext();
-      return await callWorxstreamAPI({
-        method: 'POST',
-        endpoint: '/report/estimate/export-csv',
-        data: {
-          company_id: companyId,
-          user_id: userId,
-          from_date,
-          to_date,
-        },
-        responseType: 'blob',
-      });
-    },
-  );
-
   // Get estimate line items report
   registerTool(
     'get_estimate_line_items',
@@ -336,32 +283,6 @@ export function registerReportTools() {
         method: 'POST',
         endpoint: '/report/product/generate',
         data,
-      });
-    },
-  );
-
-  registerTool(
-    'export_product_report_csv',
-    {
-      title: 'Export Product Report CSV',
-      description: 'Exports product report CSV for a date range (Reports → Products).',
-      inputSchema: {
-        from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('Start date YYYY-MM-DD'),
-        to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('End date YYYY-MM-DD'),
-      },
-    },
-    async ({ from_date, to_date }) => {
-      const { companyId, userId } = getWorxstreamContext();
-      return await callWorxstreamAPI({
-        method: 'POST',
-        endpoint: '/report/product/export-csv',
-        data: {
-          company_id: companyId,
-          user_id: userId,
-          from_date,
-          to_date,
-        },
-        responseType: 'blob',
       });
     },
   );

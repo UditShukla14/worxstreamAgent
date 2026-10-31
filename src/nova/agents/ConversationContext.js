@@ -448,6 +448,111 @@ export async function updateContext(ref, agentKey, toolsUsed, toolResults = [], 
 }
 
 /**
+ * Normalize client `#` global-search picks from the Nova UI.
+ * @param {unknown} raw
+ * @returns {Array<{ type: string, id: number, appId?: number, label: string, customNumber?: string }>}
+ */
+export function normalizeClientEntityRefs(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const type = String(item.type || '').trim().toLowerCase().replace(/-/g, '_');
+    const id = toNumericId(item.id ?? item.objectId ?? item.object_id);
+    if (!type || id == null) continue;
+    const appId = toNumericId(item.appId ?? item.app_id);
+    const label = typeof item.label === 'string' && item.label.trim()
+      ? item.label.trim()
+      : type;
+    const customNumber = item.customNumber != null || item.custom_number != null
+      ? String(item.customNumber ?? item.custom_number).trim() || undefined
+      : undefined;
+    out.push({
+      type,
+      id,
+      ...(appId != null ? { appId } : {}),
+      label,
+      ...(customNumber ? { customNumber } : {}),
+    });
+  }
+  return out;
+}
+
+/** Map global-search type → Redis entities slot (customer_id, invoice_id, …). */
+function entitySlotForType(type) {
+  const t = String(type || '').toLowerCase().replace(/-/g, '_');
+  if (!t) return null;
+  if (t === 'vendor_account') return 'vendor_id';
+  if (t.endsWith('_id')) return t;
+  return `${t}_id`;
+}
+
+/**
+ * Prompt block for this turn's client-picked records (always inject — not scrape-gated).
+ * @param {Array<{ type: string, id: number, appId?: number, label: string }>} refs
+ */
+export function formatReferencedRecordsBlock(refs) {
+  if (!Array.isArray(refs) || refs.length === 0) return '';
+  const lines = refs.map((r) => {
+    const app = r.appId != null ? ` appId=${r.appId}` : '';
+    return `${r.type} "${r.label}" id=${r.id}${app}`;
+  });
+  return (
+    `[Referenced records]\n${lines.join('\n')}\n`
+    + 'These IDs came from the user\'s global-search pick — use them directly. '
+    + 'Do NOT call resolve_entity for these records.'
+  );
+}
+
+/**
+ * Merge Nova UI entity picks into Redis context (entities + entityRefs).
+ * Client picks are authoritative and are stored even when scrapeEntityIds is off.
+ *
+ * @param {string|object} ref
+ * @param {unknown} rawRefs
+ * @returns {Promise<Array<{ type: string, id: number, appId?: number, label: string, customNumber?: string }>>}
+ */
+export async function applyClientEntityRefs(ref, rawRefs) {
+  const refs = normalizeClientEntityRefs(rawRefs);
+  if (refs.length === 0) return [];
+
+  const key = ctxKey(ref);
+  if (!key) return refs;
+
+  const existing = await getContext(ref);
+  const ctx = { ...emptyContextShape(), ...existing };
+  ctx.entities = { ...(ctx.entities || {}) };
+  ctx.entityRefs = { ...(ctx.entityRefs || {}) };
+
+  const now = Date.now();
+  for (const r of refs) {
+    const slot = entitySlotForType(r.type);
+    if (slot) ctx.entities[slot] = r.id;
+    if (r.appId != null) ctx.entities.app_id = r.appId;
+
+    ctx.entityRefs[r.type] = {
+      id: r.id,
+      label: r.label,
+      ...(r.appId != null ? { appId: r.appId } : {}),
+      ...(r.customNumber ? { customNumber: r.customNumber } : {}),
+      tool: 'global_search',
+      source: 'client',
+      at: now,
+    };
+  }
+
+  const ttlSeconds = Number.isFinite(config.redis?.contextTtlSeconds)
+    ? config.redis.contextTtlSeconds
+    : 1800;
+  await redisSet(
+    key,
+    JSON.stringify({ ...ctx, updatedAt: now }),
+    { ex: ttlSeconds > 0 ? ttlSeconds : 1800 },
+  );
+  return refs;
+}
+
+/**
  * Build a short context string to inject into prompts.
  * Returns empty string if no context exists.
  */
@@ -461,27 +566,54 @@ export async function buildContextPrompt(ref, opts = {}) {
   const scrapeIds = config.coworker?.scrapeEntityIds === true;
   const entries = scrapeIds ? Object.entries(ctx.entities).filter(([k]) => k !== 'sms_draft_id' && k !== 'sms_to' && k !== 'sms_from') : [];
   const hasRecent = Array.isArray(ctx.recentResults) && ctx.recentResults.length > 0;
-  const hasRefs = scrapeIds && ctx.entityRefs && typeof ctx.entityRefs === 'object' && Object.keys(ctx.entityRefs).length > 0;
+  // Client / global_search entityRefs must surface even when scrape is off.
+  const hasRefs = ctx.entityRefs && typeof ctx.entityRefs === 'object' && Object.keys(ctx.entityRefs).length > 0;
   const hasWorkingSet = ctx.workingSet && Object.keys(ctx.workingSet).length > 0;
   const focusBlock = formatWorkingSetForPrompt(
     hasWorkingSet ? ctx.workingSet : null,
     opts.lastAssistantSnippet || '',
   );
 
-  if (entries.length === 0 && !hasRecent && !hasRefs && !ctx.lastAgent && !ctx.lastSearch && !focusBlock && !ctx.entities.sms_draft_id) {
+  // Client-seeded entity slots (e.g. customer_id from # picks) when scrape is off.
+  const clientSeededEntries = !scrapeIds
+    ? Object.entries(ctx.entities || {}).filter(([k, v]) => {
+      if (k === 'sms_draft_id' || k === 'sms_to' || k === 'sms_from') return false;
+      if (v == null) return false;
+      const typeKey = k.endsWith('_id') ? k.slice(0, -3) : null;
+      if (!typeKey) return k === 'app_id';
+      const er = ctx.entityRefs?.[typeKey] || ctx.entityRefs?.[`${typeKey}s`];
+      return er?.source === 'client' || er?.tool === 'global_search';
+    })
+    : [];
+
+  if (
+    entries.length === 0
+    && clientSeededEntries.length === 0
+    && !hasRecent
+    && !hasRefs
+    && !ctx.lastAgent
+    && !ctx.lastSearch
+    && !focusBlock
+    && !ctx.entities.sms_draft_id
+  ) {
     return '';
   }
 
   const parts = [];
   if (focusBlock) parts.push(focusBlock);
-  // P4: do not inject Known IDs / Use customer_id= when scrape is off — transcript is memory.
-  if (scrapeIds && entries.length > 0) {
-    const entityStr = entries.map(([k, v]) => `${k}=${v}`).join(', ');
+  // P4: do not inject tool-scraped Known IDs when scrape is off — transcript is memory.
+  // Client # picks are an exception (authoritative IDs from the UI).
+  const idEntries = scrapeIds ? entries : clientSeededEntries;
+  if (idEntries.length > 0) {
+    const entityStr = idEntries.map(([k, v]) => `${k}=${v}`).join(', ');
     parts.push(`Known IDs: ${entityStr}`);
   }
   if (hasRefs) {
     const refs = Object.entries(ctx.entityRefs)
-      .map(([k, v]) => `${k}(${v?.label || 'unknown'}):${v?.id ?? 'unknown'}`)
+      .map(([k, v]) => {
+        const app = v?.appId != null ? ` appId=${v.appId}` : '';
+        return `${k}(${v?.label || 'unknown'}):${v?.id ?? 'unknown'}${app}`;
+      })
       .join(', ');
     parts.push(`Known entities: ${refs}`);
   }
@@ -493,8 +625,11 @@ export async function buildContextPrompt(ref, opts = {}) {
       parts.push(`Recent ${latest.entityType} results: ${s}`);
     }
   }
-  if (scrapeIds && ctx.entities.customer_id != null) {
-    parts.push(`Use customer_id=${ctx.entities.customer_id} for list_estimates, list_invoices, list_credit_memos, list_bills, or list_purchase_orders when the user refers to "his/their/its" or the previously discussed customer`);
+  const customerIdForHint = ctx.entities.customer_id;
+  const customerFromClient = ctx.entityRefs?.customer?.source === 'client'
+    || ctx.entityRefs?.customer?.tool === 'global_search';
+  if ((scrapeIds || customerFromClient) && customerIdForHint != null) {
+    parts.push(`Use customer_id=${customerIdForHint} for list_estimates, list_invoices, list_credit_memos, list_bills, or list_purchase_orders when the user refers to "his/their/its" or the previously discussed customer`);
   }
   if (ctx.entities.sms_draft_id) {
     parts.push(

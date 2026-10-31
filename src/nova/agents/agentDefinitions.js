@@ -554,9 +554,9 @@ BUSINESS INSIGHTS: Call out trends, goal gaps, anomalies, and product/line-item 
 
 TOOL USAGE (match Reports hub cards):
 - get_report_filters first when needed.
-- Estimates: generate_estimate_report / export_estimate_report_csv / get_estimate_line_items.
-- Invoices: generate_invoice_report / export_invoice_report_csv / get_invoice_line_items.
-- Products: generate_product_report / export_product_report_csv / get_product_selling_history.
+- Estimates: generate_estimate_report / get_estimate_line_items.
+- Invoices: generate_invoice_report / get_invoice_line_items.
+- Products: generate_product_report / get_product_selling_history.
 - Customer Buying: generate_customer_buying_*_report tools (unique products, monthly, price lookup, product details).
 - Reconcile: generate_reconcile_report (read-only).
 - Customer Address: generate_customer_address_report (taxable + tax rate filters).

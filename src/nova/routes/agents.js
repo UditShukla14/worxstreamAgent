@@ -289,7 +289,7 @@ router.post('/stream', async (req, res) => {
   const requestId = randomUUID();
 
   try {
-    const { message, conversation_id } = req.body || {};
+    const { message, conversation_id, entity_refs } = req.body || {};
     if (!message) {
       sse({ type: 'error', error: 'message is required' });
       return res.end();
@@ -319,6 +319,7 @@ router.post('/stream', async (req, res) => {
         streamFormatter: true,
         formatOutput: false,
         sseStreamRes: res,
+        entityRefs: entity_refs,
       },
     });
 
@@ -341,7 +342,7 @@ router.post('/route', async (req, res) => {
   try {
     const tenant = requireConversationTenant(req, res);
     if (!tenant) return;
-    const { message, conversation_id } = req.body || {};
+    const { message, conversation_id, entity_refs } = req.body || {};
     if (!message) {
       return res.status(400).json({ success: false, error: 'message is required' });
     }
@@ -351,7 +352,11 @@ router.post('/route', async (req, res) => {
       company_id: tenant.company_id,
       user_id: tenant.user_id,
       conversation_id,
-      options: { streamFormatter: false, formatOutput: false },
+      options: {
+        streamFormatter: false,
+        formatOutput: false,
+        entityRefs: entity_refs,
+      },
     });
 
     res.json({
@@ -373,7 +378,7 @@ router.post('/multi', async (req, res) => {
   try {
     const tenant = requireConversationTenant(req, res);
     if (!tenant) return;
-    const { message, agents, mode = 'parallel', conversation_id } = req.body || {};
+    const { message, agents, mode = 'parallel', conversation_id, entity_refs } = req.body || {};
 
     if (!message) {
       return res.status(400).json({ success: false, error: 'message is required' });
@@ -401,6 +406,7 @@ router.post('/multi', async (req, res) => {
         streamFormatter: false,
         formatOutput: false,
         skipClarification: false,
+        entityRefs: entity_refs,
       },
     });
 

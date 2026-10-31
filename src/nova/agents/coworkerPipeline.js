@@ -32,6 +32,8 @@ import {
   buildContextPrompt,
   updateContext,
   applyClarificationPick,
+  applyClientEntityRefs,
+  formatReferencedRecordsBlock,
   getContext,
   clearContext,
   saveContext,
@@ -399,11 +401,13 @@ export async function runCoworkerTurn({
   sse({ type: 'conversation_id', conversation_id: convId });
   sse({ type: 'status', label: STATUS_LABEL_THINKING });
 
-  // Pre-work runs in parallel: Mongo history, Redis context (after clarification pick),
-  // and user preferences are independent of each other.
-  const [convState, redisCtx, prefsBlock] = await Promise.all([
+  // Pre-work runs in parallel: Mongo history, Redis context (after clarification
+  // pick + client # entity refs), and user preferences.
+  const [convState, redisBundle, prefsBlock] = await Promise.all([
     loadConversationState(company_id, user_id, convId),
-    applyClarificationPick(ctxRef, message).then(() => getContext(ctxRef)),
+    applyClarificationPick(ctxRef, message)
+      .then(() => applyClientEntityRefs(ctxRef, options.entityRefs))
+      .then((appliedRefs) => getContext(ctxRef).then((ctx) => ({ ctx, appliedRefs }))),
     UserPreferences.findOne({ company_id, user_id })
       .lean()
       .then((doc) =>
@@ -413,6 +417,9 @@ export async function runCoworkerTurn({
       )
       .catch(() => ''),
   ]);
+
+  const redisCtx = redisBundle.ctx;
+  const referencedBlock = formatReferencedRecordsBlock(redisBundle.appliedRefs || []);
 
   // Scheduled ticks deliberately start a new agent turn every time. Keep the
   // persisted conversation for audit/UI purposes, but never feed a previous
@@ -435,7 +442,13 @@ export async function runCoworkerTurn({
     : await buildContextPrompt(ctxRef, { lastAssistantSnippet });
   const dateContext = getCurrentDateTimeContext();
 
-  const contextPrompt = [dateContext, summaryBlock, prefsBlock, baseContext].filter(Boolean).join('\n\n');
+  const contextPrompt = [
+    dateContext,
+    summaryBlock,
+    prefsBlock,
+    referencedBlock,
+    baseContext,
+  ].filter(Boolean).join('\n\n');
 
   const clarification = options.freshConversation === true
     ? null

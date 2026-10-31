@@ -10,7 +10,7 @@ await import('../../src/mcp/tools/index.js'); // side effect: registers all tool
 const { getToolIndex } = await import('../../src/mcp/toolIndex.js');
 const { AGENT_DEFINITIONS } = await import('../../src/nova/agents/agentDefinitions.js');
 const { GOVERNANCE_AGENT_DEFINITIONS } = await import('../../src/governance/agents/definitions.js');
-const { ENTITY_LOOKUPS } = await import('../../src/mcp/tools/lookup.js');
+const { ENTITY_LOOKUPS, GLOBAL_SEARCH_OBJECT_NAMES } = await import('../../src/mcp/tools/lookup.js');
 
 const index = getToolIndex();
 
@@ -145,5 +145,19 @@ describe('agent tool domains', () => {
         `resolve_entity dispatch for "${entityType}" points to unregistered tool "${tool}"`,
       );
     }
+  });
+
+  it('global_search object_name map keys are resolve_entity entity types', () => {
+    for (const entityType of Object.keys(GLOBAL_SEARCH_OBJECT_NAMES)) {
+      assert.ok(
+        ENTITY_LOOKUPS[entityType],
+        `GLOBAL_SEARCH_OBJECT_NAMES key "${entityType}" is not in ENTITY_LOOKUPS`,
+      );
+    }
+  });
+
+  it('global_search is a registered tool (resolve_entity primary path)', () => {
+    const registered = new Set(index.tools.map((t) => t.name));
+    assert.ok(registered.has('global_search'));
   });
 });

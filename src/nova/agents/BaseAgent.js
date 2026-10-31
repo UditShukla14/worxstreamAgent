@@ -81,7 +81,7 @@ export class BaseAgent {
       ? `${soul}\n\n${withShared}`
       : withShared;
     const resumeNote = '\n\nIf [Session focus] shows a failed last action, attempt recovery (correct IDs/parameters) before asking the user to repeat.';
-    const lookupNote = '\n\nID RESOLUTION: NEVER ask the user for an internal ID (user, customer, contact, product, vendor, tax, job, project...). When the user gives a name, call the resolve_entity tool (entity_type + the name) — or a domain lookup tool you have — to get the ID yourself. Only ask the user when the lookup finds nothing or returns multiple ambiguous matches (then show the matching names, never raw IDs).';
+    const lookupNote = '\n\nID RESOLUTION: NEVER ask the user for an internal ID (user, customer, contact, product, vendor, tax, job, project...). Prefer IDs already in [Referenced records] / Known entities / Known IDs — do NOT re-call resolve_entity for those. When the user gives a name without a referenced record, call resolve_entity (entity_type + the name) — or a domain lookup tool you have — to get the ID yourself. Only ask the user when the lookup finds nothing or returns multiple ambiguous matches (then show the matching names, never raw IDs).';
     // Domain playbooks only for specialists; orchestrator discovers via tools + shared rules.
     this.systemPrompt = this.orchestrator
       ? base + resumeNote + lookupNote
@@ -466,29 +466,6 @@ export class BaseAgent {
                 error:
                   'Do not call send_sms in the same turn as draft_sms. '
                   + 'Show To/From/Body to the user and wait for their next message confirming.',
-              };
-              toolsUsed.push({ name: block.name, input: normalizedInput, success: false, error: blocked.error });
-              toolResultPayloads.push(blocked);
-              onEvent({ type: 'tool_result', tool: block.name, success: false });
-              toolResults.push({
-                type: 'tool_result',
-                tool_use_id: block.id,
-                content: JSON.stringify(blocked),
-              });
-              continue;
-            }
-
-            // Headless schedule ticks (conversation_id schedule:…) can't use binary CSV/XLSX.
-            if (
-              String(context._conversationId || '').startsWith('schedule:')
-              && /^export_.*_(csv|xlsx)$/i.test(String(block.name || ''))
-            ) {
-              const blocked = {
-                success: false,
-                error:
-                  `Scheduled runs cannot use ${block.name}. `
-                  + 'Use generate_invoice_report (or the matching generate_*_report) with from_date/to_date '
-                  + 'and read meta.totals / rows for real numbers.',
               };
               toolsUsed.push({ name: block.name, input: normalizedInput, success: false, error: blocked.error });
               toolResultPayloads.push(blocked);

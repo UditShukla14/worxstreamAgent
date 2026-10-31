@@ -158,7 +158,7 @@ export function inferCapabilitiesFromToolName(toolName) {
  
   // Domain/entity heuristics
   // Handle special cases first (tools that end with _report should go to reports domain)
-  if (lc.includes('_report') || lc.includes('goal') || lc.startsWith('get_report') || lc.startsWith('export_') && lc.includes('report')) {
+  if (lc.includes('_report') || lc.includes('goal') || lc.startsWith('get_report')) {
     caps.domain = 'reports';
     caps.entity = 'reports';
   } else {
