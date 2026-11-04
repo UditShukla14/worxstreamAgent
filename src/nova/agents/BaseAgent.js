@@ -10,6 +10,7 @@
 import { config } from '../../config/index.js';
 import { createMessage } from '../../llm/anthropicClient.js';
 import { usageMetaFromContext } from '../../analytics/usageMeta.js';
+import { getModelForTier, inferTaskTier } from '../../analytics/taskModels.js';
 import { getAnthropicTools, getAnthropicToolsForToolSearch, executeMcpTool } from '../../mcp/server.js';
 import { rex } from './AgentTracker.js';
 import { getSoulSystemPrompt } from './soul.js';
@@ -94,6 +95,20 @@ export class BaseAgent {
       phase: context._usagePhase || 'agent',
       agentKey: this.agentKey,
     });
+  }
+
+  /**
+   * Prefer explicit context.model, else company/user task-tier map (ALS).
+   * @param {object} [context]
+   */
+  _resolveModel(context = {}) {
+    if (context.model) return String(context.model);
+    const tier = inferTaskTier({
+      agentKey: this.agentKey,
+      phase: context._usagePhase || 'agent',
+      taskTier: context.taskTier,
+    });
+    return getModelForTier(tier);
   }
 
   /**
@@ -186,7 +201,7 @@ export class BaseAgent {
       iterations++;
 
       const params = {
-        model: config.anthropic.model,
+        model: this._resolveModel(context),
         max_tokens: config.anthropic.maxTokens?.agent ?? 4096,
         system: this.systemPrompt,
         messages,
@@ -332,7 +347,7 @@ export class BaseAgent {
         totalRounds++;
 
         const params = {
-          model: config.anthropic.model,
+          model: this._resolveModel(context),
           max_tokens: config.anthropic.maxTokens?.agent ?? 4096,
           system: this.systemPrompt,
           messages,

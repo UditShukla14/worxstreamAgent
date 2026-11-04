@@ -5,7 +5,15 @@
 
 import { AsyncLocalStorage } from 'async_hooks';
 
-/** @typedef {{ companyId?: string, userId?: string, apiToken?: string, freshData?: boolean }} RequestContextStore */
+/**
+ * @typedef {{
+ *   companyId?: string,
+ *   userId?: string,
+ *   apiToken?: string,
+ *   freshData?: boolean,
+ *   taskModels?: { daily?: string, medium?: string, hard?: string, advanced?: string },
+ * }} RequestContextStore
+ */
 
 const storage = new AsyncLocalStorage();
 
@@ -26,6 +34,9 @@ export function setRequestContext(partial) {
   if (partial.companyId != null) store.companyId = String(partial.companyId).trim();
   if (partial.userId != null) store.userId = String(partial.userId).trim();
   if (partial.apiToken != null) store.apiToken = String(partial.apiToken).trim();
+  if (partial.taskModels != null && typeof partial.taskModels === 'object') {
+    store.taskModels = { ...partial.taskModels };
+  }
 }
 
 function normalizeStore(ctx) {
@@ -34,6 +45,9 @@ function normalizeStore(ctx) {
     userId: ctx.userId != null ? String(ctx.userId).trim() : undefined,
     apiToken: ctx.apiToken != null ? String(ctx.apiToken).trim() : undefined,
     freshData: ctx.freshData === true,
+    taskModels: ctx.taskModels && typeof ctx.taskModels === 'object'
+      ? { ...ctx.taskModels }
+      : undefined,
   };
 }
 

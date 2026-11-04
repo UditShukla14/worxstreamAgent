@@ -4,6 +4,7 @@
 
 import { config } from '../config/index.js';
 import { createMessage } from '../llm/anthropicClient.js';
+import { getModelForTier } from '../analytics/taskModels.js';
 import { normalizeStoredMessages, messageContentToString } from './conversationHistory.js';
 
 /**
@@ -88,7 +89,7 @@ export async function maybeRefreshSummary({
   const focus = formatSessionHintsForSummary(sessionHints || {});
 
   const response = await createMessage({
-    model: config.anthropic.fastModel,
+    model: getModelForTier('daily'),
     max_tokens: 512,
     system:
       'Compress this Worxstream coworker conversation into at most 400 tokens.\n'

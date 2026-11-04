@@ -8,6 +8,7 @@
 
 import { config } from '../../config/index.js';
 import { createMessage } from '../../llm/anthropicClient.js';
+import { getModelForTier } from '../../analytics/taskModels.js';
 import { BaseAgent } from './BaseAgent.js';
 import { AGENT_DEFINITIONS, getAgentKeys, getAgentDescriptionsForRouter } from './agentDefinitions.js';
 import { buildOrchestratorMessages, logContextUsage } from '../../utils/conversationHistory.js';
@@ -88,7 +89,7 @@ export async function resolveAgentKeys(message, conversationContext = '', priorM
   logContextUsage('Router context', messages, system);
 
   const routeResponse = await createMessage({
-    model: config.anthropic.fastModel,
+    model: getModelForTier('daily'),
     max_tokens: config.anthropic.maxTokens?.router ?? 100,
     system,
     messages,

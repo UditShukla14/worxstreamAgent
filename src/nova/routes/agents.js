@@ -39,10 +39,32 @@ import {
   computeFlowNextRunAt,
   isFlowRecipe,
 } from '../../governance/schedules/flowEngine.js';
+import { assertNovaCredits } from '../../analytics/novaWallet.js';
+import { listModelCatalogForApi } from '../../analytics/modelPricing.js';
+import {
+  ACTIVE_TASK_TIERS,
+  DEFAULT_TASK_MODELS,
+  loadTaskModels,
+  sanitizeModelTiers,
+  TASK_TIERS,
+} from '../../analytics/taskModels.js';
 
 const router = Router();
 
 router.use(requireWorxstreamAuth);
+
+/**
+ * Block LLM turns when the company Nova wallet is exhausted.
+ * @param {string} companyId
+ * @param {import('express').Response} res
+ * @returns {Promise<boolean>} true if response was sent (caller must return)
+ */
+async function rejectIfCreditsExhausted(companyId, res) {
+  const gate = await assertNovaCredits(companyId);
+  if (gate.ok) return false;
+  res.status(gate.status).json(gate.body);
+  return true;
+}
 
 /**
  * Conversation scoping from UI login (session) or per-request companyId/userId — no .env defaults.
@@ -104,6 +126,38 @@ router.get('/preferences', async (req, res) => {
   res.json({ success: true, preferences: doc?.preferences || {} });
 });
 
+/** Model catalog + resolved daily/medium/hard/advanced selections. */
+router.get('/models', async (req, res) => {
+  try {
+    const tenant = requireConversationTenant(req, res);
+    if (!tenant) return;
+    const resolved = await loadTaskModels(tenant.company_id, tenant.user_id);
+    const doc = await UserPreferences.findOne({
+      company_id: tenant.company_id,
+      user_id: tenant.user_id,
+    }).lean();
+    res.json({
+      success: true,
+      data: {
+        catalog: listModelCatalogForApi(),
+        tiers: ACTIVE_TASK_TIERS,
+        all_tiers: TASK_TIERS,
+        defaults: {
+          daily: DEFAULT_TASK_MODELS.daily,
+          medium: DEFAULT_TASK_MODELS.medium,
+        },
+        resolved: {
+          daily: resolved.daily,
+          medium: resolved.medium,
+        },
+        user_model_tiers: sanitizeModelTiers(doc?.preferences?.model_tiers),
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 router.patch('/preferences', async (req, res) => {
   const tenant = requireConversationTenant(req, res);
   if (!tenant) return;
@@ -111,12 +165,25 @@ router.patch('/preferences', async (req, res) => {
   if (!preferences || typeof preferences !== 'object') {
     return res.status(400).json({ success: false, error: 'preferences object is required' });
   }
+  const existing = await UserPreferences.findOne({
+    company_id: tenant.company_id,
+    user_id: tenant.user_id,
+  }).lean();
+  const merged = {
+    ...(existing?.preferences && typeof existing.preferences === 'object'
+      ? existing.preferences
+      : {}),
+    ...preferences,
+  };
+  if (preferences.model_tiers !== undefined) {
+    merged.model_tiers = sanitizeModelTiers(preferences.model_tiers);
+  }
   const doc = await UserPreferences.findOneAndUpdate(
     { company_id: tenant.company_id, user_id: tenant.user_id },
     {
       company_id: tenant.company_id,
       user_id: tenant.user_id,
-      preferences,
+      preferences: merged,
       updated_at: new Date(),
     },
     { upsert: true, new: true, setDefaultsOnInsert: true },
@@ -257,6 +324,7 @@ router.post('/confirm', async (req, res) => {
   try {
     const tenant = requireConversationTenant(req, res);
     if (!tenant) return;
+    if (await rejectIfCreditsExhausted(tenant.company_id, res)) return;
     const { conversation_id, confirmationId, approved } = req.body || {};
     if (!conversation_id || !confirmationId) {
       return res.status(400).json({
@@ -280,19 +348,12 @@ router.post('/confirm', async (req, res) => {
 
 // ── POST /api/agents/stream — primary SSE endpoint ───────────────────
 router.post('/stream', async (req, res) => {
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders();
-
-  const sse = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
   const requestId = randomUUID();
 
   try {
     const { message, conversation_id, entity_refs } = req.body || {};
     if (!message) {
-      sse({ type: 'error', error: 'message is required' });
-      return res.end();
+      return res.status(400).json({ success: false, error: 'message is required' });
     }
 
     let tenant;
@@ -300,11 +361,23 @@ router.post('/stream', async (req, res) => {
       tenant = resolveConversationTenant(req);
     } catch (error) {
       if (error.statusCode === 400) {
-        sse({ type: 'error', error: error.message });
-        return res.end();
+        return res.status(400).json({ success: false, error: error.message });
       }
       throw error;
     }
+
+    if (await rejectIfCreditsExhausted(tenant.company_id, res)) return;
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    const sse = (data) => {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+      if (typeof res.flush === 'function') res.flush();
+    };
 
     rex.startRequest(requestId, message);
 
@@ -331,8 +404,18 @@ router.post('/stream', async (req, res) => {
     res.end();
   } catch (error) {
     console.error('❌ Agent stream error:', error);
-    sse({ type: 'error', error: error.message || 'Internal server error' });
     rex.endRequest(requestId, error);
+    if (!res.headersSent) {
+      return res.status(500).json({
+        success: false,
+        error: error.message || 'Internal server error',
+      });
+    }
+    try {
+      res.write(`data: ${JSON.stringify({ type: 'error', error: error.message || 'Internal server error' })}\n\n`);
+    } catch {
+      /* ignore write after close */
+    }
     res.end();
   }
 });
@@ -342,6 +425,7 @@ router.post('/route', async (req, res) => {
   try {
     const tenant = requireConversationTenant(req, res);
     if (!tenant) return;
+    if (await rejectIfCreditsExhausted(tenant.company_id, res)) return;
     const { message, conversation_id, entity_refs } = req.body || {};
     if (!message) {
       return res.status(400).json({ success: false, error: 'message is required' });
@@ -378,6 +462,7 @@ router.post('/multi', async (req, res) => {
   try {
     const tenant = requireConversationTenant(req, res);
     if (!tenant) return;
+    if (await rejectIfCreditsExhausted(tenant.company_id, res)) return;
     const { message, agents, mode = 'parallel', conversation_id, entity_refs } = req.body || {};
 
     if (!message) {
@@ -540,6 +625,7 @@ router.post('/schedules/:id/run', async (req, res) => {
   try {
     const tenant = requireConversationTenant(req, res);
     if (!tenant) return;
+    if (await rejectIfCreditsExhausted(tenant.company_id, res)) return;
     const doc = await ScheduleDefinition.findOne(scheduleActiveQuery(
       scheduleOwnerFilter(tenant, { _id: req.params.id }),
     ));
@@ -576,12 +662,13 @@ router.delete('/schedules/:id', async (req, res) => {
 router.post('/:agentKey', async (req, res) => {
   try {
     const { agentKey } = req.params;
-    if (['stream', 'route', 'multi', 'confirm', 'conversations', 'preferences', 'schedules'].includes(agentKey)) {
+    if (['stream', 'route', 'multi', 'confirm', 'conversations', 'preferences', 'models', 'schedules'].includes(agentKey)) {
       return res.status(404).json({ success: false, error: 'Not found' });
     }
 
     const tenant = requireConversationTenant(req, res);
     if (!tenant) return;
+    if (await rejectIfCreditsExhausted(tenant.company_id, res)) return;
     const { message, conversation_id } = req.body || {};
     if (!message) {
       return res.status(400).json({ success: false, error: 'message is required' });

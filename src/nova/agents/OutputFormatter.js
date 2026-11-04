@@ -11,6 +11,7 @@
 
 import { config } from '../../config/index.js';
 import { createMessage, streamMessage } from '../../llm/anthropicClient.js';
+import { getModelForTier } from '../../analytics/taskModels.js';
 import {
   createDeltaCoalesceBuffer,
   resolveFormatterMaxTokens,
@@ -141,7 +142,7 @@ export async function formatOutput(userMessage, rawOutput, usageMeta = {}) {
   let full = '';
   for (let pass = 0; pass < FORMATTER_CONTINUE_LIMIT; pass++) {
     const response = await createMessage({
-      model: config.anthropic.fastModel,
+      model: getModelForTier('daily'),
       max_tokens: maxTokens,
       system: FORMATTER_PROMPT,
       messages,
@@ -199,7 +200,7 @@ export async function formatOutputStreaming(userMessage, rawOutput, res, usageMe
   for (let pass = 0; pass < FORMATTER_CONTINUE_LIMIT; pass++) {
     const { text, message } = await streamMessage(
       {
-        model: config.anthropic.fastModel,
+        model: getModelForTier('daily'),
         max_tokens: maxTokens,
         system: FORMATTER_PROMPT,
         messages,

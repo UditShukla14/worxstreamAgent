@@ -4,6 +4,7 @@
 
 import ScheduleDefinition from '../models/ScheduleDefinition.js';
 import { executeScheduleDefinition } from './engine.js';
+import { assertNovaCredits, NOVA_CREDIT_EXHAUSTED } from '../../analytics/novaWallet.js';
 
 const TICK_MS = 60_000;
 let timer = null;
@@ -22,6 +23,15 @@ async function tickScheduleScheduler() {
 
     for (const definition of due) {
       try {
+        const gate = await assertNovaCredits(definition.company_id);
+        if (!gate.ok) {
+          console.warn(
+            `⚠️  Scribe skipped (Nova credits exhausted): ${definition.name} (company ${definition.company_id}) [${NOVA_CREDIT_EXHAUSTED}]`,
+          );
+          definition.next_run_at = new Date(Date.now() + 60 * 60 * 1000);
+          await definition.save().catch(() => {});
+          continue;
+        }
         await executeScheduleDefinition(definition, { trigger: 'scheduled' });
         const kind = definition.kind === 'flow_recipe' ? 'flow' : 'report';
         console.log(

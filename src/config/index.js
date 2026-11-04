@@ -129,8 +129,8 @@ export const config = {
       conversationShort: parseInt(process.env.ANTHROPIC_MAX_TOKENS_CONVERSATION_SHORT || '1024', 10),
     },
     /**
-     * USD per 1M tokens — defaults match Claude Sonnet list prices.
-     * Override when WorxStream markup / new model pricing is decided.
+     * Fallback Sonnet list rates when a caller still reads flat `pricing`.
+     * Billing uses per-model rates via `resolveModelRates` in analytics/modelPricing.js.
      */
     pricing: {
       inputPerMillion: parseFloat(process.env.ANTHROPIC_PRICE_INPUT_PER_MTOK || '3'),

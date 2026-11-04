@@ -6,6 +6,8 @@
 import { config } from '../config/index.js';
 import { getRequestContext } from '../request/requestContext.js';
 import { normalizeUsageWithCost } from './usageNormalize.js';
+import { resolveModelRates } from './modelPricing.js';
+import { incrementWalletSpent } from './novaWallet.js';
 import LlmUsageEvent, { LLM_USAGE_PHASES } from './models/LlmUsageEvent.js';
 import LlmUsageDaily from './models/LlmUsageDaily.js';
 
@@ -50,11 +52,14 @@ export async function recordUsage(meta = {}, usage = null, model) {
 
     const phase = LLM_USAGE_PHASES.includes(meta.phase) ? meta.phase : 'agent';
     const agentKey = resolveBillingAgentKey({ ...meta, phase });
-    const rates = config.anthropic.pricing;
-    const billed = normalizeUsageWithCost(usage, rates);
     const now = new Date();
     const date = utcDateKey(now);
     const modelId = String(model || meta.model || config.anthropic.model);
+    const inputHint = Math.max(0, Number(usage?.input_tokens) || 0)
+      + Math.max(0, Number(usage?.cache_creation_input_tokens) || 0)
+      + Math.max(0, Number(usage?.cache_read_input_tokens) || 0);
+    const rates = resolveModelRates(modelId, { inputTokens: inputHint });
+    const billed = normalizeUsageWithCost(usage, rates);
 
     const eventDoc = {
       company_id: companyId,
@@ -69,6 +74,12 @@ export async function recordUsage(meta = {}, usage = null, model) {
     };
 
     await LlmUsageEvent.create(eventDoc);
+
+    if (billed.cost_usd > 0) {
+      await incrementWalletSpent(companyId, billed.cost_usd).catch((err) => {
+        console.error('⚠️  incrementWalletSpent failed:', err?.message || err);
+      });
+    }
 
     const inc = {
       input_tokens: billed.input_tokens,
