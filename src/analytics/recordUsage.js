@@ -1,15 +1,21 @@
 /**
  * Persist Anthropic usage for billing analytics (fire-and-forget).
- * One event per API call; daily rollups by company, user, agent, and model.
+ * One immutable ledger event per API call (idempotent on the Anthropic message id);
+ * daily rollups by company, user, agent, and model are derived from it.
+ *
+ * Money rules (see costing.js): provider cost and billable amount are stored as
+ * integer micro-USD with the markup rate that produced them. The company wallet is
+ * debited by the BILLABLE amount, once per event.
  */
 
-import { config } from '../config/index.js';
 import { getRequestContext } from '../request/requestContext.js';
-import { normalizeUsageWithCost } from './usageNormalize.js';
-import { resolveModelRates } from './modelPricing.js';
-import { incrementWalletSpent } from './novaWallet.js';
+import { config } from '../config/index.js';
+import { computeEventCost } from './costing.js';
+import { incrementWalletSpent, resolveMarkupRate } from './novaWallet.js';
 import LlmUsageEvent, { LLM_USAGE_PHASES } from './models/LlmUsageEvent.js';
 import LlmUsageDaily from './models/LlmUsageDaily.js';
+
+export const UNATTRIBUTED = '_unattributed';
 
 /**
  * @param {Date} [d]
@@ -31,23 +37,32 @@ export function resolveBillingAgentKey(meta = {}) {
   return phase || 'unknown';
 }
 
+const warnedPricing = new Set();
+function warnEstimatedPricingOnce(modelId, reason) {
+  if (warnedPricing.has(modelId)) return;
+  warnedPricing.add(modelId);
+  console.warn(`⚠️  Pricing estimated for ${modelId}: ${reason}. Add/verify it in analytics/modelPricing.js.`);
+}
+
 /**
  * @param {object} meta
  * @param {import('./usageNormalize.js').AnthropicUsage|null|undefined} usage
- * @param {string} [model]
+ * @param {string} [model]            requested model id
+ * @param {string} [responseModel]    model the API reports having served
+ * @param {{ messageId?: string, partial?: boolean }} [extra]
  */
-export async function recordUsage(meta = {}, usage = null, model) {
+export async function recordUsage(meta = {}, usage = null, model, responseModel = '', extra = {}) {
   try {
     const als = getRequestContext() || {};
-    const companyId = String(
-      meta.companyId ?? meta.company_id ?? als.companyId ?? '',
-    ).trim();
-    const userId = String(
-      meta.userId ?? meta.user_id ?? als.userId ?? '',
-    ).trim();
+    let companyId = String(meta.companyId ?? meta.company_id ?? als.companyId ?? '').trim();
+    let userId = String(meta.userId ?? meta.user_id ?? als.userId ?? '').trim();
 
-    if (!companyId || !userId) {
-      return null;
+    // Never drop spend silently: unattributable calls are still recorded (no wallet debit).
+    const unattributed = !companyId || !userId;
+    if (unattributed) {
+      console.warn(`⚠️  LLM usage without company/user (phase=${meta.phase || '?'}) recorded as ${UNATTRIBUTED}`);
+      companyId = companyId || UNATTRIBUTED;
+      userId = userId || UNATTRIBUTED;
     }
 
     const phase = LLM_USAGE_PHASES.includes(meta.phase) ? meta.phase : 'agent';
@@ -55,11 +70,11 @@ export async function recordUsage(meta = {}, usage = null, model) {
     const now = new Date();
     const date = utcDateKey(now);
     const modelId = String(model || meta.model || config.anthropic.model);
-    const inputHint = Math.max(0, Number(usage?.input_tokens) || 0)
-      + Math.max(0, Number(usage?.cache_creation_input_tokens) || 0)
-      + Math.max(0, Number(usage?.cache_read_input_tokens) || 0);
-    const rates = resolveModelRates(modelId, { inputTokens: inputHint });
-    const billed = normalizeUsageWithCost(usage, rates);
+
+    const markupRate = unattributed ? 0 : await resolveMarkupRate(companyId);
+    const cost = computeEventCost({ model: modelId, responseModel, usage, markupRate });
+    if (cost.estimated) warnEstimatedPricingOnce(String(responseModel || modelId), cost.reason);
+    const billed = { ...cost.tokens, ...cost.components_usd };
 
     const eventDoc = {
       company_id: companyId,
@@ -69,16 +84,42 @@ export async function recordUsage(meta = {}, usage = null, model) {
       phase,
       agent_key: agentKey,
       model: modelId,
+      response_model: String(responseModel || ''),
+      rates_version: cost.pricingVersion,
+      cost_estimated: cost.estimated || extra.partial === true,
+      ...(extra.messageId ? { idempotency_key: String(extra.messageId) } : {}),
+      rates: cost.rates,
+      provider_cost_micros: cost.providerMicros,
+      billable_micros: cost.billableMicros,
+      markup_rate: cost.markupRate,
+      billable_usd: cost.billableUsd,
+      partial: extra.partial === true,
+      unattributed,
       ...billed,
+      cost_usd: cost.providerCostUsd,
       created_at: now,
     };
 
-    await LlmUsageEvent.create(eventDoc);
+    let created;
+    try {
+      created = await LlmUsageEvent.create(eventDoc);
+    } catch (err) {
+      if (err?.code === 11000) return null; // same Anthropic message already metered — never double-charge
+      throw err;
+    }
 
-    if (billed.cost_usd > 0) {
-      await incrementWalletSpent(companyId, billed.cost_usd).catch((err) => {
-        console.error('⚠️  incrementWalletSpent failed:', err?.message || err);
-      });
+    // Debit the wallet by the billable amount; flag the row so drift is detectable.
+    let walletApplied = true;
+    if (!unattributed && cost.billableUsd > 0) {
+      try {
+        await incrementWalletSpent(companyId, cost.billableUsd);
+      } catch (err) {
+        walletApplied = false;
+        console.error('⚠️  Wallet debit failed (shows as drift in reconcile):', err?.message || err);
+      }
+    }
+    if (walletApplied) {
+      await LlmUsageEvent.updateOne({ _id: created._id }, { $set: { wallet_applied: true } }).catch(() => {});
     }
 
     const inc = {
@@ -87,13 +128,16 @@ export async function recordUsage(meta = {}, usage = null, model) {
       cache_creation_input_tokens: billed.cache_creation_input_tokens,
       cache_read_input_tokens: billed.cache_read_input_tokens,
       total_tokens: billed.total_tokens,
-      cost_usd: billed.cost_usd,
+      cost_usd: cost.providerCostUsd,
+      billable_usd: cost.billableUsd,
+      provider_cost_micros: cost.providerMicros,
+      billable_micros: cost.billableMicros,
       call_count: 1,
     };
 
     /**
-     * Four rollup rows so dashboards can slice by company / user / agent / model
-     * without re-scanning the event ledger:
+     * Rollup rows so dashboards can slice by company / user / agent / model
+     * without re-scanning the event ledger (the ledger remains the source of truth):
      *   (user='', agent='', model='')           company total
      *   (user=uid, agent='', model='')          user total
      *   (user='', agent=key, model='')          company × agent
@@ -150,8 +194,8 @@ export async function recordUsage(meta = {}, usage = null, model) {
 /**
  * Fire-and-forget wrapper — never blocks the LLM response path.
  */
-export function recordUsageAsync(meta, usage, model) {
+export function recordUsageAsync(meta, usage, model, responseModel = '', extra = {}) {
   setImmediate(() => {
-    recordUsage(meta, usage, model).catch(() => {});
+    recordUsage(meta, usage, model, responseModel, extra).catch(() => {});
   });
 }

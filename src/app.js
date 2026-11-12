@@ -15,6 +15,8 @@ import { connectDB } from './db/connection.js';
 import { initializeAgents, getAgentKeys } from './nova/agents/index.js';
 import { initializeGovernanceAgents, getGovernanceAgentKeys, reconcileOrphanedRuns } from './governance/index.js';
 import { startScheduleScheduler } from './governance/schedules/scheduler.js';
+import { startModelLimitsRefresh } from './llm/modelLimits.js';
+import { migrateWalletMicros } from './analytics/novaWallet.js';
 
 // Import tools to trigger registration (must happen before agent init)
 import './mcp/tools/index.js';
@@ -76,6 +78,7 @@ app.use(express.json({
 app.use(requestContextMiddleware);
 
 // Serve static files from public directory
+app.use('/admin', express.static(join(__dirname, '../admin-dashboard/dist'), { index: 'index.html', maxAge: '1h' }));
 app.use(express.static(join(__dirname, '../public')));
 
 // Mount routes
@@ -91,10 +94,13 @@ async function startServer() {
     // Connect to MongoDB
     await connectDB();
 
+    await migrateWalletMicros().catch((e) => console.error('⚠️  wallet micros migration failed:', e?.message || e));
+
     // Initialize multi-agent system (after MCP tools are registered)
     initializeAgents();
     initializeGovernanceAgents();
     await reconcileOrphanedRuns();
+    startModelLimitsRefresh();
     startScheduleScheduler();
 
     app.listen(config.server.port, '0.0.0.0', () => {

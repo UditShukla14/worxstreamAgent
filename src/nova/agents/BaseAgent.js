@@ -9,6 +9,12 @@
 
 import { config } from '../../config/index.js';
 import { createMessage } from '../../llm/anthropicClient.js';
+import { withPromptCaching } from '../../llm/promptCache.js';
+import { buildToolResultBlock } from './toolResultContent.js';
+import { computeContextBudget, measuredInputTokens } from '../../utils/contextBudget.js';
+import { clearOldToolResults } from '../../utils/contextWindow.js';
+import { countMessagesTokens } from '../../utils/tokenCounter.js';
+import { computeEventCost } from '../../analytics/costing.js';
 import { usageMetaFromContext } from '../../analytics/usageMeta.js';
 import { getModelForTier, inferTaskTier } from '../../analytics/taskModels.js';
 import { getAnthropicTools, getAnthropicToolsForToolSearch, executeMcpTool } from '../../mcp/server.js';
@@ -34,6 +40,8 @@ const MAX_TOOL_ITERATIONS = Number.isFinite(config.agentRuntime?.maxToolIteratio
   ? config.agentRuntime.maxToolIterations
   : 15;
 
+const SPECIALIST_TOOL_SEARCH_MIN_TOOLS = 20;
+
 const CONTINUE_USER_NOTE =
   '[Continue] Resume the open task from where you left off. Do not restart from scratch. '
   + 'Call any remaining tools, then give the user answer.';
@@ -46,6 +54,29 @@ function isSmsChatConfirmMessage(message) {
   const t = String(message || '').trim();
   if (!t) return false;
   return /^(yes|yep|yeah|ok|okay|confirm|confirmed|send(\s+it)?|approve|approved|go\s+ahead|do\s+it|ship\s+it)[.!\s]*$/i.test(t);
+}
+
+/** Tools that must never be fanned out (writes, SMS draft/send ordering, Shopify rate-limit cooldown). */
+function isParallelSafeTool(name) {
+  const n = String(name || '');
+  if (isWriteTool(n)) return false;
+  if (n === 'draft_sms' || n === 'send_sms') return false;
+  if (n === 'run_shopify_analytics' || n === 'run_shopify_analytics_query') return false;
+  return true;
+}
+
+function canRunInParallel(toolUseBlocks) {
+  return toolUseBlocks.length > 1 && toolUseBlocks.every((b) => isParallelSafeTool(b.name));
+}
+
+/** @returns {Promise<Map<string, {result: object, durationMs: number}>>} keyed by tool_use id */
+async function runReadToolsInParallel(toolUseBlocks, getInput, execCtx) {
+  const entries = await Promise.all(toolUseBlocks.map(async (block) => {
+    const start = Date.now();
+    const result = await executeMcpTool(block.name, getInput(block), execCtx);
+    return [block.id, { result, durationMs: Date.now() - start }];
+  }));
+  return new Map(entries);
 }
 
 export class BaseAgent {
@@ -169,7 +200,9 @@ export class BaseAgent {
 
     const allowList = [...allowSet];
 
-    if (toolSearchOn) {
+    // Small domains load directly (a search round-trip costs more than it saves);
+    // large domains or explicit opt-in use on-demand tool search.
+    if (toolSearchOn && (this.useToolSearch === true || allowList.length > SPECIALIST_TOOL_SEARCH_MIN_TOOLS)) {
       return getAnthropicToolsForToolSearch(allowList);
     }
 
@@ -212,7 +245,7 @@ export class BaseAgent {
         params.tool_choice = { type: 'auto' };
       }
 
-      response = await createMessage(params, this._usageMeta(context));
+      response = await createMessage(withPromptCaching(params), this._usageMeta(context));
 
       if (response.usage) {
         totalInputTokens += response.usage.input_tokens || 0;
@@ -224,11 +257,16 @@ export class BaseAgent {
         messages.push({ role: 'assistant', content: response.content });
 
         const toolResults = [];
+        const execCtx = { agent: this.name, userMessage: message };
+        const prefetched = canRunInParallel(toolUseBlocks)
+          ? await runReadToolsInParallel(toolUseBlocks, (b) => b.input, execCtx)
+          : null;
         for (const block of toolUseBlocks) {
           console.log(`  🔧 [${this.name}] → ${block.name}`);
           const toolStart = Date.now();
-          const result = await executeMcpTool(block.name, block.input, { agent: this.name, userMessage: message });
-          const toolDuration = Date.now() - toolStart;
+          const pre = prefetched?.get(block.id);
+          const result = pre ? pre.result : await executeMcpTool(block.name, block.input, execCtx);
+          const toolDuration = pre ? pre.durationMs : Date.now() - toolStart;
           toolsUsed.push({
             name: block.name,
             input: block.input,
@@ -239,11 +277,7 @@ export class BaseAgent {
           if (context._rexRequestId) {
             rex.toolCall(context._rexRequestId, block.name, toolDuration, result.success);
           }
-          toolResults.push({
-            type: 'tool_result',
-            tool_use_id: block.id,
-            content: JSON.stringify(result),
-          });
+          toolResults.push(buildToolResultBlock(block.id, result));
         }
         messages.push({ role: 'user', content: toolResults });
         continue;
@@ -309,12 +343,34 @@ export class BaseAgent {
     let totalOutputTokens = 0;
     let draftedSmsThisRun = false;
     let lastRawText = '';
+    // Exact size of the most recent request (from response.usage) — drives in-loop compaction.
+    let lastCallInput = 0;
+    let lastCallUsage = null;
+    let lastCallModel = '';
+    let lastCallMessageCount = 0;
+    let contextClears = 0;
+    // Provider cost accumulated this turn - hard stop against runaway tool loops.
+    let turnCostUsd = 0;
+    let spendCapHit = false;
+    const turnCostCap = Number(config.billing?.maxTurnCostUsd) || 0;
 
     const finish = (extra = {}) => {
       const usage = {
         input_tokens: totalInputTokens,
         output_tokens: totalOutputTokens,
         total_tokens: totalInputTokens + totalOutputTokens,
+        last_call: lastCallUsage
+          ? {
+            model: lastCallModel,
+            input_tokens: lastCallInput,
+            cache_read_input_tokens: lastCallUsage.cache_read_input_tokens || 0,
+            cache_creation_input_tokens: lastCallUsage.cache_creation_input_tokens || 0,
+            output_tokens: lastCallUsage.output_tokens || 0,
+          }
+          : null,
+        context_clears: contextClears,
+        turn_cost_usd: Number(turnCostUsd.toFixed(6)),
+        spend_cap_hit: spendCapHit,
       };
       return {
         toolsUsed,
@@ -343,21 +399,49 @@ export class BaseAgent {
 
       let iterations = 0;
       while (iterations < maxIterPerSlice && totalRounds < maxTotalRounds) {
+        if (turnCostCap > 0 && turnCostUsd >= turnCostCap) {
+          spendCapHit = true;
+          console.log(`  [cost cap] ${this.name}: per-turn cost cap reached ($${turnCostUsd.toFixed(4)} >= $${turnCostCap})`);
+          break;
+        }
         iterations++;
         totalRounds++;
 
+        const model = this._resolveModel(context);
+        const maxOut = config.anthropic.maxTokens?.agent ?? 4096;
+
+        // Compaction: exact size of the last request + what was appended since.
+        let callMessages = messages;
+        if (lastCallInput > 0) {
+          const budget = computeContextBudget({ model, reservedOutput: maxOut });
+          const projected = lastCallInput + countMessagesTokens(messages.slice(lastCallMessageCount));
+          if (projected > budget.hard) {
+            const edited = clearOldToolResults(messages, { keepRecent: 2 });
+            if (edited.cleared > 0) {
+              callMessages = edited.messages;
+              contextClears += edited.cleared;
+              console.log(`  🧹 [${this.name}] context ${projected}/${budget.usable} tokens — cleared ${edited.cleared} old tool result(s)`);
+            }
+          }
+        }
+
         const params = {
-          model: this._resolveModel(context),
-          max_tokens: config.anthropic.maxTokens?.agent ?? 4096,
+          model,
+          max_tokens: maxOut,
           system: this.systemPrompt,
-          messages,
+          messages: callMessages,
         };
         if (tools.length > 0) {
           params.tools = tools;
           params.tool_choice = { type: 'auto' };
         }
 
-        const response = await createMessage(params, this._usageMeta(context));
+        const response = await createMessage(withPromptCaching(params), this._usageMeta(context));
+        lastCallModel = response.model || model;
+        lastCallUsage = response.usage || null;
+        lastCallInput = measuredInputTokens(response.usage);
+        turnCostUsd += computeEventCost({ model, responseModel: response.model, usage: response.usage, markupRate: 0 }).providerCostUsd;
+        lastCallMessageCount = messages.length; // everything pushed after this is new input next round
 
         if (response.usage) {
           totalInputTokens += response.usage.input_tokens || 0;
@@ -400,6 +484,18 @@ export class BaseAgent {
           messages.push({ role: 'assistant', content: assistantContent });
 
           const toolResults = [];
+          const normalizeInput = (b) => {
+            const raw = b.input || {};
+            return b.name?.startsWith('list_') ? normalizeListInput(raw) : raw;
+          };
+          // Independent read-only calls in one model turn run concurrently.
+          const prefetched = context._oneToolAtATime !== true && canRunInParallel(toolUseBlocks)
+            ? await runReadToolsInParallel(
+              toolUseBlocks,
+              normalizeInput,
+              { agent: this.name, userMessage: message },
+            )
+            : null;
           for (const block of toolUseBlocks) {
             console.log(`  🔧 [${this.name}] → ${block.name}`);
             const originalInput = block.input || {};
@@ -426,11 +522,7 @@ export class BaseAgent {
                 });
                 toolResultPayloads.push(cached);
                 onEvent({ type: 'tool_result', tool: block.name, success: cached.success !== false });
-                toolResults.push({
-                  type: 'tool_result',
-                  tool_use_id: block.id,
-                  content: JSON.stringify(cached),
-                });
+                toolResults.push(buildToolResultBlock(block.id, cached));
                 continue;
               }
             }
@@ -485,20 +577,19 @@ export class BaseAgent {
               toolsUsed.push({ name: block.name, input: normalizedInput, success: false, error: blocked.error });
               toolResultPayloads.push(blocked);
               onEvent({ type: 'tool_result', tool: block.name, success: false });
-              toolResults.push({
-                type: 'tool_result',
-                tool_use_id: block.id,
-                content: JSON.stringify(blocked),
-              });
+              toolResults.push(buildToolResultBlock(block.id, blocked));
               continue;
             }
 
             const toolStart = Date.now();
-            const result = await executeMcpTool(block.name, normalizedInput, {
-              agent: this.name,
-              userMessage: message,
-            });
-            const toolDuration = Date.now() - toolStart;
+            const pre = prefetched?.get(block.id);
+            const result = pre
+              ? pre.result
+              : await executeMcpTool(block.name, normalizedInput, {
+                agent: this.name,
+                userMessage: message,
+              });
+            const toolDuration = pre ? pre.durationMs : Date.now() - toolStart;
 
             if (block.name === 'draft_sms' && result?.success !== false) {
               draftedSmsThisRun = true;
@@ -518,11 +609,7 @@ export class BaseAgent {
               rex.toolCall(context._rexRequestId, block.name, toolDuration, result.success);
             }
 
-            toolResults.push({
-              type: 'tool_result',
-              tool_use_id: block.id,
-              content: JSON.stringify(result),
-            });
+            toolResults.push(buildToolResultBlock(block.id, result));
           }
           messages.push({ role: 'user', content: toolResults });
           continue;
@@ -542,6 +629,7 @@ export class BaseAgent {
         return finish({ rawText: lastRawText, continued: slice > 1 });
       }
 
+      if (spendCapHit) break;
       // Slice tool budget exhausted — try another slice if we still have work signal
       if (toolsUsed.length === 0) break;
       console.log(`⚠️ [${this.name}] slice ${slice} hit max iterations (${maxIterPerSlice})`);
@@ -549,7 +637,9 @@ export class BaseAgent {
 
     console.log(`⚠️ [${this.name}] continue budget exhausted (${maxSlices} slices)`);
     const fallbackText = lastRawText
-      || 'I hit the tool budget mid-task. Say **continue** and I will resume from here without starting over.';
+      || (spendCapHit
+        ? 'This request used a lot of compute, so I paused to stay within the per-request limit. Say **continue** and I will resume from here.'
+        : 'I hit the tool budget mid-task. Say **continue** and I will resume from here without starting over.');
     return finish({
       rawText: fallbackText,
       needsContinue: true,

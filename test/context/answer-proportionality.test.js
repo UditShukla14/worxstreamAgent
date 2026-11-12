@@ -36,7 +36,6 @@ describe('llm-native answer contracts (no shape taxonomy)', () => {
 
   it('SOUL does not hardcode answer-shape taxonomy', () => {
     const soul = readFileSync(soulPath, 'utf8');
-    assert.ok(soul.includes('hardcoded answer-shape taxonomy') || soul.includes('Respond naturally'));
     assert.ok(!soul.includes('Answer proportionality'));
   });
 

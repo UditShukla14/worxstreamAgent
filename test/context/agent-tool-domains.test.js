@@ -21,7 +21,7 @@ const AGENT_DOMAINS = new Set(
 );
 // 'reports' has its own agent handling; 'lookup' is the universal resolve_entity
 // bucket auto-included for every agent by BaseAgent.getTools().
-const KNOWN_DOMAINS = new Set([...AGENT_DOMAINS, 'reports', 'lookup', 'governance']);
+const KNOWN_DOMAINS = new Set([...AGENT_DOMAINS, 'reports', 'lookup', 'governance', 'scribe']);
 
 function bucketNames(domain) {
   return (index.byDomain[domain] || []).map((t) => t.name);

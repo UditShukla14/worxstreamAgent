@@ -26,6 +26,7 @@ function emptyTotals() {
     cache_read_input_tokens: 0,
     total_tokens: 0,
     cost_usd: 0,
+    billable_usd: 0,
     call_count: 0,
   };
 }
@@ -39,9 +40,11 @@ function sumRows(rows) {
     totals.cache_read_input_tokens += r.cache_read_input_tokens || 0;
     totals.total_tokens += r.total_tokens || 0;
     totals.cost_usd += r.cost_usd || 0;
+    totals.billable_usd += r.billable_usd ?? r.cost_usd ?? 0; // legacy rows had no markup
     totals.call_count += r.call_count || 0;
   }
   totals.cost_usd = Number(totals.cost_usd.toFixed(6));
+  totals.billable_usd = Number(totals.billable_usd.toFixed(6));
   return totals;
 }
 
@@ -191,6 +194,7 @@ export async function getCompanyUsage(companyId, { from, to, groupBy } = {}) {
       cache_read_input_tokens: r.cache_read_input_tokens,
       total_tokens: r.total_tokens,
       cost_usd: Number((r.cost_usd || 0).toFixed(6)),
+      billable_usd: Number((r.billable_usd ?? r.cost_usd ?? 0).toFixed(6)),
       call_count: r.call_count,
     }));
   }

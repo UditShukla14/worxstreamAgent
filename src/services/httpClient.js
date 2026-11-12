@@ -39,10 +39,13 @@ httpClient.interceptors.response.use(
     const message = error.response?.data?.message || error.message;
     const url = error.config?.url;
     console.error(`API Error [${status}] ${url}: ${message}`);
-    if (error.response?.data) {
+    if (error.response?.data && process.env.LOG_API_ERROR_BODIES === 'true') {
       console.error('Response data:', JSON.stringify(error.response.data, null, 2));
     }
-    return Promise.reject(new Error(message));
+    const wrapped = new Error(message);
+    wrapped.status = status;
+    wrapped.code = error.code;
+    return Promise.reject(wrapped);
   }
 );
 
@@ -61,6 +64,23 @@ export function normalizeFilter(filter) {
     }
   }
   return typeof filter === 'object' && filter !== null ? filter : {};
+}
+
+const RETRY_STATUSES = new Set([429, 502, 503, 504]);
+const MAX_RETRIES = 2;
+
+/** Retry transient failures (idempotent GETs only — never replay writes). */
+async function requestWithRetry(requestConfig, method) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await httpClient.request(requestConfig);
+    } catch (error) {
+      const status = error.status ?? error.response?.status;
+      const transient = RETRY_STATUSES.has(status) || ['ECONNRESET', 'ETIMEDOUT', 'ECONNABORTED'].includes(error.code);
+      if (method !== 'get' || !transient || attempt >= MAX_RETRIES) throw error;
+      await new Promise((r) => setTimeout(r, 300 * 2 ** attempt));
+    }
+  }
 }
 
 /**
@@ -88,7 +108,7 @@ export async function callWorxstreamAPI({ method, endpoint, data, params }) {
       requestConfig.params = params;
     }
 
-    const response = await httpClient.request(requestConfig);
+    const response = await requestWithRetry(requestConfig, lowerMethod);
 
     return {
       success: true,

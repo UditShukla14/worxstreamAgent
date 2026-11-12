@@ -5,11 +5,11 @@
 
 import { config } from '../config/index.js';
 import {
-  applySlidingWindow,
-  manageContextWindow,
-  truncateByTokens,
+  fitTurnsToBudget,
+  planContextWindow,
   getContextStats,
 } from './contextWindow.js';
+import { getModelForTier } from '../analytics/taskModels.js';
 import { sanitizeTranscriptMessageForApi } from '../nova/agents/agentTranscript.js';
 
 const VALID_ROLES = new Set(['user', 'assistant']);
@@ -120,12 +120,20 @@ export function normalizeStoredMessages(stored) {
  * @param {string} opts.currentUserContent - Full text for this turn's user message
  * @param {string} [opts.systemPrompt]
  * @param {object[]} [opts.tools]
+ * @param {string} [opts.extraText]  - per-turn context block sent alongside (counted against the budget)
+ * @param {string} [opts.model]      - model that will serve the call (default: medium tier)
+ * @param {number} [opts.reservedOutput] - max_tokens of the call
+ * @param {(plan: object) => void} [opts.onPlan] - receives the window plan (dropped turns, budget, tokens)
  */
 export function buildOrchestratorMessages({
   priorMessages = [],
   currentUserContent,
   systemPrompt = '',
   tools = [],
+  extraText = '',
+  model,
+  reservedOutput,
+  onPlan,
 }) {
   const prior = expandStoredMessagesForAgent(priorMessages);
   const current = String(currentUserContent || '').trim();
@@ -133,7 +141,16 @@ export function buildOrchestratorMessages({
     ? [...prior, { role: 'user', content: current }]
     : [...prior];
 
-  return manageContextWindow(messages, systemPrompt, tools);
+  const plan = planContextWindow({
+    messages,
+    systemPrompt,
+    tools,
+    extraText,
+    model: model || getModelForTier('medium'),
+    reservedOutput,
+  });
+  if (typeof onPlan === 'function') onPlan(plan);
+  return plan.messages;
 }
 
 /**
@@ -156,9 +173,9 @@ export function buildSpecialistHistory(priorMessages = [], opts = {}) {
   const maxTokens = config.contextWindow.specialistMaxTokens ?? 12000;
   const reserveTokens = config.contextWindow.specialistReserveTokens ?? 4000;
 
-  let messages = applySlidingWindow(prior, maxMessages);
   const available = Math.max(1000, maxTokens - reserveTokens);
-  messages = truncateByTokens(messages, available, 0);
+  // Whole user→assistant turns only: never starts on an orphan assistant message.
+  const { messages } = fitTurnsToBudget(prior, available, { maxMessages });
 
   return messages;
 }

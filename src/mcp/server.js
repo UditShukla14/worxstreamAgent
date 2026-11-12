@@ -41,6 +41,19 @@ export function registerTool(name, options, callback) {
  * Omits governance-only tools; registers coworker resources + prompts.
  * In-process agents still use the full toolRegistry via executeMcpTool.
  */
+/** MCP tool annotations derived from capability metadata (hints for clients/hosts). */
+export function mcpAnnotationsFor(name, capabilities = {}) {
+  const safety = capabilities?.safety;
+  const readOnly = safety === 'read';
+  const isDelete = capabilities?.action === 'delete' || /^delete_|_delete$|^scribe_delete/.test(name);
+  return {
+    readOnlyHint: readOnly,
+    ...(readOnly ? {} : { destructiveHint: isDelete }),
+    idempotentHint: readOnly,
+    openWorldHint: true,
+  };
+}
+
 export function createMcpServer() {
   const server = new McpServer({
     name: 'worxstream-agent',
@@ -55,6 +68,7 @@ export function createMcpServer() {
         title: tool.title,
         description: tool.description,
         inputSchema: tool.inputSchema,
+        annotations: mcpAnnotationsFor(name, tool.capabilities),
       },
       tool.callback
     );
@@ -114,7 +128,11 @@ export function getAnthropicToolsForToolSearch(filterToolNames = null) {
  */
 export async function executeMcpTool(toolName, toolInput, context = {}) {
   console.log(`\n🔧 Executing MCP tool: ${toolName}`);
-  console.log('📝 Input:', JSON.stringify(toolInput, null, 2));
+  if (process.env.LOG_TOOL_INPUTS === 'true') {
+    console.log('📝 Input:', JSON.stringify(toolInput, null, 2));
+  } else {
+    console.log('📝 Input keys:', Object.keys(toolInput || {}).join(', ') || '(none)');
+  }
 
   const enrichedContext = { ...context };
 

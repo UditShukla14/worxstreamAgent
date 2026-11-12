@@ -52,6 +52,8 @@ const conversationTurnSchema = new mongoose.Schema({
     plan: { type: mongoose.Schema.Types.Mixed, default: undefined },
     tools: { type: [mongoose.Schema.Types.Mixed], default: undefined },
     usage: { type: mongoose.Schema.Types.Mixed, default: undefined },
+    /** Wall-clock time of the whole turn (ms) — feeds latency p50/p95 in the admin dashboard. */
+    duration_ms: { type: Number, default: undefined },
     error: { type: String, default: undefined },
   },
 

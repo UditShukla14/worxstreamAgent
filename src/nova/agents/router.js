@@ -6,6 +6,7 @@
  *  2. callAgent(key, message)   — Caller specifies one agent directly
  */
 
+import { stripJsonCodeFence } from '../../utils/jsonFence.js';
 import { config } from '../../config/index.js';
 import { createMessage } from '../../llm/anthropicClient.js';
 import { getModelForTier } from '../../analytics/taskModels.js';
@@ -53,13 +54,6 @@ Decide from meaning and context (not keyword lists):
 /** Recent turns to include when classifying — enough for follow-up references. */
 const ROUTER_HISTORY_MESSAGES = 6;
 
-/** Haiku often wraps JSON in markdown fences — strip them before parsing. */
-function stripJsonCodeFence(text) {
-  const t = String(text || '').trim();
-  const m = t.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  return m ? m[1].trim() : t;
-}
-
 /**
  * Use the LLM router to determine which agent(s) should handle a message,
  * but DO NOT run them. Returns the resolved agent keys so the caller can
@@ -85,6 +79,8 @@ export async function resolveAgentKeys(message, conversationContext = '', priorM
     priorMessages: priorMessages.slice(-ROUTER_HISTORY_MESSAGES),
     currentUserContent: userContent,
     systemPrompt: system,
+    model: getModelForTier('daily'),
+    reservedOutput: config.anthropic.maxTokens?.router ?? 100,
   });
   logContextUsage('Router context', messages, system);
 

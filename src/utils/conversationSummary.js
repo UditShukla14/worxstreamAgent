@@ -5,7 +5,9 @@
 import { config } from '../config/index.js';
 import { createMessage } from '../llm/anthropicClient.js';
 import { getModelForTier } from '../analytics/taskModels.js';
-import { normalizeStoredMessages, messageContentToString } from './conversationHistory.js';
+import { normalizeStoredMessages, messageContentToString, expandStoredMessagesForAgent } from './conversationHistory.js';
+import { computeContextBudget } from './contextBudget.js';
+import { countMessagesTokens } from './tokenCounter.js';
 
 /**
  * Build a short "session focus" block for the summarizer (active entities + open task).
@@ -76,8 +78,16 @@ export async function maybeRefreshSummary({
 }) {
   const normalized = normalizeStoredMessages(priorMessages);
   const total = normalized.length;
-  if (total < everyN) return null;
-  if (total - summaryThroughTurn < everyN) return null;
+
+  // Token pressure (not just message count) triggers compaction: once the real
+  // agent history passes the soft threshold, fold older turns into the summary
+  // before windowing has to drop them.
+  const budget = computeContextBudget({ model: getModelForTier('medium') });
+  const historyTokens = countMessagesTokens(expandStoredMessagesForAgent(priorMessages));
+  const underPressure = historyTokens > budget.soft;
+
+  if (total < everyN && !underPressure) return null;
+  if (total - summaryThroughTurn < (underPressure ? 2 : everyN)) return null;
 
   const toSummarize = normalized.slice(0, Math.max(0, total - 2));
   if (toSummarize.length === 0) return null;

@@ -10,9 +10,21 @@ const companyNovaWalletSchema = new mongoose.Schema(
     company_id: { type: String, required: true, unique: true, index: true },
     /** When true, remaining_usd is enforced (set when ops configures an allowance or grants credits). */
     limits_enabled: { type: Boolean, default: false },
+    /**
+     * Integer micro-USD (1 USD = 1_000_000) — AUTHORITATIVE money fields. Billable (customer-facing) dollars.
+     * All writes go through novaWallet.js atomic update pipelines.
+     */
+    free_allowance_micros: { type: Number, default: 0, min: 0 },
+    purchased_credit_micros: { type: Number, default: 0, min: 0 },
+    spent_micros: { type: Number, default: 0, min: 0 },
+    /** Derived USD mirrors (always recomputed from micros in the same atomic write). */
     free_allowance_usd: { type: Number, default: 0, min: 0 },
     purchased_credit_usd: { type: Number, default: 0, min: 0 },
     spent_usd: { type: Number, default: 0, min: 0 },
+    /** Admin-assigned label shown in the ops dashboard (company names live in Laravel, not here). */
+    display_name: { type: String, default: '' },
+    /** Employees on the company's Worxstream plan (admin-set) → adoption % = active employees / seats. */
+    seats: { type: Number, default: null, min: 0 },
     /** Company default models for daily / medium / hard / advanced Nova tasks. */
     model_tiers: {
       type: {
@@ -23,6 +35,8 @@ const companyNovaWalletSchema = new mongoose.Schema(
       },
       default: () => ({}),
     },
+    /** Per-company markup override (null = use NOVA_MARKUP_RATE). Admin-only; never shown to the customer. */
+    markup_rate: { type: Number, default: null, min: 0 },
     notes: { type: String, default: '' },
     updated_at: { type: Date, default: Date.now },
   },

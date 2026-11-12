@@ -8,14 +8,14 @@
  * Count tokens in a text string
  * Uses approximation: ~4 characters per token
  */
-export function countTokens(text) {
+export function countTokens(text, { json = false } = {}) {
   if (!text || typeof text !== 'string') {
     return 0;
   }
-  
-  // Rough approximation: 1 token ≈ 4 characters
-  // This is a conservative estimate
-  return Math.ceil(text.length / 4);
+
+  // Heuristic only — exact counts come from response.usage / messages.count_tokens.
+  // Prose ≈ 4 chars/token; JSON (tool inputs/results, schemas) tokenises worse ≈ 3.
+  return Math.ceil(text.length / (json ? 3 : 4));
 }
 
 /**
@@ -47,7 +47,7 @@ export function countMessageContentTokens(content) {
         if (block.name) tokens += countTokens(String(block.name));
         if (block.id) tokens += countTokens(String(block.id));
         if (block.input) {
-          tokens += countTokens(JSON.stringify(block.input));
+          tokens += countTokens(JSON.stringify(block.input), { json: true });
         }
         return total + tokens;
       }
@@ -58,9 +58,10 @@ export function countMessageContentTokens(content) {
         if (block.tool_use_id) tokens += countTokens(String(block.tool_use_id));
         if (block.content) {
           tokens += countTokens(
-            typeof block.content === 'string' 
-              ? block.content 
-              : JSON.stringify(block.content)
+            typeof block.content === 'string'
+              ? block.content
+              : JSON.stringify(block.content),
+            { json: true },
           );
         }
         return total + tokens;
@@ -121,10 +122,15 @@ export function countToolsTokens(tools) {
   let tokens = 0;
   
   for (const tool of tools) {
+    // Deferred (tool-search) definitions are not in context until discovered.
+    if (tool.defer_loading === true) {
+      tokens += 8;
+      continue;
+    }
     if (tool.name) tokens += countTokens(String(tool.name));
     if (tool.description) tokens += countTokens(String(tool.description));
     if (tool.input_schema) {
-      tokens += countTokens(JSON.stringify(tool.input_schema));
+      tokens += countTokens(JSON.stringify(tool.input_schema), { json: true });
     }
     // Overhead for tool structure
     tokens += 10;

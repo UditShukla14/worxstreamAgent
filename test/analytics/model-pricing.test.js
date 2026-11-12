@@ -61,3 +61,37 @@ describe('resolveModelRates', () => {
     assert.equal(entry?.id, 'claude-sonnet-4-6');
   });
 });
+
+describe('catalog integrity', () => {
+  it('has no internal inconsistencies (cache prices derive from base price, limits present)', async () => {
+    const { validateCatalog } = await import('../../src/analytics/modelPricing.js');
+    assert.deepEqual(validateCatalog(), []);
+  });
+
+  it('flags unknown / unverified models as estimated', async () => {
+    const { resolveModelRatesDetailed } = await import('../../src/analytics/modelPricing.js');
+    assert.equal(resolveModelRatesDetailed('claude-sonnet-4-6').estimated, false);
+    assert.equal(resolveModelRatesDetailed('claude-xyz-9').estimated, true);
+    assert.equal(resolveModelRatesDetailed('claude-fable-5-2').estimated, false);
+    assert.equal(resolveModelRatesDetailed('claude-haiku-4-5-20251001').estimated, false);
+  });
+
+  it('every task-tier default model exists in the catalog', async () => {
+    const { DEFAULT_TASK_MODELS } = await import('../../src/analytics/taskModels.js');
+    for (const id of Object.values(DEFAULT_TASK_MODELS)) {
+      assert.ok(findModelCatalogEntry(id), `default model ${id} missing from catalog`);
+    }
+  });
+});
+
+describe('cache read prices are per model (not a flat 0.1x)', () => {
+  it('matches the documented newer-model read prices', () => {
+    assert.equal(resolveModelRates('claude-opus-5-5').cacheReadPerMillion, 0.2);
+    assert.equal(resolveModelRates('claude-sonnet-5-5').cacheReadPerMillion, 0.1);
+    assert.equal(resolveModelRates('claude-fable-5-1').cacheReadPerMillion, 0.25);
+    const fable52 = resolveModelRates('claude-fable-5-2');
+    assert.equal(fable52.inputPerMillion, 8);
+    assert.equal(fable52.cacheReadPerMillion, 0.2);
+    assert.equal(fable52.cacheWritePerMillion, 10);
+  });
+});

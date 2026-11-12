@@ -26,7 +26,7 @@ const client = new Anthropic({ apiKey: config.anthropic.apiKey });
  */
 export async function createMessage(params, meta = {}) {
   const response = await client.messages.create(params);
-  recordUsageAsync(meta, response.usage, params.model || config.anthropic.model);
+  recordUsageAsync(meta, response.usage, params.model || config.anthropic.model, response.model, { messageId: response.id });
   return response;
 }
 
@@ -42,16 +42,34 @@ export async function streamMessage(params, meta = {}, onTextDelta = () => {}) {
   const stream = client.messages.stream(params);
   let text = '';
 
-  for await (const event of stream) {
-    if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
-      text += event.delta.text;
-      onTextDelta(event.delta.text);
+  try {
+    for await (const event of stream) {
+      if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+        text += event.delta.text;
+        onTextDelta(event.delta.text);
+      }
     }
+    const message = await stream.finalMessage();
+    recordUsageAsync(
+      meta, message?.usage, params.model || config.anthropic.model, message?.model,
+      { messageId: message?.id },
+    );
+    return { text, message };
+  } catch (err) {
+    // Aborted / failed mid-stream: Anthropic still bills the tokens generated so far.
+    const partial = stream.currentMessage;
+    if (partial?.usage) {
+      const usage = {
+        ...partial.usage,
+        output_tokens: Math.max(partial.usage.output_tokens || 0, Math.ceil(text.length / 4)),
+      };
+      recordUsageAsync(
+        meta, usage, params.model || config.anthropic.model, partial.model,
+        { messageId: partial.id, partial: true },
+      );
+    }
+    throw err;
   }
-
-  const message = await stream.finalMessage();
-  recordUsageAsync(meta, message?.usage, params.model || config.anthropic.model);
-  return { text, message };
 }
 
 export { client as anthropicClient };

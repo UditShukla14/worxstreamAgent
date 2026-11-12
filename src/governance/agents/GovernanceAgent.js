@@ -7,6 +7,8 @@
 
 import { config } from '../../config/index.js';
 import { createMessage } from '../../llm/anthropicClient.js';
+import { withPromptCaching } from '../../llm/promptCache.js';
+import { buildToolResultBlock } from '../../nova/agents/toolResultContent.js';
 import { usageMetaFromContext } from '../../analytics/usageMeta.js';
 import { getAnthropicTools, executeMcpTool } from '../../mcp/server.js';
 import { getToolIndex } from '../../mcp/toolIndex.js';
@@ -103,7 +105,7 @@ export class GovernanceAgent {
         params.tool_choice = { type: 'auto' };
       }
 
-      response = await createMessage(params, this._usageMeta(context));
+      response = await createMessage(withPromptCaching(params), this._usageMeta(context));
 
       if (response.usage) {
         totalInputTokens += response.usage.input_tokens || 0;
@@ -132,11 +134,7 @@ export class GovernanceAgent {
               ? { error: String(result.error).slice(0, 300) }
               : {}),
           });
-          toolResults.push({
-            type: 'tool_result',
-            tool_use_id: block.id,
-            content: JSON.stringify(result),
-          });
+          toolResults.push(buildToolResultBlock(block.id, result));
         }
         messages.push({ role: 'user', content: toolResults });
         continue;

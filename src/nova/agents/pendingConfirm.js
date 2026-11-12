@@ -51,6 +51,8 @@ export function isWriteTool(toolName) {
   if (n.startsWith('create_') || n.startsWith('update_') || n.startsWith('delete_')) return true;
   // Outbound email still uses the env write gate when COWORKER_CONFIRM_WRITES=true
   if (n === 'send_object_email' || n === 'send_email') return true;
+  // SMS is a write too; its confirmation is owned by the draft→confirm chat flow (usesAgentChatConfirm).
+  if (n === 'send_sms') return true;
   // Scribe schedule mutations (create/pause/resume/delete/run/update)
   if (n.startsWith('scribe_') && !n.includes('list') && !n.includes('get_')) return true;
   return false;

@@ -5,6 +5,7 @@
  * Clarification stays: mode=clarify returns an ask and skips tools.
  */
 
+import { stripJsonCodeFence } from '../../utils/jsonFence.js';
 import { config } from '../../config/index.js';
 import { createMessage } from '../../llm/anthropicClient.js';
 import { getModelForTier } from '../../analytics/taskModels.js';
@@ -136,6 +137,8 @@ export async function getExecutionPlan({
     priorMessages: (priorMessages || []).slice(-6),
     currentUserContent: userParts.join('\n'),
     systemPrompt,
+    model: getModelForTier('daily'),
+    reservedOutput: 320,
   });
   logContextUsage('Execution plan context', messages, systemPrompt);
 
@@ -164,8 +167,3 @@ export async function getExecutionPlan({
   }
 }
 
-function stripJsonCodeFence(text) {
-  const t = String(text || '').trim();
-  const m = t.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  return m ? m[1].trim() : t;
-}

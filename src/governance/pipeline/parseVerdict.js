@@ -5,11 +5,9 @@
 const VERDICTS = new Set(['pass', 'flag', 'error']);
 const SEVERITIES = new Set(['critical', 'warning', 'info']);
 
-export function stripJsonCodeFence(text) {
-  const t = String(text || '').trim();
-  const m = t.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  return m ? m[1].trim() : t;
-}
+import { stripJsonCodeFence } from '../../utils/jsonFence.js';
+
+export { stripJsonCodeFence };
 
 function extractJsonObject(text) {
   const stripped = stripJsonCodeFence(text);

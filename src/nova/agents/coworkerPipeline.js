@@ -2,10 +2,12 @@
  * Unified coworker turn pipeline — stream and JSON entry points share this spine.
  */
 
+import { stripJsonCodeFence } from '../../utils/jsonFence.js';
 import { randomUUID } from 'crypto';
 import { config } from '../../config/index.js';
 import { createMessage, streamMessage } from '../../llm/anthropicClient.js';
 import { getModelForTier, loadTaskModels } from '../../analytics/taskModels.js';
+import { buildContextSnapshot } from './contextSnapshot.js';
 import { setRequestContext } from '../../request/requestContext.js';
 import Conversation from '../models/Conversation.js';
 import {
@@ -97,12 +99,6 @@ async function markTaskPendingConfirmation(ctxRef, fallbackGoal = '') {
   });
 }
 
-function stripJsonCodeFence(text) {
-  const t = String(text || '').trim();
-  const m = t.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  return m ? m[1].trim() : t;
-}
-
 export async function loadConversationState(company_id, user_id, conversation_id) {
   try {
     const [doc, turns] = await Promise.all([
@@ -135,6 +131,20 @@ function compactToolActivity(toolsUsed = []) {
     ok: t.success !== false,
     ...(t.success === false && t.error ? { error: String(t.error).slice(0, 200) } : {}),
   }));
+}
+
+/** requestId → turn start (ms). Pruned on insert so abandoned turns (clarification etc.) cannot leak. */
+const turnStarts = new Map();
+function markTurnStart(requestId) {
+  const now = Date.now();
+  for (const [k, t] of turnStarts) if (now - t > 10 * 60_000) turnStarts.delete(k);
+  turnStarts.set(requestId, now);
+}
+function takeTurnDuration(requestId) {
+  const t = turnStarts.get(requestId);
+  if (t == null) return null;
+  turnStarts.delete(requestId);
+  return Date.now() - t;
 }
 
 async function persistConversation({
@@ -248,6 +258,7 @@ async function persistConversation({
     mode,
     requestId,
     turnIndex: Math.max(0, userTurnCount - 1),
+    durationMs: takeTurnDuration(requestId),
   });
 
   return { summary, throughTurn };
@@ -386,6 +397,7 @@ export async function runCoworkerTurn({
   options = {},
 }) {
   const convId = conversation_id || randomUUID();
+  markTurnStart(requestId);
   const ctxRef = { company_id, user_id, conversation_id: convId };
   const planRef = ctxRef;
   const usageMeta = {
@@ -499,6 +511,7 @@ export async function runCoworkerTurn({
 
     let planBlock = '';
     let continueBlock = '';
+    let historyPlan = null;
     let executionPlan = null;
     const wantPlan =
       config.coworker?.executionPlan !== false
@@ -629,6 +642,12 @@ export async function runCoworkerTurn({
       priorMessages,
       currentUserContent: '',
       systemPrompt: nova.systemPrompt || '',
+      tools: nova.getTools(),
+      // Per-turn blocks (summary, prefs, referenced records, plan) ride outside history.
+      extraText: [contextPrompt, planBlock, continueBlock].filter(Boolean).join('\n\n'),
+      model: getModelForTier('medium'),
+      reservedOutput: config.anthropic.maxTokens?.agent,
+      onPlan: (plan) => { historyPlan = plan; },
     });
     if (priorMessages.length > 0) {
       logContextUsage('Orchestrator context', orchestratorHistory, nova.systemPrompt);
@@ -759,7 +778,21 @@ export async function runCoworkerTurn({
       requestId,
       agentTranscript: result.agentTranscript,
       plan: executionPlan,
-      usage: result.usage || null,
+      usage: result.usage
+        ? {
+          ...result.usage,
+          context: buildContextSnapshot({
+            model: getModelForTier('medium'),
+            usage: result.usage,
+            plan: historyPlan,
+            systemPrompt: nova.systemPrompt || '',
+            tools: nova.getTools(),
+            contextText: orchContextPrompt,
+            summary: convState.conversation_summary || '',
+            reservedOutput: config.anthropic.maxTokens?.agent,
+          }),
+        }
+        : null,
       agentKey: 'nova',
       agents: ['nova'],
       status: result.needsContinue ? 'waiting_continue' : 'completed',

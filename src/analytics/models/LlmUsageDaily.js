@@ -30,6 +30,10 @@ const llmUsageDailySchema = new mongoose.Schema(
     cache_read_input_tokens: { type: Number, default: 0 },
     total_tokens: { type: Number, default: 0 },
     cost_usd: { type: Number, default: 0 },
+    /** Customer-facing amount (provider cost x (1 + markup)). */
+    billable_usd: { type: Number, default: 0 },
+    provider_cost_micros: { type: Number, default: 0 },
+    billable_micros: { type: Number, default: 0 },
     call_count: { type: Number, default: 0 },
     updated_at: { type: Date, default: Date.now },
   },

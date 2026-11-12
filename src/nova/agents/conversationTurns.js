@@ -40,6 +40,7 @@ export async function appendConversationTurn({
   mode = 'orchestrator',
   requestId = null,
   turnIndex = null,
+  durationMs = null,
 }) {
   if (!company_id || !user_id || !conversation_id) return null;
 
@@ -79,6 +80,7 @@ export async function appendConversationTurn({
       ...(plan ? { plan } : {}),
       ...(tools ? { tools } : {}),
       ...(usage ? { usage } : {}),
+      ...(Number.isFinite(durationMs) ? { duration_ms: Math.round(durationMs) } : {}),
     },
   };
 

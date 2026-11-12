@@ -41,6 +41,10 @@ import {
 } from '../../governance/schedules/flowEngine.js';
 import { assertNovaCredits } from '../../analytics/novaWallet.js';
 import { listModelCatalogForApi } from '../../analytics/modelPricing.js';
+import { config } from '../../config/index.js';
+import LlmUsageEvent from '../../analytics/models/LlmUsageEvent.js';
+import { computeContextBudget } from '../../utils/contextBudget.js';
+import { clampMarkup } from '../../analytics/costing.js';
 import {
   ACTIVE_TASK_TIERS,
   DEFAULT_TASK_MODELS,
@@ -287,6 +291,76 @@ router.get('/conversations/:conversation_id/turns', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Error fetching conversation turns:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * Context screen for one chat: how full the model's window is (exact when the
+ * last call reported usage), category breakdown (estimated), and the chat's
+ * lifetime token/cost totals from the usage ledger.
+ */
+router.get('/conversations/:conversation_id/context', async (req, res) => {
+  try {
+    const tenant = requireConversationTenant(req, res);
+    if (!tenant) return;
+    const { conversation_id } = req.params;
+    const turns = await listConversationTurns(tenant.company_id, tenant.user_id, conversation_id);
+    const tierModels = await loadTaskModels(tenant.company_id, tenant.user_id);
+    const latest = [...turns].reverse().find((t) => t?.log?.usage?.context);
+    const context = latest?.log?.usage?.context
+      || (() => {
+        // Older chats / no LLM turn yet: show the budget only, no usage.
+        const model = tierModels.medium;
+        const b = computeContextBudget({ model });
+        return {
+          model,
+          context_window: b.contextWindow,
+          usable_budget: b.usable,
+          reserved_output: b.reservedOutput,
+          limits_source: b.limitsSource,
+          used_tokens: null,
+          used_is_exact: false,
+          thresholds: { soft: b.soft, hard: b.hard },
+        };
+      })();
+
+    const [totals] = await LlmUsageEvent.aggregate([
+      { $match: { company_id: tenant.company_id, user_id: tenant.user_id, conversation_id } },
+      {
+        $group: {
+          _id: null,
+          calls: { $sum: 1 },
+          input_tokens: { $sum: '$input_tokens' },
+          output_tokens: { $sum: '$output_tokens' },
+          cache_read_input_tokens: { $sum: '$cache_read_input_tokens' },
+          cache_creation_input_tokens: { $sum: '$cache_creation_input_tokens' },
+          // Customer-facing amount. Legacy events (no billable field) are priced at cost + current markup.
+          billable_usd: { $sum: { $ifNull: ['$billable_usd', { $multiply: ['$cost_usd', 1 + clampMarkup(config.billing?.markupRate)] }] } },
+          any_estimated: { $max: { $cond: ['$cost_estimated', 1, 0] } },
+        },
+      },
+    ]);
+
+    res.json({
+      success: true,
+      conversation_id,
+      turns: turns.length,
+      context,
+      usage_totals: totals
+        ? {
+          calls: totals.calls,
+          input_tokens: totals.input_tokens,
+          output_tokens: totals.output_tokens,
+          cache_read_input_tokens: totals.cache_read_input_tokens,
+          cache_creation_input_tokens: totals.cache_creation_input_tokens,
+          cost_usd: Number(totals.billable_usd.toFixed(6)),
+          cost_is_estimated: totals.any_estimated === 1,
+        }
+        : null,
+    });
+  } catch (error) {
+    console.error('❌ Error fetching conversation context:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });

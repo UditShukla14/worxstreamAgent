@@ -62,15 +62,6 @@ const RETIRED_MODEL_IDS = new Set([
 /** Pre-4.6 models use YYYYMMDD suffixes; those IDs expire when Anthropic retires the snapshot. */
 const DATED_SNAPSHOT_RE = /-\d{8}$/;
 
-/** Dateless model IDs that support tool_search_tool_bm25 (on-demand tool loading). */
-const TOOL_SEARCH_SUPPORTED_MODELS = [
-  'claude-sonnet-4-6',
-  'claude-opus-4-6',
-  'claude-opus-4-8',
-  'claude-sonnet-4-5',
-  'claude-opus-4-5',
-  'claude-haiku-4-5',
-];
 
 /**
  * Resolve an Anthropic model env var: reject dated snapshots and retired IDs.
@@ -108,8 +99,8 @@ export const config = {
     model: anthropicModel,
     /** Haiku for plan / router / summary / formatter; override with ANTHROPIC_MODEL_FAST. */
     fastModel: anthropicFastModel,
-    /** Enabled when model supports tool search; set ANTHROPIC_USE_TOOL_SEARCH=false/true to override. */
-    useToolSearch: useToolSearchEnv === 'false' ? false : useToolSearchEnv === 'true' ? true : TOOL_SEARCH_SUPPORTED_MODELS.includes(anthropicModel),
+    /** On by default (all current Claude models support it); set ANTHROPIC_USE_TOOL_SEARCH=false to disable. */
+    useToolSearch: useToolSearchEnv !== 'false',
     /**
      * Centralized token limits. These are intentionally conservative defaults
      * and can be tuned via env without touching code.
@@ -138,6 +129,16 @@ export const config = {
       cacheWritePerMillion: parseFloat(process.env.ANTHROPIC_PRICE_CACHE_WRITE_PER_MTOK || '3.75'),
       cacheReadPerMillion: parseFloat(process.env.ANTHROPIC_PRICE_CACHE_READ_PER_MTOK || '0.30'),
     },
+  },
+  billing: {
+    /**
+     * Markup on Anthropic cost charged to customers (0.2 = +20%). Applied PER EVENT at metering time
+     * and stored on the ledger row together with the provider cost. 0 = off (default, so nothing
+     * changes until explicitly enabled; a company wallet can override it with `markup_rate`).
+     */
+    markupRate: Math.min(5, Math.max(0, parseFloat(process.env.NOVA_MARKUP_RATE || '0') || 0)),
+    /** Hard stop for one chat turn's PROVIDER cost in USD (0 = off). Guards runaway tool loops. */
+    maxTurnCostUsd: parseFloat(process.env.NOVA_MAX_TURN_COST_USD || '3'),
   },
   /** Platform-ops key for /api/admin/* (token usage billing). */
   admin: {
@@ -186,8 +187,15 @@ export const config = {
   },
   contextWindow: {
     maxMessages: parseInt(process.env.MAX_CONTEXT_MESSAGES || '50', 10),
+    /** COST ceiling for input context (policy) — the model's real window comes from the Models API. */
     maxTokens: parseInt(process.env.MAX_CONTEXT_TOKENS || '150000', 10),
     reserveTokens: parseInt(process.env.RESERVE_TOKENS || '10000', 10),
+    /** Fraction of the model window held back as a safety margin (token estimates are approximate). */
+    safetyMargin: parseFloat(process.env.CONTEXT_SAFETY_MARGIN || '0.05'),
+    /** Soft threshold (share of usable budget): start compacting history into the rolling summary. */
+    softRatio: parseFloat(process.env.CONTEXT_SOFT_RATIO || '0.65'),
+    /** Hard threshold: clear old tool results inside the agent loop. */
+    hardRatio: parseFloat(process.env.CONTEXT_HARD_RATIO || '0.85'),
     /** Specialist agents: only the last N stored messages (user+assistant pairs). */
     specialistMaxMessages: parseInt(process.env.SPECIALIST_CONTEXT_MESSAGES || '6', 10),
     specialistMaxTokens: parseInt(process.env.SPECIALIST_CONTEXT_TOKENS || '12000', 10),
@@ -195,6 +203,8 @@ export const config = {
     specialistMessagesActive: parseInt(process.env.SPECIALIST_CONTEXT_MESSAGES_ACTIVE || '12', 10),
   },
   agentRuntime: {
+    /** Max chars of one tool result sent back to the model (full result is kept for UI widgets). */
+    toolResultMaxChars: parseInt(process.env.AGENT_TOOL_RESULT_MAX_CHARS || '30000', 10),
     /** Safety cap to prevent infinite tool loops. */
     maxToolIterations: parseInt(process.env.AGENT_MAX_TOOL_ITERATIONS || '15', 10),
     /**
