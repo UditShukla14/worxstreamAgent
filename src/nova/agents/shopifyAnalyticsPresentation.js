@@ -131,6 +131,30 @@ function pickStatColor(name, index) {
   return colors[index % colors.length];
 }
 
+/** Card icon from what the metric is (UI icons: users, package, dollar, building, chart, folder, check). */
+function statIconFor(col) {
+  const name = String(col?.name || '');
+  const dt = String(col?.dataType || '').toUpperCase();
+  if (/checkout|completed|conversion/i.test(name)) return 'check';
+  if (/session|visitor|customer|user/i.test(name)) return 'users';
+  if (/order|unit|item|quantity/i.test(name)) return 'package';
+  if (MONEY_TYPES.has(dt) || /sales|revenue|price|tax|discount|refund|cost|profit|payment/i.test(name)) return 'dollar';
+  return 'chart';
+}
+
+/** Counts and money can be summed across rows; averages, rates, ratios and percentages cannot. */
+function isAdditiveMetric(col) {
+  const dt = String(col?.dataType || '').toUpperCase();
+  if (!['INTEGER', 'MONEY', 'DECIMAL', 'FLOAT', 'CURRENCY'].includes(dt)) return false;
+  return !/average|avg|rate|ratio|percent|conversion|margin|per_|_per|aov/i.test(String(col?.name || ''));
+}
+
+function sumColumn(rows, columnName) {
+  let total = 0;
+  for (const row of rows) total += parseNumber(getCell(row, columnName)) ?? 0;
+  return total;
+}
+
 /**
  * Build chat presentation XML from a Shopify analytics tool result.
  * @param {object} result - MCP / API tool result
@@ -160,14 +184,19 @@ export function buildShopifyAnalyticsPresentation(result, meta = {}) {
 
   const parts = [];
 
-  // Single-row (or totals-style) → KPI cards
-  if (!timeCol || rows.length === 1 || visualizeType === 'single_metric') {
+  // One row (or a single-metric visual) → KPI cards for that row.
+  // A multi-row breakdown (sessions by city, sales by product…) → cards with the column TOTALS of additive
+  // metrics; averages/rates/percentages cannot be summed, so they are left to the table.
+  const isSingleRow = rows.length === 1 || visualizeType === 'single_metric';
+  if (isSingleRow || !timeCol) {
     const row = rows[rows.length - 1];
-    const stats = metricCols.slice(0, 8).map((col, i) => {
-      const raw = getCell(row, col.name);
+    const cardCols = isSingleRow ? metricCols.slice(0, 8) : metricCols.filter(isAdditiveMetric).slice(0, 4);
+    const stats = cardCols.map((col, i) => {
+      const raw = isSingleRow ? getCell(row, col.name) : sumColumn(rows, col.name);
       const value = formatValue(raw, col.dataType);
-      const label = col.displayName || humanize(col.name);
-      const icon = /order/i.test(col.name) ? 'chart' : 'dollar';
+      const base = col.displayName || humanize(col.name);
+      const label = isSingleRow ? base : `Total ${base.charAt(0).toLowerCase()}${base.slice(1)}`;
+      const icon = statIconFor(col);
       return `<stat label="${escapeAttr(label)}" value="${escapeAttr(value)}" icon="${icon}" color="${pickStatColor(col.name, i)}"/>`;
     });
     if (stats.length > 0) {
@@ -237,6 +266,7 @@ export function buildShopifyAnalyticsPresentation(result, meta = {}) {
       + `${body}\n`
       + `</table>`,
     );
+    if (rows.length > 30) parts.push(`Showing 30 of ${rows.length} rows.`);
   }
 
   return parts.join('\n\n').trim();
@@ -277,13 +307,52 @@ export function stripModelStatsAndCharts(text) {
     .trim();
 }
 
+/** Remove tables the model wrote (XML or Markdown pipe tables) — the runtime already renders the full table. */
+export function stripModelTables(text) {
+  const withoutXml = String(text || '').replace(/<table\b[^>]*>[\s\S]*?<\/table>/gi, '');
+  const lines = withoutXml.split('\n');
+  const out = [];
+  let inTable = false;
+  for (const line of lines) {
+    const isPipe = /^\s*\|.*\|\s*$/.test(line);
+    if (isPipe) { inTable = true; continue; }
+    if (inTable && line.trim() === '') { inTable = false; continue; }
+    inTable = false;
+    out.push(line);
+  }
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 /**
  * Merge Sidekick-style widgets + model commentary.
  */
 export function mergeShopifyPresentationWithCommentary(presentationXml, modelText) {
   const widgets = String(presentationXml || '').trim();
   if (!widgets) return String(modelText || '');
-  const commentary = stripModelStatsAndCharts(modelText);
+  const commentary = stripModelTables(stripModelStatsAndCharts(modelText));
   if (!commentary) return widgets;
   return `${widgets}\n\n${commentary}`;
+}
+
+/** How many analytics rows the model reads; the UI renders the full result from the untouched payload. */
+const MODEL_ROW_LIMIT = 15;
+
+/**
+ * Trim a Shopify analytics result for the model (context optimisation): columns, the first rows and the row
+ * count. The complete result is rendered to the user by buildShopifyAnalyticsPresentation, so the model only
+ * needs enough to write insights. Non-analytics or unparseable results are returned unchanged.
+ */
+export function modelFacingToolResult(toolName, result) {
+  if (!isShopifyAnalyticsTool(toolName)) return result;
+  const payload = unwrapAnalyticsPayload(result);
+  if (!payload || payload.rows.length <= MODEL_ROW_LIMIT) return result;
+  return {
+    success: true,
+    data: {
+      columns: payload.columns,
+      rows: payload.rows.slice(0, MODEL_ROW_LIMIT),
+      total_rows: payload.rows.length,
+      note: `${payload.rows.length} rows in total; you are reading the first ${MODEL_ROW_LIMIT}. The user already sees every row in the rendered report (cards, chart and full table), so reply with two to four sentences of insight: no tables, no row lists, and no offer to show more rows.`,
+    },
+  };
 }

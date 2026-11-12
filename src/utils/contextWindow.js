@@ -212,8 +212,8 @@ export function getContextStats(messages, systemPrompt = '', tools = []) {
     systemTokens,
     toolsTokens,
     totalTokens,
-    maxMessages: config.contextWindow.maxMessages || 50,
-    maxTokens: config.contextWindow.maxTokens || 150000,
+    maxMessages: config.contextWindow.maxMessages || 0,
+    maxTokens: config.contextWindow.maxTokens || 200000,
     reserveTokens: config.contextWindow.reserveTokens || 10000,
   };
 }

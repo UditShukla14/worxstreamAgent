@@ -55,14 +55,20 @@ describe('computeContextBudget', () => {
     ]);
   });
 
-  it('is model dependent and bounded by the policy cost cap', () => {
+  it('uses the standard working window: min(model window, configured window), minus reply + margin', () => {
     const sonnet = computeContextBudget({ model: 'claude-sonnet-4-6', reservedOutput: 8192 });
-    assert.equal(sonnet.contextWindow, 1_000_000);
-    assert.equal(sonnet.usable, sonnet.policyCap); // 1M window does not mean 1M per call
+    assert.equal(sonnet.contextWindow, 1_000_000);          // the model can hold 1M…
+    assert.equal(sonnet.workingWindow, 200_000);            // …but a chat works in the standard 200k window
+    assert.equal(sonnet.usable, 200_000 - 8192 - sonnet.margin);
+    assert.equal(sonnet.reserved, 200_000 - sonnet.usable); // reply + compaction headroom
+    assert.ok(sonnet.soft < sonnet.hard && sonnet.hard < sonnet.usable);
 
-    const small = computeContextBudget({ model: 'claude-haiku-4-5', reservedOutput: 8192, policyCap: 10_000_000 });
-    assert.ok(small.usable < 200_000 - 8192, 'reserves output + margin');
-    assert.ok(small.soft < small.hard && small.hard < small.usable);
+    const full = computeContextBudget({ model: 'claude-sonnet-4-6', reservedOutput: 8192, windowTokens: 5_000_000 });
+    assert.equal(full.workingWindow, 1_000_000);            // a bigger setting is still capped by the model
+
+    const small = computeContextBudget({ model: 'claude-haiku-4-5', reservedOutput: 8192, windowTokens: 10_000_000 });
+    assert.equal(small.workingWindow, 200_000);             // Haiku 4.5's real window
+    assert.ok(small.usable < 200_000 - 8192);
   });
 
   it('never reserves more output than the model allows', () => {

@@ -188,16 +188,17 @@ export const config = {
     cacheTtlSeconds: parseInt(process.env.REDIS_CACHE_TTL_SECONDS || '60', 10),
   },
   contextWindow: {
-    maxMessages: parseInt(process.env.MAX_CONTEXT_MESSAGES || '50', 10),
-    /** COST ceiling for input context (policy) — the model's real window comes from the Models API. */
-    maxTokens: parseInt(process.env.MAX_CONTEXT_TOKENS || '150000', 10),
+    /** Optional message-count cap (0 = off). The window is token-based, like Claude's. */
+    maxMessages: parseInt(process.env.MAX_CONTEXT_MESSAGES || '0', 10),
+    /** Working window per conversation: min(model window, this). 200k = Claude's standard window; raise it to use a 1M model fully (costs more per turn). */
+    maxTokens: parseInt(process.env.CONTEXT_WINDOW_TOKENS || process.env.MAX_CONTEXT_TOKENS || '200000', 10),
     reserveTokens: parseInt(process.env.RESERVE_TOKENS || '10000', 10),
     /** Fraction of the model window held back as a safety margin (token estimates are approximate). */
     safetyMargin: parseFloat(process.env.CONTEXT_SAFETY_MARGIN || '0.05'),
     /** Soft threshold (share of usable budget): start compacting history into the rolling summary. */
-    softRatio: parseFloat(process.env.CONTEXT_SOFT_RATIO || '0.65'),
+    softRatio: parseFloat(process.env.CONTEXT_SOFT_RATIO || '0.8'),
     /** Hard threshold: clear old tool results inside the agent loop. */
-    hardRatio: parseFloat(process.env.CONTEXT_HARD_RATIO || '0.85'),
+    hardRatio: parseFloat(process.env.CONTEXT_HARD_RATIO || '0.92'),
     /** Specialist agents: only the last N stored messages (user+assistant pairs). */
     specialistMaxMessages: parseInt(process.env.SPECIALIST_CONTEXT_MESSAGES || '6', 10),
     specialistMaxTokens: parseInt(process.env.SPECIALIST_CONTEXT_TOKENS || '12000', 10),

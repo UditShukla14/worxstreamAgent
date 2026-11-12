@@ -37,7 +37,9 @@ export function buildContextSnapshot({ model, usage, plan, systemPrompt = '', to
 
   return {
     model: last?.model || model,
-    context_window: budget.contextWindow,
+    context_window: budget.contextWindow, // the model's real window
+    working_window: budget.workingWindow, // what the chat works within (shown to the user)
+    reserved_tokens: budget.reserved, // set aside for the reply and compaction
     usable_budget: budget.usable,
     reserved_output: budget.reservedOutput,
     limits_source: budget.limitsSource,

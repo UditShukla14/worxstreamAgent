@@ -12,6 +12,7 @@ import { createMessage, streamMessage } from '../../llm/anthropicClient.js';
 import { withPromptCaching } from '../../llm/promptCache.js';
 import { buildToolResultBlock, summarizeToolResult } from './toolResultContent.js';
 import { createDeltaCoalesceBuffer } from './streamSectionBuffer.js';
+import { isShopifyAnalyticsTool, modelFacingToolResult } from './shopifyAnalyticsPresentation.js';
 import { thinkingParamsFor, maxTokensWithThinking } from '../../llm/thinking.js';
 import { computeContextBudget, measuredInputTokens } from '../../utils/contextBudget.js';
 import { clearOldToolResults } from '../../utils/contextWindow.js';
@@ -362,6 +363,9 @@ export class BaseAgent {
     // Live token streaming (chat SSE only): text deltas go to the client as the model writes them.
     const streamText = context._streamText === true;
     let streamedAny = false;
+    // After a Shopify analytics tool the pipeline replaces the answer with runtime widgets + commentary, so the
+    // model's own text is not streamed live (it would flash and then be swapped).
+    let holdLiveText = false;
     let streamedAnswer = ''; // text streamed since the last tool call = the final answer the client has seen
     // Exact size of the most recent request (from response.usage) — drives in-loop compaction.
     let lastCallInput = 0;
@@ -500,6 +504,7 @@ export class BaseAgent {
                 withPromptCaching(params),
                 this._usageMeta(context),
                 (delta, blockIndex) => {
+                  if (holdLiveText) return;
                   if (roundEmitted && lastBlock != null && blockIndex !== lastBlock) flushBuf.push('\n');
                   lastBlock = blockIndex;
                   roundEmitted = true;
@@ -726,7 +731,8 @@ export class BaseAgent {
               rex.toolCall(context._rexRequestId, block.name, toolDuration, result.success);
             }
 
-            toolResults.push(buildToolResultBlock(block.id, result));
+            if (isShopifyAnalyticsTool(block.name) && result?.success !== false) holdLiveText = true;
+            toolResults.push(buildToolResultBlock(block.id, modelFacingToolResult(block.name, result)));
           }
           if (isAborted()) return abortedResult();
           messages.push({ role: 'user', content: toolResults });
