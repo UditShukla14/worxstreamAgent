@@ -35,3 +35,34 @@ export function buildToolResultBlock(toolUseId, result) {
   if (result && result.success === false) block.is_error = true;
   return block;
 }
+
+/**
+ * One-line, user-facing summary of a tool result for the chat timeline
+ * ("25 of 340 results", the error text, …). Never includes raw payloads.
+ */
+export function summarizeToolResult(result) {
+  if (!result) return '';
+  if (result.success === false) return String(result.error || 'Failed').replace(/\s+/g, ' ').slice(0, 160);
+  const d = result.data;
+  const findArr = (x, depth = 0) => {
+    if (Array.isArray(x)) return x;
+    if (x && typeof x === 'object' && depth < 4) {
+      for (const k of ['data', 'items', 'results', 'rows', 'list', 'records']) {
+        const a = findArr(x[k], depth + 1);
+        if (a) return a;
+      }
+    }
+    return null;
+  };
+  const arr = findArr(d);
+  if (arr) {
+    const total = [d?.total, d?.meta?.total, d?.data?.total, d?.data?.meta?.total].find((n) => Number.isFinite(Number(n)));
+    const word = (n) => (n === 1 ? 'result' : 'results');
+    return total != null && Number(total) > arr.length
+      ? `${arr.length} of ${Number(total)} ${word(Number(total))}`
+      : `${arr.length} ${word(arr.length)}`;
+  }
+  const msg = d?.message ?? result.message;
+  if (typeof msg === 'string' && msg.trim()) return msg.replace(/\s+/g, ' ').slice(0, 120);
+  return 'Done';
+}

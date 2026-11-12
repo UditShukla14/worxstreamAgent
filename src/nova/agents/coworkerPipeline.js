@@ -377,6 +377,12 @@ async function runGeneralChat({
   return response.content[0]?.text || '';
 }
 
+/** Short assistant text stored for a user-stopped turn (partial text or "Stopped."). */
+function stoppedAssistantText(partial) {
+  const text = String(partial || '').trim();
+  return text || 'Stopped.';
+}
+
 /**
  * @param {object} params
  * @param {string} params.message
@@ -542,6 +548,40 @@ export async function runCoworkerTurn({
       });
     }
 
+    // Stopped by the user before any model work: persist a clean turn and exit.
+    const persistStopped = async (partialText = '', usage = null) => {
+      const text = stoppedAssistantText(partialText);
+      await persistConversation({
+        company_id,
+        user_id,
+        conversation_id: convId,
+        priorMessages,
+        message,
+        assistantContent: text,
+        toolsUsed: [],
+        conversation_summary: convState.conversation_summary,
+        summary_through_turn: convState.summary_through_turn,
+        requestId,
+        agentTranscript: [],
+        plan: null,
+        usage,
+        agentKey: 'nova',
+        agents: ['nova'],
+        status: 'stopped',
+        mode: 'orchestrator',
+      });
+      sse({ type: 'done', agent: 'nova', toolsUsed: [], stopped: true });
+      return {
+        conversation_id: convId,
+        type: 'stopped',
+        aborted: true,
+        response: text,
+        toolsUsed: [],
+        agents: ['nova'],
+      };
+    };
+    if (options.abortSignal?.aborted) return persistStopped();
+
     if (wantPlan) {
       sse({ type: 'status', label: STATUS_LABEL_PLANNING });
       try {
@@ -663,6 +703,8 @@ export async function runCoworkerTurn({
       ...tenantRunFields,
     };
 
+    if (options.abortSignal?.aborted) return persistStopped();
+
     sse({ type: 'agent_selected', agent: 'nova' });
     sse({ type: 'status', label: getStatusLabelForAgent('nova') || STATUS_LABEL_THINKING });
 
@@ -676,11 +718,19 @@ export async function runCoworkerTurn({
         _conversationContext: orchContextPrompt,
         _scheduledDelivery: options.scheduledDelivery === true,
         _oneToolAtATime: options.oneToolAtATime === true,
+        _abortSignal: options.abortSignal || null,
+        // Live token streaming: SSE chat only (not Scribe), and not when the opt-in formatter rewrites the text.
+        _streamText: options.streamFormatter === true && options.formatOutput !== true,
         ...orchRunContext,
       },
       sse,
     );
     if (requestId) rex.agentFinished(requestId, nova.name, Date.now() - agentStart, result.usage ?? null);
+
+    if (result.aborted) {
+      // Clean turn: user message + short assistant text, no dangling tool_use transcript.
+      return persistStopped(result.rawText, result.usage || null);
+    }
 
     if (result.needsConfirmation) {
       await markTaskPendingConfirmation(ctxRef, message);
@@ -751,7 +801,15 @@ export async function runCoworkerTurn({
         formattedForUi = await formatOutput(message, combinedRawText, usageMeta);
       }
     } else if (options.streamFormatter) {
-      if (combinedRawText) sse({ type: 'text', content: combinedRawText });
+      if (result.streamedText === true) {
+        // The answer already reached the client token by token. If post-processing changed it
+        // (Shopify widgets merged in, fallback text, …) replace the final answer; otherwise send nothing.
+        if (combinedRawText.trim() !== String(result.streamedAnswer || '').trim()) {
+          sse({ type: 'text_replace', content: combinedRawText });
+        }
+      } else if (combinedRawText) {
+        sse({ type: 'text', content: combinedRawText });
+      }
     }
 
     if (workflowTree && !/<workflow[\s>]/i.test(formattedForUi || '')) {

@@ -448,9 +448,20 @@ router.post('/stream', async (req, res) => {
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
 
+    // Client disconnect (Stop button aborts the fetch) cancels further model/tool rounds.
+    const abortController = new AbortController();
+    res.on('close', () => {
+      if (!res.writableEnded) abortController.abort();
+    });
+
     const sse = (data) => {
-      res.write(`data: ${JSON.stringify(data)}\n\n`);
-      if (typeof res.flush === 'function') res.flush();
+      if (res.writableEnded || res.destroyed || abortController.signal.aborted) return;
+      try {
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+        if (typeof res.flush === 'function') res.flush();
+      } catch {
+        /* client gone */
+      }
     };
 
     rex.startRequest(requestId, message);
@@ -467,6 +478,7 @@ router.post('/stream', async (req, res) => {
         formatOutput: false,
         sseStreamRes: res,
         entityRefs: entity_refs,
+        abortSignal: abortController.signal,
       },
     });
 

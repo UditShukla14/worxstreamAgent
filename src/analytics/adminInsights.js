@@ -360,6 +360,7 @@ export async function getQuality({ from, to } = {}) {
       waiting_continue: statusCounts.waiting_continue || 0,
       clarify: (statusCounts.clarify || 0) + (statusCounts.plan_clarify || 0),
       pending_confirmation: statusCounts.pending_confirmation || 0,
+      stopped: statusCounts.stopped || 0,
       spend_cap_hits: capHits,
       error_rate_pct: pct(statusCounts.error),
       incomplete_rate_pct: pct(statusCounts.waiting_continue),

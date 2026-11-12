@@ -14,8 +14,25 @@ const listPoliciesPath = join(__dirname, '../../src/nova/agents/policies/listPol
 describe('llm-native answer contracts (no shape taxonomy)', () => {
   it('coworkerRules has no ANSWER PROPORTIONALITY taxonomy', () => {
     assert.ok(!COWORKER_SHARED_RULES.includes('ANSWER PROPORTIONALITY'));
-    assert.ok(COWORKER_SHARED_RULES.includes('Answer naturally from conversation'));
-    assert.ok(COWORKER_SHARED_RULES.includes('ONE page'));
+    assert.ok(COWORKER_SHARED_RULES.includes('you choose the representation'));
+    assert.ok(COWORKER_SHARED_RULES.includes('one page at a time'));
+  });
+
+  it('shared rules let the model choose the representation and teach only what the UI renders', () => {
+    assert.ok(COWORKER_SHARED_RULES.includes('Presenting answers'));
+    assert.ok(COWORKER_SHARED_RULES.includes('Markdown table'));
+    assert.ok(COWORKER_SHARED_RULES.includes('<stats>'));
+    assert.ok(COWORKER_SHARED_RULES.includes('<chart-data'));
+    assert.ok(COWORKER_SHARED_RULES.includes('instead of counting rows yourself'));
+    assert.ok(COWORKER_SHARED_RULES.includes('"Showing N of M"'));
+  });
+
+  it('prompt base stays lean (context budget) and free of shouting', () => {
+    assert.ok(COWORKER_SHARED_RULES.length < 5200, `shared rules grew to ${COWORKER_SHARED_RULES.length} chars`);
+    assert.ok(!/\b(CRITICAL|MUST|NEVER|ALWAYS)\b/.test(COWORKER_SHARED_RULES));
+    const soul = readFileSync(soulPath, 'utf8');
+    assert.ok(soul.length < 3200, `SOUL.md grew to ${soul.length} chars`);
+    assert.ok(!/\b(CRITICAL|MUST|NEVER|ALWAYS)\b/.test(soul));
   });
 
   it('formatter preserves agent intent and restores UI chrome', () => {

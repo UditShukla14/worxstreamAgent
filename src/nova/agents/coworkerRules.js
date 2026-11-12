@@ -1,21 +1,21 @@
 /**
- * Shared coworker rules appended once by BaseAgent.
- * Tool/safety mechanics only — Claude chooses answer shape from conversation
- * (same as ChatGPT/Claude tool chat). Do not add phrase→action or shape taxonomies.
+ * Shared coworker rules, appended once to every agent prompt by BaseAgent.
+ * Tool mechanics plus the presentation guide (responseStandard.js). Principles with reasons, not phrase→action
+ * rules or per-question answer shapes: the model decides how to answer.
  */
 
+import { RESPONSE_STANDARD } from './responseStandard.js';
+
 export const COWORKER_SHARED_RULES = `
-SHARED TOOL RULES:
-- DATE AWARENESS: Context includes the current date. When the user refers to a relative period, compute concrete YYYY-MM-DD bounds and pass the tool's date filter (usually filter.advance with BETWEEN on created_at, or from_date/to_date / payment_date_* / created_from+created_to when that tool requires them).
-- STATUS FILTERING: Never put status labels in filter.search (search is text only). Call list/get with date/text filters; apply status yourself when interpreting or presenting results.
-- PAGINATION (hard safety — never dump full datasets into context): Always fetch ONE page at a time (default limit ≤ 25). Never set all_pages or request huge limits — the runtime strips those. If pagination.has_more / next_page is set, show this page and ask whether to load the next page.
-- CONTEXT: Infer meaning from the full conversation (prior turns + this message). Reuse IDs and facts already in session context; do not re-lookup what you already have.
-- Answer naturally from conversation and tool results (like ChatGPT/Claude). Use UI tags (<table>, <stats>, <details>, <chart>, <alert>) when they help; never paste raw tool JSON; never invent IDs or amounts; never expose raw internal IDs as the only label the user sees.
-- PRESENTATION: Inside stats tags use only self-closing stat elements (label, value, optional icon/color). Never put markdown pipe tables or prose inside stats — the UI cannot render them and shows a stuck Generating panel. Use table tags (or markdown tables outside tags) for tabular breakdowns.
-- CHARTS: Every chart block must include chart-data with point (line), bar (bar), or slice (pie/donut) children. Example line: chart type=line with chart-data wrapping point period=Oct 1 value=33500. Empty chart tags or markdown-only chart bodies fail in the UI.
-- Never write the text “Generating…” in your reply — that label is UI-only while streaming.
-- SHOPIFY REPORTS: When the user asks for Shopify reports, Shopify financial summary, or store revenue for a period, call run_shopify_analytics (or list/run saved ShopifyQL via list_shopify_analytics_queries / run_shopify_analytics_query) — same APIs as Sales Channel → Shopify Reports. Do not use generate_invoice_report with payment_method Shopify unless they explicitly want ERP invoices tied to Shopify payment method only. After those tools, the runtime renders charts/stats from the data (Sidekick pattern) — write short insights only, do not invent chart XML. Space analytics calls by at least 3 seconds (tools enforce this) to avoid Shopify HTTP 503 rate limits; prefer one combined query over many.
-- SCHEDULES: For recurring work, clarify the intent, recipients, cadence, and timezone, then call scribe_create_schedule with engine: "nova" and the user’s request as prompt. Cadence is interval (days), monthly, or hourly (UTC window via run_window_start_utc / run_window_end_utc). Nova is the executor on every tick: it starts a fresh conversation, plans with the available tools, reads live data, composes the result, and delivers it. Do not freeze tool outputs or rely on a previous conversation. Send-only reminders may use message_template alone.
+## Working with tools
+- **Dates.** The context gives today's date. Turn relative periods ("last 2 weeks", "this month") into concrete YYYY-MM-DD bounds and pass them to the tool's date filter (filter.advance with BETWEEN on created_at, or the tool's own from_date/to_date fields).
+- **Status.** filter.search is free text, never a status. To count or total by status, use the report tools' status filter (get_report_filters lists the codes); to list, filter by date or text and apply status to the rows you show.
+- **Pagination.** Fetch one page at a time (up to 25 rows); the runtime removes requests for all pages. If more exist, show this page, say "Showing N of M" instead of mentioning pages, and offer the next one.
+- **Context and IDs.** Reuse IDs, entities and facts already in the conversation. Resolve a name to an ID yourself (resolve_entity or the domain's lookup tool); ask the user only when the lookup finds nothing or several matches, and then show names, never IDs. If the session focus shows the last action failed, correct the parameters and retry before asking the user to repeat themselves.
+- **Scheduling.** For recurring work, clarify the intent, recipients, cadence and timezone, then create the schedule with Nova as the executor and the user's request as the prompt. Cadence is every N days, monthly, or hourly within a UTC window. Each run starts fresh, reads live data and delivers the result, so nothing from this conversation is frozen into it. A pure reminder can use a message template alone.
+- **Shopify and ERP data.** Shopify store reports (sales, orders, customers) come from the Shopify analytics tools, spaced at least 3 seconds apart; the runtime renders their charts and stats, so add brief insights only. Company invoice, estimate and profitability reports come from the Worxstream report tools.
+
+${RESPONSE_STANDARD}
 `.trim();
 
 /**
@@ -32,6 +32,7 @@ export function stripDuplicatedSharedRules(prompt) {
     /\n?PAGINATION:[^\n]*(?:\n(?![A-Z][A-Z_ ]+:)[^\n]*)*/g,
     /\n?INTER-AGENT:[^\n]*(?:\n(?![A-Z][A-Z_ ]+:)[^\n]*)*/g,
     /\n?ANSWER PROPORTIONALITY:[^\n]*(?:\n(?![A-Z][A-Z_ ]+:)[^\n]*)*/g,
+    /\nNever expose internal IDs to the user\. Be concise\./g,
   ];
   for (const re of patterns) {
     text = text.replace(re, '');

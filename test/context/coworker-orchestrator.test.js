@@ -32,7 +32,7 @@ describe('coworker orchestrator mode', () => {
   it('Nova is marked orchestrator with tool-search', () => {
     assert.equal(AGENT_DEFINITIONS.nova.orchestrator, true);
     assert.equal(AGENT_DEFINITIONS.nova.useToolSearch, true);
-    assert.ok(AGENT_DEFINITIONS.nova.systemPrompt.includes('function calling'));
+    assert.ok(AGENT_DEFINITIONS.nova.systemPrompt.includes('no other agents'));
   });
 
   it('router descriptions exclude Nova orchestrator', () => {
@@ -79,15 +79,15 @@ describe('coworker orchestrator mode', () => {
     assert.ok(configSrc.includes('ANTHROPIC_MODEL_FAST'));
     assert.ok(configSrc.includes('fastModel'));
     const planSrc = readFileSync(join(__dirname, '../../src/nova/agents/executionPlan.js'), 'utf8');
-    assert.ok(planSrc.includes('config.anthropic.fastModel'));
+    assert.ok(planSrc.includes("getModelForTier('daily')"));
     const baseSrc = readFileSync(join(__dirname, '../../src/nova/agents/BaseAgent.js'), 'utf8');
-    assert.ok(baseSrc.includes('config.anthropic.model'));
+    assert.ok(baseSrc.includes('getModelForTier'));
     assert.ok(!baseSrc.includes('config.anthropic.fastModel'));
   });
 
   it('shared rules are conversation-native with page-wise safety only', () => {
-    assert.ok(COWORKER_SHARED_RULES.includes('Answer naturally from conversation'));
+    assert.ok(COWORKER_SHARED_RULES.includes('you choose the representation'));
     assert.ok(!COWORKER_SHARED_RULES.includes('ANSWER PROPORTIONALITY'));
-    assert.ok(COWORKER_SHARED_RULES.includes('ONE page'));
+    assert.ok(COWORKER_SHARED_RULES.includes('one page at a time'));
   });
 });

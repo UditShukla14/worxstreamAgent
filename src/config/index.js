@@ -101,6 +101,8 @@ export const config = {
     fastModel: anthropicFastModel,
     /** On by default (all current Claude models support it); set ANTHROPIC_USE_TOOL_SEARCH=false to disable. */
     useToolSearch: useToolSearchEnv !== 'false',
+    /** Extended thinking in interactive chat: 'adaptive' (default, supported models only) or 'off'. */
+    thinking: String(process.env.NOVA_THINKING || 'adaptive').toLowerCase() === 'off' ? 'off' : 'adaptive',
     /**
      * Centralized token limits. These are intentionally conservative defaults
      * and can be tuned via env without touching code.

@@ -105,7 +105,7 @@ export function registerReportTools() {
     'generate_invoice_report',
     {
       title: 'Generate Invoice Report',
-      description: 'Generates a comprehensive invoice report with optional filtering and pagination. Includes totals, line items, payment information, and performance metrics.',
+      description: 'Generates a comprehensive invoice report with optional filtering and pagination. Includes totals, line items, payment information, and performance metrics. Use it to COUNT or TOTAL invoices by status/period: pass status_id (codes from get_report_filters), line_items=false and per_page=10 so you get the totals plus the top 10 matching invoices in one call — never page through list_invoices to count.',
       inputSchema: {
         from_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('Start date in YYYY-MM-DD format'),
         to_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe('End date in YYYY-MM-DD format'),

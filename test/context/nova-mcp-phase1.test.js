@@ -19,13 +19,13 @@ describe('coworker shared rules', () => {
     assert.ok(!cleaned.includes('STATUS FILTERING'));
     assert.ok(!cleaned.includes('INTER-AGENT'));
     assert.ok(cleaned.includes('TOOL USAGE'));
-    assert.ok(COWORKER_SHARED_RULES.includes('DATE AWARENESS'));
+    assert.ok(COWORKER_SHARED_RULES.includes('**Dates.**'));
   });
 
   it('includes conversation-native answering without shape taxonomy', () => {
-    assert.ok(COWORKER_SHARED_RULES.includes('Answer naturally from conversation'));
+    assert.ok(COWORKER_SHARED_RULES.includes('you choose the representation'));
     assert.ok(!COWORKER_SHARED_RULES.includes('ANSWER PROPORTIONALITY'));
-    assert.ok(COWORKER_SHARED_RULES.includes('ONE page'));
+    assert.ok(COWORKER_SHARED_RULES.includes('one page at a time'));
   });
 
   it('nova is the default tool-using orchestrator', () => {

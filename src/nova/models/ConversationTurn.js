@@ -43,7 +43,7 @@ const conversationTurnSchema = new mongoose.Schema({
   log: {
     status: {
       type: String,
-      enum: ['completed', 'clarify', 'plan_clarify', 'pending_confirmation', 'waiting_continue', 'error'],
+      enum: ['completed', 'clarify', 'plan_clarify', 'pending_confirmation', 'waiting_continue', 'stopped', 'error'],
       default: 'completed',
     },
     mode: { type: String, default: 'orchestrator' },

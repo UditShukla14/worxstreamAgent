@@ -8,9 +8,11 @@
  */
 
 import { config } from '../../config/index.js';
-import { createMessage } from '../../llm/anthropicClient.js';
+import { createMessage, streamMessage } from '../../llm/anthropicClient.js';
 import { withPromptCaching } from '../../llm/promptCache.js';
-import { buildToolResultBlock } from './toolResultContent.js';
+import { buildToolResultBlock, summarizeToolResult } from './toolResultContent.js';
+import { createDeltaCoalesceBuffer } from './streamSectionBuffer.js';
+import { thinkingParamsFor, maxTokensWithThinking } from '../../llm/thinking.js';
 import { computeContextBudget, measuredInputTokens } from '../../utils/contextBudget.js';
 import { clearOldToolResults } from '../../utils/contextWindow.js';
 import { countMessagesTokens } from '../../utils/tokenCounter.js';
@@ -70,13 +72,29 @@ function canRunInParallel(toolUseBlocks) {
 }
 
 /** @returns {Promise<Map<string, {result: object, durationMs: number}>>} keyed by tool_use id */
-async function runReadToolsInParallel(toolUseBlocks, getInput, execCtx) {
+async function runReadToolsInParallel(toolUseBlocks, getInput, execCtx, onDone = () => {}) {
   const entries = await Promise.all(toolUseBlocks.map(async (block) => {
     const start = Date.now();
     const result = await executeMcpTool(block.name, getInput(block), execCtx);
-    return [block.id, { result, durationMs: Date.now() - start }];
+    const durationMs = Date.now() - start;
+    onDone(block, result, durationMs); // lets the UI show each call finishing as it happens
+    return [block.id, { result, durationMs }];
   }));
   return new Map(entries);
+}
+
+/** SSE `tool_result` payload: id for pairing, timing, and a one-line summary (no raw data). */
+function toolResultEvent(block, result, durationMs) {
+  const ok = result?.success !== false;
+  return {
+    type: 'tool_result',
+    id: block.id,
+    tool: block.name,
+    success: ok,
+    duration_ms: Math.round(durationMs || 0),
+    summary: summarizeToolResult(result),
+    ...(ok ? {} : { error: String(result?.error || 'Failed').slice(0, 300) }),
+  };
 }
 
 export class BaseAgent {
@@ -112,12 +130,10 @@ export class BaseAgent {
     const base = soul
       ? `${soul}\n\n${withShared}`
       : withShared;
-    const resumeNote = '\n\nIf [Session focus] shows a failed last action, attempt recovery (correct IDs/parameters) before asking the user to repeat.';
-    const lookupNote = '\n\nID RESOLUTION: NEVER ask the user for an internal ID (user, customer, contact, product, vendor, tax, job, project...). Prefer IDs already in [Referenced records] / Known entities / Known IDs — do NOT re-call resolve_entity for those. When the user gives a name without a referenced record, call resolve_entity (entity_type + the name) — or a domain lookup tool you have — to get the ID yourself. Only ask the user when the lookup finds nothing or returns multiple ambiguous matches (then show the matching names, never raw IDs).';
-    // Domain playbooks only for specialists; orchestrator discovers via tools + shared rules.
+    // Domain playbooks only for specialists; the orchestrator discovers tools via tool search + the shared rules.
     this.systemPrompt = this.orchestrator
-      ? base + resumeNote + lookupNote
-      : appendPlaybookToPrompt(base + resumeNote + lookupNote, definition.domain);
+      ? base
+      : appendPlaybookToPrompt(base, definition.domain);
   }
 
   /** @param {object} context */
@@ -343,6 +359,10 @@ export class BaseAgent {
     let totalOutputTokens = 0;
     let draftedSmsThisRun = false;
     let lastRawText = '';
+    // Live token streaming (chat SSE only): text deltas go to the client as the model writes them.
+    const streamText = context._streamText === true;
+    let streamedAny = false;
+    let streamedAnswer = ''; // text streamed since the last tool call = the final answer the client has seen
     // Exact size of the most recent request (from response.usage) — drives in-loop compaction.
     let lastCallInput = 0;
     let lastCallUsage = null;
@@ -353,6 +373,15 @@ export class BaseAgent {
     let turnCostUsd = 0;
     let spendCapHit = false;
     const turnCostCap = Number(config.billing?.maxTurnCostUsd) || 0;
+
+    const signal = context._abortSignal || null;
+    const isAborted = () => Boolean(signal?.aborted);
+    const isAbortError = (err) => isAborted()
+      || err?.name === 'AbortError' || err?.name === 'APIUserAbortError';
+    const abortedResult = () => {
+      console.log(`  ⏹️ [${this.name}] aborted by client after ${totalRounds} round(s), ${toolsUsed.length} tool call(s)`);
+      return finish({ rawText: lastRawText || '', aborted: true, agentTranscript: [] });
+    };
 
     const finish = (extra = {}) => {
       const usage = {
@@ -377,6 +406,7 @@ export class BaseAgent {
         toolResultPayloads,
         usage,
         agentTranscript: extractTurnAgentTranscript(messages, historyLength),
+        ...(streamedAny ? { streamedText: true, streamedAnswer } : {}),
         ...extra,
       };
     };
@@ -399,6 +429,7 @@ export class BaseAgent {
 
       let iterations = 0;
       while (iterations < maxIterPerSlice && totalRounds < maxTotalRounds) {
+        if (isAborted()) return abortedResult();
         if (turnCostCap > 0 && turnCostUsd >= turnCostCap) {
           spendCapHit = true;
           console.log(`  [cost cap] ${this.name}: per-turn cost cap reached ($${turnCostUsd.toFixed(4)} >= $${turnCostCap})`);
@@ -408,7 +439,10 @@ export class BaseAgent {
         totalRounds++;
 
         const model = this._resolveModel(context);
-        const maxOut = config.anthropic.maxTokens?.agent ?? 4096;
+        // Extended thinking only for interactive streamed turns on models that support it.
+        const thinking = streamText && context._thinking !== false ? thinkingParamsFor(model) : null;
+        const configuredMax = config.anthropic.maxTokens?.agent ?? 4096;
+        const maxOut = thinking ? maxTokensWithThinking(model, configuredMax) : configuredMax;
 
         // Compaction: exact size of the last request + what was appended since.
         let callMessages = messages;
@@ -431,12 +465,75 @@ export class BaseAgent {
           system: this.systemPrompt,
           messages: callMessages,
         };
+        if (thinking) params.thinking = thinking;
         if (tools.length > 0) {
           params.tools = tools;
           params.tool_choice = { type: 'auto' };
         }
 
-        const response = await createMessage(withPromptCaching(params), this._usageMeta(context));
+        let response;
+        try {
+          if (streamText) {
+            // Coalesce tiny token deltas into short frames; a new text block in the same
+            // response is separated by a blank line (matches how rawText is joined).
+            let lastBlock = null;
+            let roundEmitted = false;
+            const flushBuf = createDeltaCoalesceBuffer((chunk) => {
+              streamedAny = true;
+              streamedAnswer += chunk;
+              onEvent({ type: 'text', content: chunk });
+            }, { maxDelayMs: 40, maxChars: 96 });
+            // Thinking summaries stream as their own events so the UI can show a collapsible "Thinking" block.
+            let thinkingOpen = false;
+            const thinkBuf = createDeltaCoalesceBuffer((chunk) => {
+              onEvent({ type: 'thinking', content: chunk });
+            }, { maxDelayMs: 60, maxChars: 160 });
+            const endThinking = () => {
+              thinkBuf.flush();
+              if (thinkingOpen) {
+                thinkingOpen = false;
+                onEvent({ type: 'thinking_end' });
+              }
+            };
+            try {
+              ({ message: response } = await streamMessage(
+                withPromptCaching(params),
+                this._usageMeta(context),
+                (delta, blockIndex) => {
+                  if (roundEmitted && lastBlock != null && blockIndex !== lastBlock) flushBuf.push('\n');
+                  lastBlock = blockIndex;
+                  roundEmitted = true;
+                  flushBuf.push(delta);
+                },
+                signal ? { signal } : undefined,
+                thinking
+                  ? {
+                    onDelta: (delta) => {
+                      if (!thinkingOpen) {
+                        thinkingOpen = true;
+                        onEvent({ type: 'status', label: 'Thinking…' });
+                      }
+                      thinkBuf.push(delta);
+                    },
+                    onStop: endThinking,
+                  }
+                  : undefined,
+              ));
+            } finally {
+              endThinking();
+              flushBuf.flush();
+            }
+          } else {
+            response = await createMessage(
+              withPromptCaching(params),
+              this._usageMeta(context),
+              signal ? { signal } : undefined,
+            );
+          }
+        } catch (err) {
+          if (isAbortError(err)) return abortedResult();
+          throw err;
+        }
         lastCallModel = response.model || model;
         lastCallUsage = response.usage || null;
         lastCallInput = measuredInputTokens(response.usage);
@@ -446,6 +543,12 @@ export class BaseAgent {
         if (response.usage) {
           totalInputTokens += response.usage.input_tokens || 0;
           totalOutputTokens += response.usage.output_tokens || 0;
+          onEvent({
+            type: 'usage',
+            input_tokens: totalInputTokens,
+            output_tokens: totalOutputTokens,
+            total_tokens: totalInputTokens + totalOutputTokens,
+          });
         }
 
         const hasToolUse = response.content?.some((block) => block?.type === 'tool_use');
@@ -483,26 +586,40 @@ export class BaseAgent {
             : response.content;
           messages.push({ role: 'assistant', content: assistantContent });
 
+          // Stop pressed while the model was answering: start no tool at all (parallel batches included).
+          if (isAborted()) return abortedResult();
+
           const toolResults = [];
           const normalizeInput = (b) => {
             const raw = b.input || {};
             return b.name?.startsWith('list_') ? normalizeListInput(raw) : raw;
           };
           // Independent read-only calls in one model turn run concurrently.
-          const prefetched = context._oneToolAtATime !== true && canRunInParallel(toolUseBlocks)
+          // Text streamed before this tool round was narration, not the answer.
+          streamedAnswer = '';
+          const runParallel = context._oneToolAtATime !== true && canRunInParallel(toolUseBlocks);
+          if (runParallel) {
+            for (const b of toolUseBlocks) {
+              onEvent({ type: 'tool_use', id: b.id, tool: b.name, input: normalizeInput(b) });
+            }
+          }
+          const prefetched = runParallel
             ? await runReadToolsInParallel(
               toolUseBlocks,
               normalizeInput,
               { agent: this.name, userMessage: message },
+              (b, result, durationMs) => onEvent(toolResultEvent(b, result, durationMs)),
             )
             : null;
           for (const block of toolUseBlocks) {
+            // Stop between tool calls; one already in flight is allowed to finish.
+            if (isAborted()) return abortedResult();
             console.log(`  🔧 [${this.name}] → ${block.name}`);
             const originalInput = block.input || {};
             const normalizedInput = block.name?.startsWith('list_')
               ? normalizeListInput(originalInput)
               : originalInput;
-            onEvent({ type: 'tool_use', tool: block.name, input: normalizedInput });
+            if (!prefetched) onEvent({ type: 'tool_use', id: block.id, tool: block.name, input: normalizedInput });
 
             // Same write already UI-approved this conversation — reuse result
             // (prevents approve → "continue" → re-confirm loops / duplicate creates).
@@ -521,7 +638,7 @@ export class BaseAgent {
                   success: cached.success !== false,
                 });
                 toolResultPayloads.push(cached);
-                onEvent({ type: 'tool_result', tool: block.name, success: cached.success !== false });
+                onEvent(toolResultEvent(block, cached, 0));
                 toolResults.push(buildToolResultBlock(block.id, cached));
                 continue;
               }
@@ -576,7 +693,7 @@ export class BaseAgent {
               };
               toolsUsed.push({ name: block.name, input: normalizedInput, success: false, error: blocked.error });
               toolResultPayloads.push(blocked);
-              onEvent({ type: 'tool_result', tool: block.name, success: false });
+              onEvent(toolResultEvent(block, blocked, 0));
               toolResults.push(buildToolResultBlock(block.id, blocked));
               continue;
             }
@@ -604,13 +721,14 @@ export class BaseAgent {
                 : {}),
             });
             toolResultPayloads.push(result);
-            onEvent({ type: 'tool_result', tool: block.name, success: result.success });
+            if (!prefetched) onEvent(toolResultEvent(block, result, toolDuration));
             if (context._rexRequestId) {
               rex.toolCall(context._rexRequestId, block.name, toolDuration, result.success);
             }
 
             toolResults.push(buildToolResultBlock(block.id, result));
           }
+          if (isAborted()) return abortedResult();
           messages.push({ role: 'user', content: toolResults });
           continue;
         }
@@ -621,7 +739,7 @@ export class BaseAgent {
         if (response.content?.length) {
           messages.push({ role: 'assistant', content: response.content });
         }
-        lastRawText = rawText || lastRawText;
+        lastRawText = `${lastRawText}${rawText}` || lastRawText;
         console.log(
           `✅ [${this.name}] done (slice ${slice}/${maxSlices}, ${totalRounds} round(s), `
           + `${toolsUsed.length} tool call(s), ${totalInputTokens + totalOutputTokens} tokens)`,
