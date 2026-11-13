@@ -78,9 +78,9 @@ describe('mail identity', () => {
 });
 
 describe('mail tools', () => {
-  it('registers the eight read-only tools under the mail domain', () => {
+  it('registers the ten read-only tools under the mail domain', () => {
     const names = (getToolIndex().byDomain.mail || []).map((t) => t.name).sort();
-    assert.deepEqual(names, ['get_mail_conversation', 'get_mail_message', 'get_mailbox_overview', 'get_unread_mail_summary', 'list_mail_accounts', 'list_mail_attachments', 'list_mail_folders', 'search_mail']);
+    assert.deepEqual(names, ['get_mail_conversation', 'get_mail_message', 'get_mail_sync_status', 'get_mailbox_overview', 'get_unread_mail_summary', 'list_mail_accounts', 'list_mail_attachments', 'list_mail_folders', 'search_mail', 'search_mail_live']);
   });
 
   it('drops zero-count days from the volume series', () => {

@@ -108,3 +108,21 @@ export function resolveConversationTenantIds(req) {
     userId: userId ? String(userId).trim() : undefined,
   };
 }
+
+/**
+ * The token to use for per-user services (mail): the person who is asking, and only them.
+ *  1. the token this request itself carried (Authorization / X-Worxstream-Token / body), else
+ *  2. the shared login session's token, but ONLY when that session belongs to the same user (and company) as the
+ *     request, so a chat from user A can never run with user B's session.
+ * Never WORXSTREAM_API_TOKEN: that is a server identity, not the caller.
+ * @returns {{ token: string, source: 'request' | 'session' | 'none' }}
+ */
+export function resolveCallerToken() {
+  const als = getRequestContext() || {};
+  if (als.userToken) return { token: als.userToken, source: 'request' };
+  const session = worxstreamSession.getSession();
+  const sameUser = session && als.userId && String(session.userId) === String(als.userId);
+  const sameCompany = session && (!als.companyId || String(session.companyId) === String(als.companyId));
+  if (sameUser && sameCompany && session.apiToken) return { token: session.apiToken, source: 'session' };
+  return { token: '', source: 'none' };
+}

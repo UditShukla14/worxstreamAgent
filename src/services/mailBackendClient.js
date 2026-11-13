@@ -6,16 +6,20 @@
 
 import axios from 'axios';
 import { config } from '../config/index.js';
-import { getRequestUserToken } from '../request/requestContext.js';
+import { resolveCallerToken } from '../utils/worxstreamCredentials.js';
 
 /**
  * @param {{ baseUrl?: string, timeoutMs?: number, getToken?: () => string, http?: { get: Function } }} [deps]
  */
 export function createMailBackendClient(deps = {}) {
   const baseUrl = () => (deps.baseUrl ?? config.mail.baseUrl);
-  // Only the token the request itself carried: never the server's fallback token or a shared login session, which
-  // would make the mail backend answer for some other person's mailbox.
-  const getToken = deps.getToken ?? getRequestUserToken;
+  // The caller's own token (their request, or the login session of that same user). Never the server's fallback token
+  // or another user's session, which would make the mail backend answer for someone else's mailbox.
+  const getToken = deps.getToken ?? (() => {
+    const { token } = resolveCallerToken();
+    if (!token) console.warn('📭 Mail: no token for this caller (the request carried none and no login session matches this user)');
+    return token;
+  });
   const http = deps.http ?? axios;
   const timeout = deps.timeoutMs ?? config.mail.timeoutMs;
 
