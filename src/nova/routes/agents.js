@@ -47,6 +47,7 @@ import { quoteForPrice, toCustomerQuote, bonusTiers } from '../../analytics/nova
 import { getCompanyModelChoices, setCompanyModelChoices } from '../../analytics/customerModels.js';
 import { listModelCatalogForApi } from '../../analytics/modelPricing.js';
 import { config } from '../../config/index.js';
+import creditsRoutes from '../../billing/stripe/routes.js';
 import LlmUsageEvent from '../../analytics/models/LlmUsageEvent.js';
 import { computeContextBudget } from '../../utils/contextBudget.js';
 import { clampMarkup } from '../../analytics/costing.js';
@@ -61,6 +62,7 @@ import {
 const router = Router();
 
 router.use(requireWorxstreamAuth);
+router.use('/credits', creditsRoutes); // Nova credit checkout (Stripe)
 
 /**
  * Block LLM turns when the company Nova wallet is exhausted.

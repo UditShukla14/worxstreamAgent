@@ -7,7 +7,7 @@
 
 import mongoose from 'mongoose';
 
-export const WALLET_TX_TYPES = ['grant', 'trial', 'allowance_set', 'reconcile'];
+export const WALLET_TX_TYPES = ['grant', 'trial', 'allowance_set', 'reconcile', 'reversal'];
 
 const walletTransactionSchema = new mongoose.Schema(
   {
@@ -32,6 +32,8 @@ const walletTransactionSchema = new mongoose.Schema(
 );
 
 walletTransactionSchema.index({ company_id: 1, created_at: -1 });
+// Find the grant behind a Stripe payment (disputes arrive with the PaymentIntent id only).
+walletTransactionSchema.index({ payment_ref: 1 }, { partialFilterExpression: { payment_ref: { $type: 'string', $gt: '' } } });
 // One ledger row per payment reference per company (partial: only rows that carry a reference).
 walletTransactionSchema.index(
   { company_id: 1, payment_ref: 1 },

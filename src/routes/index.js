@@ -12,6 +12,7 @@ import rexRoutes from '../nova/routes/rex.js';
 import webhookRoutes from '../governance/routes/webhooks.js';
 import controlRoutes from '../governance/routes/control.js';
 import mcpRoutes from './mcp.js';
+import stripeWebhook from '../billing/stripe/webhook.js';
 import adminAnalyticsRoutes from '../analytics/routes/admin.js';
 
 const router = Router();
@@ -24,6 +25,7 @@ router.use('/api/tools', toolsRoutes);
 router.use('/api/agents', agentRoutes);
 router.use('/api/rex', rexRoutes);
 router.use('/api/price-comparison', priceComparisonRoutes);
+router.use('/api/webhooks/stripe', stripeWebhook); // Stripe payment events (signature-verified)
 router.use('/api/webhooks', webhookRoutes);
 router.use('/api/control', controlRoutes);
 router.use('/api/admin', adminAnalyticsRoutes);

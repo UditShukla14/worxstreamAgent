@@ -151,6 +151,11 @@ export const config = {
     lowBalanceRatio: Math.min(1, Math.max(0, parseFloat(process.env.NOVA_LOW_BALANCE_RATIO || '0.1') || 0.1)),
     lowBalanceUsd: Math.max(0, parseFloat(process.env.NOVA_LOW_BALANCE_USD || '2') || 2),
   },
+  /** Stripe (Nova credit purchases). Secret key and webhook signing secret are server-only; never sent to the browser. */
+  stripe: {
+    secretKey: (process.env.STRIPE_SECRET_KEY || '').trim(),
+    webhookSecret: (process.env.STRIPE_WEBHOOK_SECRET || '').trim(),
+  },
   /** Platform-ops key for /api/admin/* (token usage billing). */
   admin: {
     apiKey: (process.env.ADMIN_API_KEY || '').trim(),

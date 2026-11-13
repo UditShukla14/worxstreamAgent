@@ -127,7 +127,7 @@ export async function ensureDefaultNovaPlans() {
     { plan_id: 'growth', name: 'Nova Growth', description: 'Everyday use across your team.', price_usd: 250, sort: 2,
       features: ['Reports, estimates and invoices on demand', 'Choose the AI model for each task', ...common] },
     { plan_id: 'scale', name: 'Nova Scale', description: 'Heavy use across many employees.', price_usd: 1000, sort: 3,
-      features: ['Best value: the biggest bonus credit', 'Choose the AI model for each task', ...common] },
+      features: ['The largest bonus credit', 'Choose the AI model for each task', ...common] },
   ];
   for (const plan of defaults) await saveNovaPlan(plan, { create: true });
   return defaults.length;

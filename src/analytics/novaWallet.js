@@ -392,6 +392,44 @@ export async function grantWalletCredits(companyId, body = {}) {
 }
 
 /**
+ * Take purchased credit back (a lost or open chargeback). Atomic and idempotent per `ref`: the same ref changes nothing and
+ * returns `duplicate: true`. The balance may go negative when the company already spent the credit; it then stays exhausted
+ * until staff settle it, which is the honest state of a disputed payment.
+ * @param {string} companyId
+ * @param {{ amount_micros: number, ref: string, reason?: string, actor?: string, payment_ref_note?: string }} body
+ */
+export async function reverseWalletCredit(companyId, body = {}) {
+  const id = String(companyId || '').trim();
+  const micros = Math.round(Number(body.amount_micros));
+  const ref = String(body.ref || '').trim();
+  if (!id || !ref || !Number.isFinite(micros) || micros <= 0) throw new Error('companyId, ref and a positive amount are required');
+  const next = { $subtract: [microsExpr('purchased_credit'), micros] };
+  const res = await CompanyNovaWallet.collection.findOneAndUpdate(
+    { company_id: id, grant_refs: { $ne: ref } },
+    [{
+      $set: {
+        purchased_credit_micros: next,
+        purchased_credit_usd: { $divide: [next, MICROS] },
+        updated_at: new Date(),
+        grant_refs: { $slice: [{ $concatArrays: [{ $ifNull: ['$grant_refs', []] }, [ref]] }, -500] },
+      },
+    }],
+    { returnDocument: 'after' },
+  );
+  const doc = res?.value ?? res;
+  if (!doc) return { reversed: false, duplicate: true }; // no wallet, or this ref was already applied
+  await recordWalletTransaction(id, {
+    type: 'reversal',
+    amount_micros: -micros,
+    balance_after_micros: remainingMicros(doc),
+    reason: body.reason || 'Credit removed',
+    payment_ref: ref,
+    actor: body.actor || 'stripe',
+  });
+  return { reversed: true, duplicate: false };
+}
+
+/**
  * Newest-first wallet history for a company (customer-safe fields only).
  * @param {string} companyId
  * @param {{ limit?: number, before?: string|Date }} [opts]
