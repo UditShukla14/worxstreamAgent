@@ -29,7 +29,8 @@ Rules:
 - mode=execute: any data lookup or action — steps are 1–8 short, ordered, tool-oriented actions (e.g. "Resolve customer Acme", "List their invoices page 1").
 - Never invent IDs, amounts, or tool results.
 - Prefer the fewest steps that fulfill the request.
-- risk=send for SMS/email; write for create/update/delete; otherwise read.`;
+- risk=send for SMS/email; write for create/update/delete; otherwise read.
+- The user's connected mailbox (Outlook or Gmail, synced by Worxstream) is readable with mail tools: list_mail_accounts, search_mail, get_mail_conversation, get_mail_message, get_unread_mail_summary, get_mailbox_overview, list_mail_folders, list_mail_attachments. Any question about their email, inbox, a sender or a conversation is mode=execute, never clarify: do not ask which platform or provider. A named account or domain ("my alphaparktech account") is matched with list_mail_accounts; a person or company ("Kevin from RXO") is a search by sender name and domain.`;
 
 /**
  * @param {string} message
