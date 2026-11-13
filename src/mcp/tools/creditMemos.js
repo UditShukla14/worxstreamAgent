@@ -63,7 +63,7 @@ export function registerCreditMemoTools() {
     'get_credit_memo_details',
     {
       title: 'Get Credit Memo Details',
-      description: 'Get credit memo details by ID.',
+      description: 'Get one credit memo with its line items, totals and status. Requires the credit memo ID; find it with list_credit_memos.',
       inputSchema: {
         id: z.number().describe('Credit memo ID'),
       },
@@ -90,7 +90,7 @@ export function registerCreditMemoTools() {
     'create_credit_memo',
     {
       title: 'Create Credit Memo',
-      description: 'Create a new credit memo.',
+      description: 'Create a credit memo header issued to a customer. This writes data: confirm customer, contact and amounts with the user first.',
       inputSchema: {
         custom_number: z.string().optional().describe('Custom credit memo number'),
         contact_id: z.number().describe('Contact ID'),

@@ -111,11 +111,7 @@ export function registerCallsTools() {
     {
       title: 'List Call Sessions',
       description:
-        'List voice-agent call sessions (Calls page). Matches the web Calls list API: pagination + filter.advance. '
-        + 'For “yesterday” / a day / a range, pass started_from + started_to (YYYY-MM-DD) — filters started_at BETWEEN [from,to] (NOT created_at). '
-        + 'Optional status / outcome / assigned_to filters (IDs as returned by get_call_session_filters). '
-        + 'One page at a time (default limit 25, hard-capped). Use pagination.has_more / next_page for more. '
-        + 'Pass app_id when known (Calls UI uses it, e.g. 39).',
+        'List voice-agent call sessions (the Calls page), one page at a time (default limit 25, capped by the runtime). For "yesterday", a day or a range pass started_from and started_to (YYYY-MM-DD); they filter started_at, not created_at. Optional status, outcome and assigned_to filters take IDs returned by get_call_session_filters. Use pagination.has_more and next_page for more, and pass app_id when known (the Calls UI uses it).',
       inputSchema: {
         search: z.string().optional().describe('Search caller name, phone, email, etc.'),
         status: z.union([z.string(), z.number()]).optional().describe('Status ID/code (from get_call_session_filters), e.g. 246'),

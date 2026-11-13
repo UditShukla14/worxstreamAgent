@@ -181,7 +181,7 @@ export function registerSmsTools() {
     {
       title: 'Draft SMS',
       description:
-        'Create an SMS draft for review. ALWAYS call this before send_sms. '
+        'Create an SMS draft for review; nothing is sent. Returns to, from, text and a draft_id UUID. Draft first, show the user the text, and call send_sms only after they confirm, keeping the exact draft_id for the next turn.'
         + 'Show the returned to/from/text AND the exact draft_id UUID to yourself for the next turn. '
         + 'Wait for explicit confirmation before calling send_sms. Does not send anything.',
       inputSchema: {
@@ -265,11 +265,7 @@ export function registerSmsTools() {
     {
       title: 'Send SMS',
       description:
-        'Send a previously drafted SMS via Telnyx. Pass the exact draft_id UUID from draft_sms '
-        + '(never the literal string "draft_id"). If omitted after a recent draft, the latest pending draft is used. '
-        + 'ONLY call after the user explicitly confirms in chat (e.g. "confirm" / "send it"). '
-        + 'Do not call in the same turn as draft_sms unless the user message is already a confirm. '
-        + 'Confirmation is agent-judged (not a UI write gate).',
+        'Send a previously drafted SMS via Telnyx. Pass the exact draft_id UUID returned by draft_sms. If it is omitted after a recent draft, the latest pending draft is used. Call it only after the user has explicitly confirmed in chat (for example "send it"), and not in the same turn as draft_sms unless the user\'s message already is that confirmation. Confirmation is judged by the agent; there is no UI gate.',
       inputSchema: {
         draft_id: z.string().optional().describe(
           'Exact UUID from draft_sms result (e.g. 38c62c68-…). Never invent or use the placeholder "draft_id".',

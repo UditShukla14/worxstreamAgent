@@ -99,7 +99,7 @@ export function registerCustomerTools() {
     'get_customer_dropdown',
     {
       title: 'Get Customer Dropdown',
-      description: 'Get customers for dropdown.',
+      description: 'Search customers by name and return compact id/label options. Use it to resolve a customer name to an ID before creating a document; for full customer records use list_customers or get_customer_details.',
       inputSchema: {
         search: z.string().optional().describe('Search term'),
       },

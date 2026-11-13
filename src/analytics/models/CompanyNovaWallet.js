@@ -23,6 +23,8 @@ const companyNovaWalletSchema = new mongoose.Schema(
     spent_usd: { type: Number, default: 0, min: 0 },
     /** Admin-assigned label shown in the ops dashboard (company names live in Laravel, not here). */
     display_name: { type: String, default: '' },
+    /** Plan label shown to the company (admin-set), e.g. "Pro" or "Enterprise". */
+    plan_name: { type: String, default: '' },
     /** Employees on the company's Worxstream plan (admin-set) → adoption % = active employees / seats. */
     seats: { type: Number, default: null, min: 0 },
     /** Company default models for daily / medium / hard / advanced Nova tasks. */
@@ -38,6 +40,8 @@ const companyNovaWalletSchema = new mongoose.Schema(
     /** Per-company markup override (null = use NOVA_MARKUP_RATE). Admin-only; never shown to the customer. */
     markup_rate: { type: Number, default: null, min: 0 },
     notes: { type: String, default: '' },
+    /** Payment references already credited (most recent 500) — makes grants idempotent. Never sent to clients. */
+    grant_refs: { type: [String], default: undefined, select: false },
     updated_at: { type: Date, default: Date.now },
   },
   {

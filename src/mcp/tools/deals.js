@@ -54,7 +54,7 @@ export function registerDealTools() {
     'get_deal_details',
     {
       title: 'Get Deal Details',
-      description: 'Get a deal by ID.',
+      description: 'Get one deal with its pipeline, stage, value, owner and linked customer. Requires the deal ID; find it with list_deals.',
       inputSchema: { id: z.number().describe('Deal ID') },
     },
     async ({ id }) => {
@@ -100,7 +100,7 @@ export function registerDealTools() {
     'change_deal_stage',
     {
       title: 'Change Deal Stage',
-      description: 'Move a deal to another pipeline stage.',
+      description: 'Move a deal to another stage of its pipeline. This writes data: confirm the deal and target stage with the user. List valid stages with list_pipeline_stages.',
       inputSchema: {
         id: z.number().describe('Deal ID'),
         pipeline_id: z.number().describe('Pipeline ID'),
@@ -140,7 +140,7 @@ export function registerDealTools() {
     'list_pipeline_stages',
     {
       title: 'List Pipeline Stages',
-      description: 'List stages for a sales pipeline.',
+      description: 'List the stages of a sales pipeline in order. Needed to pick the target stage for change_deal_stage.',
       inputSchema: {
         pipeline_id: z.number().describe('Pipeline ID'),
       },

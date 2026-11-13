@@ -24,7 +24,7 @@ export function registerInvoiceTools() {
     'list_invoices',
     {
       title: 'List Invoices',
-      description: 'List one page of invoices (default page=1, limit=25, hard-capped). Returns pagination.has_more and pagination.next_page — call again with the next page when the user wants more. Never dump the full tenant dataset. filter.search is text only (invoice #, customer names — NOT status). For paid/open: use date range in filter.advance; filter by status when presenting. To COUNT or TOTAL invoices by status, do NOT page through this list — use generate_invoice_report with status_id (codes from get_report_filters) and read its totals. pagination.total is the total for the filters you passed.',
+      description: 'List invoices one page at a time (page default 1, limit default 25, capped by the runtime); pagination.has_more and pagination.next_page say whether another page exists, and pagination.total is the total for the filters passed. filter.search is free text (invoice number, customer name), not a status; narrow by date range in filter.advance and apply status to the rows shown. To count or total invoices by status, use generate_invoice_report with status_id (codes from get_report_filters) and read its totals instead of paging this list.',
       inputSchema: {
         customer_id: z.number().optional().describe('Customer ID'),
         vendor_id: z.number().optional().describe('Vendor ID'),
@@ -90,7 +90,7 @@ export function registerInvoiceTools() {
     'get_invoice_details',
     {
       title: 'Get Invoice Details',
-      description: 'Get invoice details by ID.',
+      description: 'Get one invoice with its line items, totals, balance and status. Requires the invoice ID; find it with list_invoices when the user gives a number or customer. For counts or totals across many invoices use generate_invoice_report instead.',
       inputSchema: {
         id: z.number().describe('Invoice ID'),
       },
@@ -118,7 +118,7 @@ export function registerInvoiceTools() {
     'create_invoice',
     {
       title: 'Create Invoice',
-      description: 'Create a new invoice.',
+      description: 'Create an invoice header (customer, contact, dates, totals). This writes data: confirm customer, contact, issue date and totals with the user first. Line items are not added by this tool.',
       inputSchema: {
         custom_number: z.string().optional().describe('Custom invoice number'),
         contact_id: z.number().describe('Contact ID'),

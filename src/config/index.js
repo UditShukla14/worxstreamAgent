@@ -141,6 +141,19 @@ export const config = {
     markupRate: Math.min(5, Math.max(0, parseFloat(process.env.NOVA_MARKUP_RATE || '0') || 0)),
     /** Hard stop for one chat turn's PROVIDER cost in USD (0 = off). Guards runaway tool loops. */
     maxTurnCostUsd: parseFloat(process.env.NOVA_MAX_TURN_COST_USD || '3'),
+    /**
+     * Margin Worxstream adds on top of Anthropic's price when it SELLS a Nova credit plan: a company pays
+     * credit x (1 + this) and receives `credit` dollars of Anthropic usage. Default 20%.
+     * Keep NOVA_MARKUP_RATE at 0 when selling plans this way, or the margin is charged twice (plan price + per-call markup).
+     */
+    planMarginRate: Math.min(5, Math.max(0, parseFloat(process.env.NOVA_PLAN_MARGIN_RATE || '0.2') || 0)),
+    /** Free trial credit given to a company the first time it uses Nova (0 = off: no wallet means unlimited). */
+    trialAllowanceUsd: Math.max(0, parseFloat(process.env.NOVA_TRIAL_ALLOWANCE_USD || '0') || 0),
+    /** true: a company with no wallet (and no trial) cannot use Nova until it buys credits or ops grants some. */
+    requireWallet: process.env.NOVA_REQUIRE_WALLET === 'true',
+    /** The wallet reports low_balance below this share of everything granted, or below this many dollars. */
+    lowBalanceRatio: Math.min(1, Math.max(0, parseFloat(process.env.NOVA_LOW_BALANCE_RATIO || '0.1') || 0.1)),
+    lowBalanceUsd: Math.max(0, parseFloat(process.env.NOVA_LOW_BALANCE_USD || '2') || 2),
   },
   /** Platform-ops key for /api/admin/* (token usage billing). */
   admin: {
@@ -254,6 +267,11 @@ export const config = {
     scrapeEntityIds: process.env.COWORKER_SCRAPE_ENTITY_IDS === 'true',
     /** Intra-request agent continue slices when tool budget / max_tokens hits (default 3). */
     maxContinueSlices: parseInt(process.env.AGENT_CONTINUE_SLICES || '3', 10),
+  },
+  /** Mail backend (Outlook/Gmail sync + AI enrichment). The agent reads the signed-in user's mailbox through it. */
+  mail: {
+    baseUrl: (process.env.MAIL_AGENT_API_URL || '').trim().replace(/\/+$/, ''),
+    timeoutMs: parseInt(process.env.MAIL_AGENT_TIMEOUT_MS || '20000', 10),
   },
   /** Telnyx Messaging — used by MCP SMS tools (draft_sms / send_sms). Server-only. */
   telnyx: {

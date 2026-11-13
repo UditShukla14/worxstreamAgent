@@ -170,7 +170,7 @@ export function registerContactTools() {
     'delete_contact',
     {
       title: 'Delete Contact',
-      description: 'Delete a CRM contact.',
+      description: 'Delete a CRM contact by ID. Destructive: name the contact and get the user\'s explicit confirmation first.',
       inputSchema: {
         id: z.number().describe('Contact ID'),
       },
@@ -194,7 +194,7 @@ export function registerContactTools() {
     'clone_contact',
     {
       title: 'Clone Contact',
-      description: 'Clone/duplicate a CRM contact.',
+      description: 'Create a copy of an existing CRM contact. This writes data: confirm with the user first.',
       inputSchema: {
         id: z.number().describe('Contact ID to clone'),
       },

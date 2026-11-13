@@ -95,7 +95,7 @@ export function registerEstimateTools() {
     'get_estimate_details',
     {
       title: 'Get Estimate Details',
-      description: 'Get estimate details by ID.',
+      description: 'Get one estimate with its sections, line items, totals, customer and status. Requires the estimate ID; find it with list_estimates when the user gives a number or customer.',
       inputSchema: {
         id: z.number().describe('Estimate ID'),
       },
@@ -141,7 +141,7 @@ export function registerEstimateTools() {
     'create_estimate',
     {
       title: 'Create Estimate',
-      description: 'Create a new estimate.',
+      description: 'Create an estimate header (customer, contact, dates, totals). This writes data: confirm customer, contact, issue date and totals with the user first. Line items are not added by this tool.',
       inputSchema: {
         custom_number: z.string().optional().describe('Custom estimate number'),
         contact_id: z.number().describe('Contact ID'),

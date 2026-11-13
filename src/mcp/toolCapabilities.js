@@ -62,6 +62,9 @@ const DOMAIN_RULES = [
   ['credit_memo', 'credit_memo'],
   ['purchase_order', 'purchase_order'],
   ['sales_order', 'sales_order'],
+  // Shipments (shipments.js) — get_estimate_releasable_items is the shipment-release helper
+  ['shipment', 'shipment'],
+  ['releasable_items', 'shipment'],
   ['system_finder', 'system_finder'],
   ['price_comparison', 'price_comparison'],
   ['compare_stock_prices', 'price_comparison'],
@@ -218,6 +221,7 @@ export function inferCapabilitiesFromToolName(toolName) {
   if (caps.domain === 'purchase_order') idFields.push('purchase_order_id', 'id');
   if (caps.domain === 'bill') idFields.push('bill_id', 'id');
   if (caps.domain === 'sales_order') idFields.push('sales_order_id', 'id');
+  if (caps.domain === 'shipment') idFields.push('shipment_id', 'estimate_id', 'id');
   if (caps.domain === 'deal') idFields.push('deal_id', 'id');
   if (caps.domain === 'inventory') idFields.push('warehouse_id', 'product_id', 'id');
   if (caps.domain === 'payments') idFields.push('received_payment_id', 'id');

@@ -40,7 +40,7 @@ export function registerCrmTools() {
     'create_note',
     {
       title: 'Create Note',
-      description: 'Create a note on an object.',
+      description: 'Add a note to a record (customer, deal, invoice and so on). This writes data: confirm the target record and the note text.',
       inputSchema: {
         object_name: z.string().describe('Object type, e.g. deal, customer'),
         object_id: z.number().describe('Object ID'),
@@ -105,7 +105,7 @@ export function registerCrmTools() {
     'list_calendar_events',
     {
       title: 'List Calendar Events',
-      description: 'List company calendar events for a year/month.',
+      description: 'List company calendar events for a given year and month.',
       inputSchema: {
         year: z.number().describe('Year, e.g. 2026'),
         month: z.number().describe('Month 1-12'),
@@ -125,7 +125,7 @@ export function registerCrmTools() {
     'list_event_boards',
     {
       title: 'List Event Boards',
-      description: 'List CRM event boards.',
+      description: 'List CRM event boards (planning boards for events).',
       inputSchema: {},
     },
     async () => {
@@ -142,7 +142,7 @@ export function registerCrmTools() {
     'list_calls',
     {
       title: 'List Calls',
-      description: 'List call logs attached to an object.',
+      description: 'List call logs attached to a record. For voice-agent call sessions use list_call_sessions.',
       inputSchema: {
         object_name: z.string().describe('Object type'),
         object_id: z.number().describe('Object ID'),

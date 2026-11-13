@@ -219,9 +219,7 @@ export function registerShopifyTools() {
     {
       title: 'Create Document from Shopify Order',
       description:
-        'Convert a Shopify order into a WorxStream estimate, invoice, or sales_order '
-        + '(POST /shopify/orders/create-document). order_id MUST be the database row id from list/detail — not the Shopify GID. '
-        + 'On failure the order may gain exceptionsText / exceptionsSku — refresh list after convert. Confirm document_type with the user.',
+        'Convert a Shopify order into a Worxstream estimate, invoice or sales_order. order_id is the database row id from the order list or detail, not the Shopify GID. Confirm document_type with the user first. On failure the order may gain exceptionsText or exceptionsSku, so refresh the order list after converting.',
       inputSchema: {
         order_id: z.number().describe('Database Shopify order row id'),
         document_type: z.enum(['estimate', 'invoice', 'sales_order'])

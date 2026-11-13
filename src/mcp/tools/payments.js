@@ -53,7 +53,7 @@ export function registerPaymentTools() {
     'get_received_payment_details',
     {
       title: 'Get Received Payment Details',
-      description: 'Get a received payment by ID.',
+      description: 'Get one received customer payment with amount, method, date and the invoices it was applied to. Requires the payment ID.',
       inputSchema: { id: z.number().describe('Received payment ID') },
     },
     async ({ id }) => {
@@ -89,7 +89,7 @@ export function registerPaymentTools() {
     'list_payment_methods',
     {
       title: 'List Payment Methods',
-      description: 'List company payment methods.',
+      description: 'List the company\'s payment methods (cash, card, bank transfer and so on).',
       inputSchema: {
         search: z.string().optional().describe('Search method name'),
         method_type: z.string().optional().describe('Method type'),
@@ -120,7 +120,7 @@ export function registerPaymentTools() {
     'get_payment_methods_dropdown',
     {
       title: 'Get Payment Methods Dropdown',
-      description: 'Active payment methods dropdown for receiving payments.',
+      description: 'Active payment methods as id/label options, for choosing a method when recording a received payment.',
       inputSchema: {},
     },
     async () => {

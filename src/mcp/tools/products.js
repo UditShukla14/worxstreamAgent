@@ -276,7 +276,7 @@ export function registerProductTools() {
     'get_product_details',
     {
       title: 'Get Product Details',
-      description: 'Get product/service details.',
+      description: 'Get one product or service with pricing, SKU, category and stock settings. Requires the product ID; find it with list_products or get_products_dropdown.',
       inputSchema: {
         id: z.number().describe('Product ID'),
       },
@@ -299,7 +299,7 @@ export function registerProductTools() {
     'create_product',
     {
       title: 'Create Product',
-      description: 'Create a product or service.',
+      description: 'Create a product or service. This writes data: confirm name, type and price with the user first.',
       inputSchema: {
         type: z.string().optional().describe('"product" or "service"'),
         title: z.string().describe('Product title'),
@@ -387,7 +387,7 @@ export function registerProductTools() {
     'delete_product',
     {
       title: 'Delete Product',
-      description: 'Delete a product or service.',
+      description: 'Delete a product or service by ID. Destructive: name the product and get the user\'s explicit confirmation first.',
       inputSchema: {
         id: z.number().describe('Product ID'),
       },
@@ -410,7 +410,7 @@ export function registerProductTools() {
     'clone_product',
     {
       title: 'Clone Product',
-      description: 'Clone/duplicate a product.',
+      description: 'Create a copy of an existing product. This writes data: confirm with the user first.',
       inputSchema: {
         id: z.number().describe('Product ID to clone'),
       },
@@ -433,7 +433,7 @@ export function registerProductTools() {
     'get_products_dropdown',
     {
       title: 'Get Products Dropdown',
-      description: 'Get products for dropdown selection.',
+      description: 'Search products and services by name or SKU and return compact id/label options. Use it to resolve a product name to an ID before creating or updating a document; for full product records use list_products or get_product_details.',
       inputSchema: {
         search: z.string().optional().describe('Search term'),
       },

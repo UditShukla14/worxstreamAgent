@@ -37,6 +37,8 @@ import { registerCommunicationsTools } from './communications.js';
 import { registerSmsTools } from './sms.js';
 import { registerCallsTools } from './calls.js';
 import { registerShopifyTools } from './shopify.js';
+import { registerShipmentTools } from './shipments.js';
+import { registerMailTools } from './mail.js';
 
 /**
  * Register all tools
@@ -148,6 +150,12 @@ export function registerAllTools() {
 
   registerShopifyTools();
   console.log('  ✓ Shopify (Sales Channel) tools registered');
+
+  registerShipmentTools();
+  console.log('  ✓ Shipment tools registered');
+
+  registerMailTools();
+  console.log('  ✓ Mail (read-only mailbox) tools registered');
 
   console.log('✅ All MCP tools registered');
 }

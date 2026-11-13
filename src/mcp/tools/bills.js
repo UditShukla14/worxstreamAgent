@@ -62,7 +62,7 @@ export function registerBillTools() {
     'get_bill_details',
     {
       title: 'Get Bill Details',
-      description: 'Get bill details by ID.',
+      description: 'Get one vendor bill with its line items, totals, balance and status. Requires the bill ID; find it with list_bills.',
       inputSchema: {
         id: z.number().describe('Bill ID'),
       },
@@ -89,7 +89,7 @@ export function registerBillTools() {
     'create_bill',
     {
       title: 'Create Bill',
-      description: 'Create a new bill.',
+      description: 'Create a vendor bill header (money owed to a vendor). This writes data: confirm vendor, dates and totals with the user first.',
       inputSchema: {
         custom_number: z.string().optional().describe('Custom bill number'),
         contact_id: z.number().describe('Contact ID'),

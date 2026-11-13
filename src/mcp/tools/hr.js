@@ -17,7 +17,7 @@ export function registerHRTools() {
     'list_departments',
     {
       title: 'List Departments',
-      description: 'Get all departments.',
+      description: 'List departments, optionally for a branch. get_department_hierarchy returns the tree.',
       inputSchema: {},
     },
     async () => {
@@ -212,7 +212,7 @@ export function registerHRTools() {
     'list_teams',
     {
       title: 'List Teams',
-      description: 'Get all teams. Filter by department_id optional.',
+      description: 'List teams, optionally filtered by department_id.',
       inputSchema: {
         department_id: z.number().optional().describe('Filter by department'),
       },

@@ -688,7 +688,7 @@ export function registerReportTools() {
     'get_pipeline_goal_report',
     {
       title: 'Get Pipeline Goal Report',
-      description: 'Retrieves pipeline performance data for a specific goal.',
+      description: 'Pipeline performance against a specific goal. Requires the goal ID.',
       inputSchema: {
         goal_id: z.number().describe('Goal ID')
       }

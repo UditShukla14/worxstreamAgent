@@ -14,12 +14,15 @@ import {
   getWalletStatus,
   setWalletAllowance,
   grantWalletCredits,
+  listWalletTransactions,
   reconcileWalletFromLedger,
   listWallets,
 } from '../novaWallet.js';
 import { getSummary, getUsage, getDirectory, getCompanyDetail } from '../adminQueries.js';
 import { getEconomics, getGrowth, getQuality, getWalletsInsights, getModelsOverview } from '../adminInsights.js';
 import { reconcileWithAnthropic } from '../anthropicReconcile.js';
+import { listNovaPlans, getNovaPlan, saveNovaPlan, toAdminPlan } from '../novaPlans.js';
+import { config } from '../../config/index.js';
 
 const router = Router();
 router.use(requireAdminAuth);
@@ -142,7 +145,7 @@ router.put('/analytics/companies/:companyId/wallet', async (req, res, next) => {
     const data = await setWalletAllowance(req.params.companyId, req.body || {});
     res.json({ success: true, data });
   } catch (err) {
-    if (/free_allowance_usd|markup_rate|display_name|seats|companyId|Provide /.test(err?.message || '')) {
+    if (/free_allowance_usd|markup_rate|display_name|plan_name|seats|companyId|Provide /.test(err?.message || '')) {
       return res.status(400).json({ success: false, error: err.message });
     }
     next(err);
@@ -168,14 +171,73 @@ router.post('/analytics/companies/:companyId/wallet/reconcile', async (req, res,
   }
 });
 
+router.get('/analytics/companies/:companyId/wallet/transactions', async (req, res, next) => {
+  try {
+    const data = await listWalletTransactions(req.params.companyId, { limit: req.query.limit, before: req.query.before });
+    res.json({ success: true, data });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Credit a wallet. A repeated payment_ref (for example a Stripe webhook retry) never credits twice. */
 router.post('/analytics/companies/:companyId/wallet/credits', async (req, res, next) => {
   try {
     const data = await grantWalletCredits(req.params.companyId, req.body || {});
     res.json({ success: true, data });
   } catch (err) {
-    if (err?.message?.includes('amount_usd') || err?.message?.includes('companyId')) {
+    if (err?.message?.includes('amount_usd') || err?.message?.includes('companyId') || /plan "/.test(err?.message || '')) {
       return res.status(400).json({ success: false, error: err.message });
     }
+    next(err);
+  }
+});
+
+// ---- Nova credit plans (what companies can buy) ----------------------------------
+/** All plans, with the margin. `usage_markup_rate` is a warning signal: plans already carry the margin, so it should be 0. */
+router.get('/analytics/nova-plans', async (req, res, next) => {
+  try {
+    const plans = (await listNovaPlans()).map(toAdminPlan);
+    res.json({
+      success: true,
+      data: {
+        plans,
+        default_margin_rate: config.billing?.planMarginRate ?? 0.2,
+        usage_markup_rate: config.billing?.markupRate ?? 0,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** One plan (Laravel uses this to price a payment on the server). */
+router.get('/analytics/nova-plans/:planId', async (req, res, next) => {
+  try {
+    const plan = await getNovaPlan(req.params.planId);
+    if (!plan) return res.status(404).json({ success: false, error: 'Plan not found' });
+    res.json({ success: true, data: toAdminPlan(plan) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const PLAN_INPUT_ERRORS = /plan_id|name is required|credit_usd|margin_rate|already exists|not found/;
+
+router.post('/analytics/nova-plans', async (req, res, next) => {
+  try {
+    res.json({ success: true, data: await saveNovaPlan(req.body || {}, { create: true }) });
+  } catch (err) {
+    if (PLAN_INPUT_ERRORS.test(err?.message || '')) return res.status(400).json({ success: false, error: err.message });
+    next(err);
+  }
+});
+
+router.put('/analytics/nova-plans/:planId', async (req, res, next) => {
+  try {
+    res.json({ success: true, data: await saveNovaPlan({ ...(req.body || {}), plan_id: req.params.planId }) });
+  } catch (err) {
+    if (PLAN_INPUT_ERRORS.test(err?.message || '')) return res.status(400).json({ success: false, error: err.message });
     next(err);
   }
 });

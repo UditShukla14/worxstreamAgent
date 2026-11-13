@@ -39,7 +39,10 @@ import {
   computeFlowNextRunAt,
   isFlowRecipe,
 } from '../../governance/schedules/flowEngine.js';
-import { assertNovaCredits } from '../../analytics/novaWallet.js';
+import { assertNovaCredits, getWallet, walletToApi, listWalletTransactions } from '../../analytics/novaWallet.js';
+import { getCompanyUsage, getUserUsage } from '../../analytics/queries.js';
+import { toCustomerUsage } from '../../analytics/customerUsage.js';
+import { listNovaPlans, toCustomerPlan } from '../../analytics/novaPlans.js';
 import { listModelCatalogForApi } from '../../analytics/modelPricing.js';
 import { config } from '../../config/index.js';
 import LlmUsageEvent from '../../analytics/models/LlmUsageEvent.js';
@@ -128,6 +131,80 @@ router.get('/preferences', async (req, res) => {
     user_id: tenant.user_id,
   }).lean();
   res.json({ success: true, preferences: doc?.preferences || {} });
+});
+
+/**
+ * The signed-in company's Nova wallet (customer-safe: no markup). Same payload shape as the admin view minus
+ * the ops-only fields, so the web app can read it without going through Laravel.
+ */
+router.get('/wallet', async (req, res) => {
+  try {
+    const tenant = requireConversationTenant(req, res);
+    if (!tenant) return;
+    const wallet = walletToApi(await getWallet(tenant.company_id));
+    res.json({ success: true, data: wallet });
+  } catch (error) {
+    console.error('wallet status error:', error?.message);
+    res.status(500).json({ success: false, error: 'Failed to load wallet' });
+  }
+});
+
+/**
+ * Usage for the signed-in company from our own usage ledger (customer view: only what the company is charged).
+ * ?from=YYYY-MM-DD&to=YYYY-MM-DD
+ */
+router.get('/usage', async (req, res) => {
+  try {
+    const tenant = requireConversationTenant(req, res);
+    if (!tenant) return;
+    const data = await getCompanyUsage(tenant.company_id, { from: req.query.from, to: req.query.to, groupBy: 'day' });
+    res.json({ success: true, data: toCustomerUsage(data) });
+  } catch (error) {
+    console.error('usage error:', error?.message);
+    res.status(500).json({ success: false, error: 'Failed to load usage' });
+  }
+});
+
+/** One employee's usage in the signed-in company. */
+router.get('/usage/users/:userId', async (req, res) => {
+  try {
+    const tenant = requireConversationTenant(req, res);
+    if (!tenant) return;
+    const data = await getUserUsage(tenant.company_id, req.params.userId, { from: req.query.from, to: req.query.to });
+    res.json({ success: true, data: toCustomerUsage(data) });
+  } catch (error) {
+    console.error('user usage error:', error?.message);
+    res.status(500).json({ success: false, error: 'Failed to load usage' });
+  }
+});
+
+/** The Nova credit plans a company can buy (active only; price and credit, never the margin). */
+router.get('/plans', async (req, res) => {
+  try {
+    const tenant = requireConversationTenant(req, res);
+    if (!tenant) return;
+    const plans = (await listNovaPlans({ activeOnly: true })).map(toCustomerPlan);
+    res.json({ success: true, data: plans });
+  } catch (error) {
+    console.error('plans error:', error?.message);
+    res.status(500).json({ success: false, error: 'Failed to load plans' });
+  }
+});
+
+/** Credit history for the signed-in company, newest first. ?limit=25&before=<ISO date> */
+router.get('/wallet/transactions', async (req, res) => {
+  try {
+    const tenant = requireConversationTenant(req, res);
+    if (!tenant) return;
+    const data = await listWalletTransactions(tenant.company_id, {
+      limit: req.query.limit,
+      before: req.query.before,
+    });
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('wallet history error:', error?.message);
+    res.status(500).json({ success: false, error: 'Failed to load wallet history' });
+  }
 });
 
 /** Model catalog + resolved daily/medium/hard/advanced selections. */

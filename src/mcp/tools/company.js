@@ -13,7 +13,7 @@ export function registerCompanyTools() {
     'get_company_details',
     {
       title: 'Get Company Details',
-      description: 'Get company/organization details.',
+      description: 'Get the company profile: name, address, contact details, currency and settings.',
       inputSchema: {},
     },
     async () => {
@@ -57,7 +57,7 @@ export function registerCompanyTools() {
     'get_company_statistics',
     {
       title: 'Get Company Statistics',
-      description: 'Get company statistics and metrics.',
+      description: 'Get headline company counts (customers, vendors, users, documents). For revenue or invoice analytics use the report tools.',
       inputSchema: {},
     },
     async () => {
@@ -101,7 +101,7 @@ export function registerCompanyTools() {
     'list_branches',
     {
       title: 'List Branches',
-      description: 'Get all company branches/locations.',
+      description: 'List company branches/locations.',
       inputSchema: {},
     },
     async () => {

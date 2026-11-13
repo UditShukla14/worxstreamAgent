@@ -50,16 +50,18 @@ export function sanitizeModelTiers(raw) {
 }
 
 /**
- * Merge company defaults ← user prefs ← env defaults.
+ * Resolve each tier: the company's model (set by Worxstream in the admin dashboard) ← a personal preference
+ * (only where the company set nothing) ← the env default. Companies can no longer change models themselves, so
+ * an old personal preference must never override what Worxstream chose for the company.
  * @param {Partial<Record<TaskTier, string>>} [company]
  * @param {Partial<Record<TaskTier, string>>} [user]
  */
 export function resolveTaskModelMap(company = {}, user = {}) {
   return {
-    daily: user.daily || company.daily || DEFAULT_TASK_MODELS.daily,
-    medium: user.medium || company.medium || DEFAULT_TASK_MODELS.medium,
-    hard: user.hard || company.hard || DEFAULT_TASK_MODELS.hard,
-    advanced: user.advanced || company.advanced || DEFAULT_TASK_MODELS.advanced,
+    daily: company.daily || user.daily || DEFAULT_TASK_MODELS.daily,
+    medium: company.medium || user.medium || DEFAULT_TASK_MODELS.medium,
+    hard: company.hard || user.hard || DEFAULT_TASK_MODELS.hard,
+    advanced: company.advanced || user.advanced || DEFAULT_TASK_MODELS.advanced,
   };
 }
 

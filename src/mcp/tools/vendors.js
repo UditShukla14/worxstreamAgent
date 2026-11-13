@@ -15,7 +15,7 @@ export function registerVendorTools() {
     'list_vendors',
     {
       title: 'List Vendors',
-      description: 'List vendors/suppliers. Supports filter.search.',
+      description: 'List vendors/suppliers one page at a time (default limit 25). Match by name with filter.search. For one vendor use get_vendor_details; for a name-to-ID lookup use resolve_entity.',
       inputSchema: {
         limit: z.number().optional().describe('Number of results (default: 25)'),
         page: z.number().optional().describe('Page number (default: 1)'),
@@ -46,7 +46,7 @@ export function registerVendorTools() {
     'get_vendor_details',
     {
       title: 'Get Vendor Details',
-      description: 'Get vendor details.',
+      description: 'Get one vendor with contact details, terms and status. Requires the vendor ID; find it with list_vendors.',
       inputSchema: {
         id: z.number().describe('Vendor ID'),
       },
@@ -95,7 +95,7 @@ export function registerVendorTools() {
     'get_vendor_accounts_dropdown',
     {
       title: 'Get Vendor Accounts Dropdown',
-      description: 'Active vendor accounts dropdown.',
+      description: 'List active vendor accounts as id/label options, for choosing a vendor account when creating a bill or payment.',
       inputSchema: {
         account_type: z.string().optional().describe('Account type filter (default: motili)'),
       },
@@ -117,7 +117,7 @@ export function registerVendorTools() {
     'update_vendor',
     {
       title: 'Update Vendor',
-      description: 'Update vendor.',
+      description: 'Change fields on an existing vendor (only the fields passed are changed). This writes data: state what will change and confirm with the user.',
       inputSchema: {
         id: z.number().describe('Vendor ID'),
         first_name: z.string().optional().describe('First name'),

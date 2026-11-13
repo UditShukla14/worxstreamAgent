@@ -40,7 +40,7 @@ export function registerAddressTools() {
     'list_addresses',
     {
       title: 'List Addresses',
-      description: 'List all addresses.',
+      description: 'List saved addresses (customer, vendor and company). Use get_address for one.',
       inputSchema: {},
     },
     async () => {

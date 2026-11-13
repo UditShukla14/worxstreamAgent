@@ -16,7 +16,7 @@ export function registerJobTools() {
     'list_jobs',
     {
       title: 'List Jobs',
-      description: 'List jobs. Supports limit, page, and filter.search.',
+      description: 'List jobs (customer job sites/work records) one page at a time (default limit 25). Match by name with filter.search. Use get_job_details for one job; projects are separate (list_projects).',
       inputSchema: {
         limit: z.number().optional().describe('Number of results (default: 25)'),
         page: z.number().optional().describe('Page number (default: 1)'),
@@ -48,7 +48,7 @@ export function registerJobTools() {
     'get_job_details',
     {
       title: 'Get Job Details',
-      description: 'Get job details by ID.',
+      description: 'Get one job with its customer, location and linked documents. Requires the job ID; find it with list_jobs.',
       inputSchema: {
         id: z.number().describe('Job ID'),
       },
@@ -76,7 +76,7 @@ export function registerJobTools() {
     'create_job',
     {
       title: 'Create Job',
-      description: 'Create a new job.',
+      description: 'Create a job for a customer. This writes data: confirm name and customer with the user first.',
       inputSchema: {
         contact_id: z.number().describe('Contact ID'),
         address_id: z.number().optional().describe('Address ID'),

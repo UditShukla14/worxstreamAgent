@@ -26,7 +26,7 @@ export function registerSalesOrderTools() {
     'list_sales_orders',
     {
       title: 'List Sales Orders',
-      description: 'List one page of sales orders (default page=1, limit=25, hard-capped). Returns pagination.has_more and pagination.next_page — call again with the next page when the user wants more. Never dump the full tenant dataset. filter.search is text only (NOT status).',
+      description: 'List sales orders (customer commitments to deliver goods), one page at a time (page default 1, limit default 25, capped by the runtime). The response includes pagination.has_more and pagination.next_page; request the next page only when the user wants more. Narrow by customer_id, vendor_id or a date range. filter.search is free text, not a status. For one order use get_sales_order_details; for shipments use list_shipments.',
       inputSchema: {
         customer_id: z.number().optional().describe('Customer ID'),
         vendor_id: z.number().optional().describe('Vendor ID'),
@@ -89,7 +89,7 @@ export function registerSalesOrderTools() {
     'get_sales_order_details',
     {
       title: 'Get Sales Order Details',
-      description: 'Get sales order details by ID.',
+      description: 'Get one sales order with its sections, line items, totals and status. Requires the sales order ID; find it with list_sales_orders when the user gives a number or customer instead.',
       inputSchema: {
         id: z.number().describe('Sales order ID'),
       },
@@ -108,7 +108,7 @@ export function registerSalesOrderTools() {
     'create_sales_order',
     {
       title: 'Create Sales Order',
-      description: 'Create a new sales order.',
+      description: 'Create a sales order header with totals. This writes data: confirm customer, contact, issue date and totals with the user first. Line items are not added by this tool.',
       inputSchema: {
         custom_number: z.string().optional().describe('Custom sales order number'),
         contact_id: z.number().describe('Contact ID'),

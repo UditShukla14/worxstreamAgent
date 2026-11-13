@@ -53,7 +53,7 @@ export function registerTaskTools() {
     'get_task_details',
     {
       title: 'Get Task Details',
-      description: 'Get task details by ID.',
+      description: 'Get one task with its assignee, due date, status and linked object. Requires the task ID; find it with list_tasks.',
       inputSchema: {
         id: z.number().describe('Task ID'),
       },
@@ -81,7 +81,7 @@ export function registerTaskTools() {
     'create_task',
     {
       title: 'Create Task',
-      description: 'Create a new task.',
+      description: 'Create a task, optionally linked to an object and assigned to a team member. This writes data: confirm title, assignee and due date with the user first.',
       inputSchema: {
         title: z.string().describe('Task title'),
         description: z.string().optional().describe('Task description'),

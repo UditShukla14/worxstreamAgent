@@ -14,10 +14,13 @@
     "build": "node -e \"console.log('@worxstream/agent: no compile step')\"",
     "start": "node src/index.js",
     "seed:governance": "node src/governance/seed/runSeed.js",
-    "test": "node --test test/**/*.test.js"
+    "test": "node --test test/**/*.test.js",
+    "admin:install": "npm --prefix admin-dashboard install",
+    "admin:dev": "npm --prefix admin-dashboard run dev",
+    "admin:build": "npm --prefix admin-dashboard install && npm --prefix admin-dashboard run build"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.52.0",
+    "@anthropic-ai/sdk": "^1.7.0",
     "@modelcontextprotocol/sdk": "^1.24.3",
     "axios": "^1.7.2",
     "cors": "^2.8.5",

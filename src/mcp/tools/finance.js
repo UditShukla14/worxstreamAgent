@@ -17,7 +17,7 @@ export function registerFinanceTools() {
     'list_taxes',
     {
       title: 'List Taxes',
-      description: 'Get all tax configurations.',
+      description: 'List the company\'s configured taxes with rates. Use it to find a tax rate; get_tax_dropdown returns the same taxes as compact id/label options.',
       inputSchema: {},
     },
     async () => {
@@ -38,7 +38,7 @@ export function registerFinanceTools() {
     'get_tax_dropdown',
     {
       title: 'Get Tax Dropdown',
-      description: 'Get taxes for dropdown selection.',
+      description: 'Taxes as compact id/label options for choosing a tax on a document. Use list_taxes when the rates themselves are needed.',
       inputSchema: {},
     },
     async () => {
@@ -124,7 +124,7 @@ export function registerFinanceTools() {
     'list_chart_of_accounts',
     {
       title: 'List Chart of Accounts',
-      description: 'Get all chart of accounts.',
+      description: 'List the chart of accounts (account number, name, type). Use get_chart_of_accounts_dropdown for compact id/label options when choosing an account.',
       inputSchema: {},
     },
     async () => {
@@ -145,7 +145,7 @@ export function registerFinanceTools() {
     'get_chart_of_accounts_dropdown',
     {
       title: 'Get Chart of Accounts Dropdown',
-      description: 'Get chart of accounts for dropdown.',
+      description: 'Chart-of-accounts entries as compact id/label options for choosing an account on a record.',
       inputSchema: {},
     },
     async () => {

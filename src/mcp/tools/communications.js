@@ -83,7 +83,7 @@ export function registerCommunicationsTools() {
     'list_notifications',
     {
       title: 'List Notifications',
-      description: 'List in-app notifications for the current user.',
+      description: 'List the current user\'s in-app notifications, newest first.',
       inputSchema: {
         unread_only: z.boolean().optional().describe('Only unread (default: false)'),
         page: z.number().optional().describe('Page number (default: 1)'),
@@ -110,7 +110,7 @@ export function registerCommunicationsTools() {
     'mark_notification_read',
     {
       title: 'Mark Notification Read',
-      description: 'Mark one notification as read.',
+      description: 'Mark one in-app notification as read by ID.',
       inputSchema: {
         id: z.union([z.string(), z.number()]).describe('Notification ID'),
       },
@@ -190,7 +190,7 @@ export function registerCommunicationsTools() {
     'list_email_outbox',
     {
       title: 'List Email Outbox',
-      description: 'List sent/queued master-object emails.',
+      description: 'List emails sent or queued from records (invoices, estimates and so on), with recipient, subject and status. Use it to check whether a document email went out.',
       inputSchema: {
         status: z.string().optional().describe('queued, processing, sent, failed, skipped'),
         related_type: z.string().optional().describe('Related object type'),

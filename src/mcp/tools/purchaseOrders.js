@@ -63,7 +63,7 @@ export function registerPurchaseOrderTools() {
     'get_purchase_order_details',
     {
       title: 'Get Purchase Order Details',
-      description: 'Get purchase order details by ID.',
+      description: 'Get one purchase order with its line items, vendor, totals and status. Requires the purchase order ID; find it with list_purchase_orders.',
       inputSchema: {
         id: z.number().describe('Purchase order ID'),
       },
@@ -90,7 +90,7 @@ export function registerPurchaseOrderTools() {
     'create_purchase_order',
     {
       title: 'Create Purchase Order',
-      description: 'Create a new purchase order.',
+      description: 'Create a purchase order header for a vendor. This writes data: confirm vendor, dates and totals with the user first.',
       inputSchema: {
         custom_number: z.string().optional().describe('Custom PO number'),
         contact_id: z.number().describe('Contact ID'),

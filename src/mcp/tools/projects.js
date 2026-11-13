@@ -17,7 +17,7 @@ export function registerProjectTools() {
     'list_projects',
     {
       title: 'List Projects',
-      description: 'List projects. Supports limit, page, and filter.search.',
+      description: 'List projects one page at a time (default limit 25). Match by name with filter.search. Use get_project_details for one project; jobs are separate (list_jobs).',
       inputSchema: {
         limit: z.number().optional().describe('Number of results (default: 25)'),
         page: z.number().optional().describe('Page number (default: 1)'),
@@ -49,7 +49,7 @@ export function registerProjectTools() {
     'get_project_details',
     {
       title: 'Get Project Details',
-      description: 'Get project details by ID.',
+      description: 'Get one project with its status, dates, owner and linked records. Requires the project ID; find it with list_projects.',
       inputSchema: {
         id: z.number().describe('Project ID'),
       },
@@ -77,7 +77,7 @@ export function registerProjectTools() {
     'create_project',
     {
       title: 'Create Project',
-      description: 'Create a new project.',
+      description: 'Create a project. This writes data: confirm name and key fields with the user first.',
       inputSchema: {
         name: z.string().describe('Project name'),
         contact_id: z.number().describe('Contact ID'),
@@ -123,7 +123,7 @@ export function registerProjectTools() {
     'update_project',
     {
       title: 'Update Project',
-      description: 'Update a project with multiple fields.',
+      description: 'Change fields on an existing project (only the fields passed are changed). This writes data: state what will change and confirm with the user.',
       inputSchema: {
         id: z.number().describe('Project ID'),
         name: z.string().optional().describe('Project name'),
@@ -164,7 +164,7 @@ export function registerProjectTools() {
     'delete_project',
     {
       title: 'Delete Project',
-      description: 'Delete a project.',
+      description: 'Delete a project by ID. Destructive: name the project and get the user\'s explicit confirmation first.',
       inputSchema: {
         id: z.number().describe('Project ID'),
       },
@@ -192,7 +192,7 @@ export function registerProjectTools() {
     'clone_project',
     {
       title: 'Clone Project',
-      description: 'Clone/duplicate a project.',
+      description: 'Create a copy of an existing project. This writes data: confirm with the user first.',
       inputSchema: {
         id: z.number().describe('Project ID to clone'),
       },

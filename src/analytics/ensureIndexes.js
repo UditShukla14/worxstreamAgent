@@ -4,17 +4,21 @@
  */
 
 import mongoose from 'mongoose';
+import WalletTransaction from './models/WalletTransaction.js';
+import NovaPlan from './models/NovaPlan.js';
+import { ensureDefaultNovaPlans } from './novaPlans.js';
 
 export async function ensureAnalyticsIndexes() {
   const db = mongoose.connection?.db;
   if (!db) return;
 
   const coll = db.collection('llm_usage_daily');
+  // A fresh database has no llm_usage_daily yet (indexes() throws): that must not skip the steps below.
   let indexes = [];
   try {
     indexes = await coll.indexes();
   } catch {
-    return;
+    indexes = [];
   }
 
   for (const idx of indexes) {
@@ -33,6 +37,22 @@ export async function ensureAnalyticsIndexes() {
         console.warn(`⚠️  Could not drop ${idx.name}:`, err?.message || err);
       }
     }
+  }
+
+  // Wallet history indexes (including the unique payment_ref guard).
+  try {
+    await WalletTransaction.createIndexes();
+  } catch (err) {
+    console.warn('⚠️  Could not create wallet transaction indexes:', err?.message || err);
+  }
+
+  // Nova credit plans: unique plan_id, and the default catalogue on a first boot.
+  try {
+    await NovaPlan.createIndexes();
+    const seeded = await ensureDefaultNovaPlans();
+    if (seeded) console.log(`📦 Seeded ${seeded} default Nova credit plans`);
+  } catch (err) {
+    console.warn('⚠️  Could not prepare Nova plans:', err?.message || err);
   }
 
   // Backfill missing dimension fields on older daily rows.

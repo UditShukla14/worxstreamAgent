@@ -7,7 +7,7 @@
  * stays completely unchanged.
  */
 
-import { config } from '../../config/index.js';
+import { config, getWorxstreamContext } from '../../config/index.js';
 import { createMessage, streamMessage } from '../../llm/anthropicClient.js';
 import { withPromptCaching } from '../../llm/promptCache.js';
 import { buildToolResultBlock, summarizeToolResult } from './toolResultContent.js';
@@ -18,6 +18,7 @@ import { computeContextBudget, measuredInputTokens } from '../../utils/contextBu
 import { clearOldToolResults } from '../../utils/contextWindow.js';
 import { countMessagesTokens } from '../../utils/tokenCounter.js';
 import { computeEventCost } from '../../analytics/costing.js';
+import { getTurnCreditCapUsd } from '../../analytics/novaWallet.js';
 import { usageMetaFromContext } from '../../analytics/usageMeta.js';
 import { getModelForTier, inferTaskTier } from '../../analytics/taskModels.js';
 import { getAnthropicTools, getAnthropicToolsForToolSearch, executeMcpTool } from '../../mcp/server.js';
@@ -376,7 +377,19 @@ export class BaseAgent {
     // Provider cost accumulated this turn - hard stop against runaway tool loops.
     let turnCostUsd = 0;
     let spendCapHit = false;
-    const turnCostCap = Number(config.billing?.maxTurnCostUsd) || 0;
+    let creditCapHit = false;
+    // The turn stops at the lower of the per-turn cap and what the company still has in credit, so one long
+    // tool loop cannot run far past an empty wallet.
+    const perTurnCap = Number(config.billing?.maxTurnCostUsd) || 0;
+    let creditCap = null;
+    try {
+      creditCap = await getTurnCreditCapUsd(getWorxstreamContext().companyId);
+    } catch {
+      creditCap = null; // a wallet lookup problem must not block the turn
+    }
+    const turnCostCap = creditCap != null
+      ? (perTurnCap > 0 ? Math.min(perTurnCap, creditCap) : creditCap)
+      : perTurnCap;
 
     const signal = context._abortSignal || null;
     const isAborted = () => Boolean(signal?.aborted);
@@ -404,6 +417,7 @@ export class BaseAgent {
         context_clears: contextClears,
         turn_cost_usd: Number(turnCostUsd.toFixed(6)),
         spend_cap_hit: spendCapHit,
+        credit_cap_hit: creditCapHit,
       };
       return {
         toolsUsed,
@@ -434,9 +448,10 @@ export class BaseAgent {
       let iterations = 0;
       while (iterations < maxIterPerSlice && totalRounds < maxTotalRounds) {
         if (isAborted()) return abortedResult();
-        if (turnCostCap > 0 && turnCostUsd >= turnCostCap) {
+        if ((turnCostCap > 0 || creditCap != null) && turnCostUsd >= turnCostCap) {
           spendCapHit = true;
-          console.log(`  [cost cap] ${this.name}: per-turn cost cap reached ($${turnCostUsd.toFixed(4)} >= $${turnCostCap})`);
+          creditCapHit = creditCap != null && turnCostUsd >= creditCap;
+          console.log(`  [cost cap] ${this.name}: ${creditCapHit ? 'credit' : 'per-turn'} cap reached ($${turnCostUsd.toFixed(4)} >= $${turnCostCap})`);
           break;
         }
         iterations++;
@@ -761,7 +776,9 @@ export class BaseAgent {
 
     console.log(`⚠️ [${this.name}] continue budget exhausted (${maxSlices} slices)`);
     const fallbackText = lastRawText
-      || (spendCapHit
+      || (creditCapHit
+        ? 'Your Nova credits ran out while working on this, so I stopped here. Add credits and ask again to continue.'
+        : spendCapHit
         ? 'This request used a lot of compute, so I paused to stay within the per-request limit. Say **continue** and I will resume from here.'
         : 'I hit the tool budget mid-task. Say **continue** and I will resume from here without starting over.');
     return finish({

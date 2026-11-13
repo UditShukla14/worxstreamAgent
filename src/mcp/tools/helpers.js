@@ -12,7 +12,7 @@ export function registerHelperTools() {
     'get_timezones',
     {
       title: 'Get Timezones',
-      description: 'Get list of available timezones.',
+      description: 'List available timezone names, for schedules and user settings.',
       inputSchema: {},
     },
     async () => {
@@ -32,7 +32,7 @@ export function registerHelperTools() {
     'get_currencies',
     {
       title: 'Get Currencies',
-      description: 'Get list of available currencies.',
+      description: 'List available currency codes.',
       inputSchema: {},
     },
     async () => {

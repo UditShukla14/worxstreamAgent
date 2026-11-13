@@ -16,7 +16,7 @@ export function registerInventoryTools() {
     'list_warehouses',
     {
       title: 'List Warehouses',
-      description: 'List warehouses. Optional search and managed/serial flags.',
+      description: 'List warehouses, optionally filtered by search text or managed/serial-tracking flags. Returns IDs needed by the stock, ledger and batch tools.',
       inputSchema: {
         search: z.string().optional().describe('Search by warehouse name or number'),
         page: z.number().optional().describe('Page number (default: 1)'),
@@ -45,7 +45,7 @@ export function registerInventoryTools() {
     'get_warehouse_details',
     {
       title: 'Get Warehouse Details',
-      description: 'Get a warehouse by ID.',
+      description: 'Get one warehouse with its address, type and settings. Requires the warehouse ID; find it with list_warehouses.',
       inputSchema: { id: z.number().describe('Warehouse ID') },
     },
     async ({ id }) => {
@@ -79,7 +79,7 @@ export function registerInventoryTools() {
     'list_warehouse_groups',
     {
       title: 'List Warehouse Groups',
-      description: 'List warehouse groups.',
+      description: 'List warehouse groups (named collections of warehouses).',
       inputSchema: {
         search: z.string().optional().describe('Search by group name'),
         page: z.number().optional().describe('Page number (default: 1)'),
@@ -183,7 +183,7 @@ export function registerInventoryTools() {
     'get_inventory_adjustment_details',
     {
       title: 'Get Inventory Adjustment Details',
-      description: 'Get a stock adjustment by ID.',
+      description: 'Get one stock adjustment with its lines, quantities and reason. Requires the adjustment ID.',
       inputSchema: { id: z.number().describe('Adjustment ID') },
     },
     async ({ id }) => {
@@ -200,7 +200,7 @@ export function registerInventoryTools() {
     'list_inventory_internal_transfers',
     {
       title: 'List Inventory Internal Transfers',
-      description: 'List warehouse-to-warehouse stock transfers.',
+      description: 'List stock transfers between warehouses with status and quantities.',
       inputSchema: {
         source_warehouse_id: z.number().optional().describe('Source warehouse ID'),
         dest_warehouse_id: z.number().optional().describe('Destination warehouse ID'),
@@ -228,7 +228,7 @@ export function registerInventoryTools() {
     'list_inventory_batches',
     {
       title: 'List Inventory Batches',
-      description: 'List inventory lots/batches.',
+      description: 'List inventory batches/lots with quantity on hand and expiry where tracked.',
       inputSchema: {
         warehouse_id: z.number().optional().describe('Warehouse ID'),
         search: z.string().optional().describe('Search lot/reference'),
@@ -278,7 +278,7 @@ export function registerInventoryTools() {
     'list_inventory_sku_ledger',
     {
       title: 'List Inventory SKU Ledger',
-      description: 'SKU movement ledger for a warehouse.',
+      description: 'Movement history (receipts, issues, adjustments, transfers) of a SKU in a warehouse. Use it to explain why stock changed; for current quantities use the stock tools.',
       inputSchema: {
         warehouse_id: z.number().describe('Warehouse ID'),
         search: z.string().optional().describe('Search SKU or product'),
@@ -308,7 +308,7 @@ export function registerInventoryTools() {
     'list_inventory_suppliers',
     {
       title: 'List Inventory Suppliers',
-      description: 'List inventory suppliers (warehouse supplier records).',
+      description: 'List supplier records attached to warehouse stock. For the vendor master list use list_vendors.',
       inputSchema: {
         search: z.string().optional().describe('Search supplier name'),
         is_active: z.boolean().optional().describe('Filter by active flag'),
