@@ -1,7 +1,8 @@
 /**
  * Nova credit plans: what a company can buy for the Nova app. SEPARATE from the Worxstream app subscription plans
- * (those are for the apps a company subscribes to). A plan sells `credit_usd` of Anthropic usage for
- * `price_usd` = credit x (1 + margin_rate). Managed by Worxstream staff in the admin dashboard.
+ * (those are for the apps a company subscribes to). A plan is a PRICE: the company pays `price_usd` and receives the same
+ * amount as Nova credit. Worxstream's margin is taken when the credit is spent (the per-request markup), so a company only
+ * ever sees the dollars it is charged. Managed by Worxstream staff in the admin dashboard.
  */
 
 import mongoose from 'mongoose';
@@ -12,12 +13,10 @@ const novaPlanSchema = new mongoose.Schema(
     plan_id: { type: String, required: true, unique: true, index: true, trim: true },
     name: { type: String, required: true, trim: true },
     description: { type: String, default: '' },
-    /** Anthropic-cost value credited to the company's wallet. */
-    credit_usd: { type: Number, required: true, min: 0.01 },
-    /** Margin on top of the credit (0.2 = +20%). */
-    margin_rate: { type: Number, required: true, min: 0, max: 5 },
-    /** What the company pays, in dollars, always credit x (1 + margin) rounded to the cent. */
+    /** What the company pays, and the Nova credit it receives, in dollars. */
     price_usd: { type: Number, required: true, min: 0.01 },
+    /** What the plan includes, shown as bullet points on the pricing card. */
+    features: { type: [String], default: [] },
     active: { type: Boolean, default: true },
     sort: { type: Number, default: 0 },
     created_at: { type: Date, default: Date.now },

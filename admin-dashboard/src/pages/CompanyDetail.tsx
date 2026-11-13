@@ -169,10 +169,10 @@ function WalletModal({ id, action, wallet, onClose, onDone }: { id: string; acti
     <Modal title={titles[action]} onClose={onClose}>
       <div className="stack">
         {action === 'credits' && (<>
-          <label className="field">Nova plan (credit and price come from the plan)
+          <label className="field">Nova plan (credit and price paid come from the plan)
             <select className="input" value={v.planId} onChange={(e) => set('planId', e.target.value)}>
               <option value="">Custom amount</option>
-              {planOptions.map((pl: Row) => <option key={pl.plan_id} value={pl.plan_id}>{pl.name}: {usd(pl.credit_usd)} credit, {usd(pl.price_usd)} paid</option>)}
+              {planOptions.map((pl: Row) => <option key={pl.plan_id} value={pl.plan_id}>{pl.name}: pays {usd(pl.price_usd)}, receives {usd(pl.credit_usd)}</option>)}
             </select>
           </label>
           {!v.planId && <label className="field">Amount (USD credit)<input className="input" type="number" min="0" step="0.01" value={v.amount} onChange={(e) => set('amount', e.target.value)} autoFocus /></label>}

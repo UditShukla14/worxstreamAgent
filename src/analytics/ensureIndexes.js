@@ -6,7 +6,7 @@
 import mongoose from 'mongoose';
 import WalletTransaction from './models/WalletTransaction.js';
 import NovaPlan from './models/NovaPlan.js';
-import { ensureDefaultNovaPlans } from './novaPlans.js';
+import { ensureDefaultNovaPlans, migrateLegacyNovaPlans } from './novaPlans.js';
 
 export async function ensureAnalyticsIndexes() {
   const db = mongoose.connection?.db;
@@ -49,6 +49,8 @@ export async function ensureAnalyticsIndexes() {
   // Nova credit plans: unique plan_id, and the default catalogue on a first boot.
   try {
     await NovaPlan.createIndexes();
+    const converted = await migrateLegacyNovaPlans();
+    if (converted) console.log(`📦 Converted ${converted} Nova plans to the price-only format`);
     const seeded = await ensureDefaultNovaPlans();
     if (seeded) console.log(`📦 Seeded ${seeded} default Nova credit plans`);
   } catch (err) {

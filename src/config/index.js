@@ -138,15 +138,11 @@ export const config = {
      * and stored on the ledger row together with the provider cost. 0 = off (default, so nothing
      * changes until explicitly enabled; a company wallet can override it with `markup_rate`).
      */
-    markupRate: Math.min(5, Math.max(0, parseFloat(process.env.NOVA_MARKUP_RATE || '0') || 0)),
+    // Worxstream's margin on Anthropic's price (0.2 = +20%). Charged per request against the company's credit, so
+    // everything a company sees (plan prices, balance, usage) is in the dollars it is charged, never Anthropic's cost.
+    markupRate: Math.min(5, Math.max(0, parseFloat(process.env.NOVA_MARKUP_RATE || '0.2') || 0)),
     /** Hard stop for one chat turn's PROVIDER cost in USD (0 = off). Guards runaway tool loops. */
     maxTurnCostUsd: parseFloat(process.env.NOVA_MAX_TURN_COST_USD || '3'),
-    /**
-     * Margin Worxstream adds on top of Anthropic's price when it SELLS a Nova credit plan: a company pays
-     * credit x (1 + this) and receives `credit` dollars of Anthropic usage. Default 20%.
-     * Keep NOVA_MARKUP_RATE at 0 when selling plans this way, or the margin is charged twice (plan price + per-call markup).
-     */
-    planMarginRate: Math.min(5, Math.max(0, parseFloat(process.env.NOVA_PLAN_MARGIN_RATE || '0.2') || 0)),
     /** Free trial credit given to a company the first time it uses Nova (0 = off: no wallet means unlimited). */
     trialAllowanceUsd: Math.max(0, parseFloat(process.env.NOVA_TRIAL_ALLOWANCE_USD || '0') || 0),
     /** true: a company with no wallet (and no trial) cannot use Nova until it buys credits or ops grants some. */

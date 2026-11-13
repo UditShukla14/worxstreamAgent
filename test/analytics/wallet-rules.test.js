@@ -49,6 +49,7 @@ describe('customer wallet view', () => {
     const view = walletToApi(doc(0));
     assert.equal('markup_rate' in view, false);
     assert.equal('grant_refs' in view, false);
+    assert.equal('notes' in view, false);
   });
 
   it('has no flags for a company without a wallet', () => {

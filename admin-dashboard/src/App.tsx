@@ -12,6 +12,7 @@ import Economics from './pages/Economics';
 import Quality from './pages/Quality';
 import Models from './pages/Models';
 import NovaPlans from './pages/NovaPlans';
+import Subscriptions from './pages/Subscriptions';
 
 const icon = (d: string) => (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>);
 const NAV: { group: string; items: { page: string; label: string; icon: ReactNode }[] }[] = [
@@ -25,6 +26,7 @@ const NAV: { group: string; items: { page: string; label: string; icon: ReactNod
     { page: 'companies', label: 'Companies', icon: icon('M3 21h18M5 21V7l7-4 7 4v14M9 21v-6h6v6') },
     { page: 'explorer', label: 'Usage explorer', icon: icon('M3 3v18h18M7 15l4-4 3 3 5-6') },
     { page: 'wallets', label: 'Wallets', icon: icon('M3 7h18v12H3zM3 7l3-4h12l3 4M16 13h2') },
+    { page: 'subscriptions', label: 'Subscriptions', icon: icon('M9 11l3 3 8-8M20 12v7a2 2 0 01-2 2H6a2 2 0 01-2-2V5a2 2 0 012-2h9') },
     { page: 'plans', label: 'Nova plans', icon: icon('M20 12V8H6a2 2 0 010-4h12v4M4 6v12a2 2 0 002 2h14v-4M18 12a2 2 0 000 4h4v-4z') },
   ] },
   { group: 'Platform', items: [
@@ -32,7 +34,7 @@ const NAV: { group: string; items: { page: string; label: string; icon: ReactNod
     { page: 'reconcile', label: 'Reconcile', icon: icon('M20 6L9 17l-5-5') },
   ] },
 ];
-const TITLES: Record<string, string> = { overview: 'Overview', growth: 'Growth & adoption', economics: 'Economics', quality: 'Quality & reliability', companies: 'Companies', company: 'Company', explorer: 'Usage explorer', wallets: 'Wallets & credit', plans: 'Nova credit plans', models: 'Models', reconcile: 'Reconcile with Anthropic' };
+const TITLES: Record<string, string> = { overview: 'Overview', growth: 'Growth & adoption', economics: 'Economics', quality: 'Quality & reliability', companies: 'Companies', company: 'Company', explorer: 'Usage explorer', wallets: 'Wallets & credit', plans: 'Nova credit plans', subscriptions: 'Company subscriptions', models: 'Models', reconcile: 'Reconcile with Anthropic' };
 
 function loadRange(): Range {
   try {
@@ -77,7 +79,7 @@ export default function App() {
   if (!authed) return <Login onDone={() => setAuthed(true)} />;
 
   const page = route.page;
-  const showRange = page !== 'wallets' && page !== 'plans';
+  const showRange = page !== 'wallets' && page !== 'plans' && page !== 'subscriptions';
   let body: ReactNode;
   switch (page) {
     case 'companies': body = <Companies range={range} />; break;
@@ -85,6 +87,7 @@ export default function App() {
     case 'explorer': body = <Explorer range={range} />; break;
     case 'wallets': body = <Wallets />; break;
     case 'plans': body = <NovaPlans />; break;
+    case 'subscriptions': body = <Subscriptions />; break;
     case 'growth': body = <Growth range={range} />; break;
     case 'economics': body = <Economics range={range} />; break;
     case 'quality': body = <Quality range={range} />; break;

@@ -42,7 +42,9 @@ import {
 import { assertNovaCredits, getWallet, walletToApi, listWalletTransactions } from '../../analytics/novaWallet.js';
 import { getCompanyUsage, getUserUsage } from '../../analytics/queries.js';
 import { toCustomerUsage } from '../../analytics/customerUsage.js';
-import { listNovaPlans, toCustomerPlan } from '../../analytics/novaPlans.js';
+import { listNovaPlans, toCustomerPlan, loadPlanContext } from '../../analytics/novaPlans.js';
+import { quoteForPrice, toCustomerQuote, bonusTiers } from '../../analytics/novaPricing.js';
+import { getCompanyModelChoices, setCompanyModelChoices } from '../../analytics/customerModels.js';
 import { listModelCatalogForApi } from '../../analytics/modelPricing.js';
 import { config } from '../../config/index.js';
 import LlmUsageEvent from '../../analytics/models/LlmUsageEvent.js';
@@ -178,16 +180,80 @@ router.get('/usage/users/:userId', async (req, res) => {
   }
 });
 
-/** The Nova credit plans a company can buy (active only; price and credit, never the margin). */
+/**
+ * The Nova credit plans a company can buy (active only), plus the "type your own amount" plan.
+ * Only what the company pays and receives: never Anthropic's cost or the margin.
+ */
 router.get('/plans', async (req, res) => {
   try {
     const tenant = requireConversationTenant(req, res);
     if (!tenant) return;
-    const plans = (await listNovaPlans({ activeOnly: true })).map(toCustomerPlan);
-    res.json({ success: true, data: plans });
+    const ctx = await loadPlanContext();
+    const plans = (await listNovaPlans({ activeOnly: true })).map((p) => toCustomerPlan(p, ctx));
+    res.json({
+      success: true,
+      data: {
+        plans,
+        custom: {
+          min_usd: ctx.settings.custom_min_usd,
+          max_usd: ctx.settings.custom_max_usd,
+          bonus_tiers: bonusTiers(ctx.settings, ctx.markup),
+        },
+      },
+    });
   } catch (error) {
     console.error('plans error:', error?.message);
     res.status(500).json({ success: false, error: 'Failed to load plans' });
+  }
+});
+
+/** What a custom amount costs and buys: ?amount=300 */
+router.get('/plans/quote', async (req, res) => {
+  try {
+    const tenant = requireConversationTenant(req, res);
+    if (!tenant) return;
+    const ctx = await loadPlanContext();
+    const amount = Number(req.query.amount);
+    if (!Number.isFinite(amount) || amount < ctx.settings.custom_min_usd || amount > ctx.settings.custom_max_usd) {
+      return res.status(400).json({
+        success: false,
+        error: `Enter an amount between ${ctx.settings.custom_min_usd} and ${ctx.settings.custom_max_usd}`,
+      });
+    }
+    res.json({ success: true, data: toCustomerQuote(quoteForPrice(amount, ctx.settings, ctx.markup)) });
+  } catch (error) {
+    console.error('quote error:', error?.message);
+    res.status(500).json({ success: false, error: 'Failed to price that amount' });
+  }
+});
+
+/**
+ * The model screen: for each task, the models on offer with the recommendation, the price the company is charged
+ * per million tokens, and what is selected now.
+ */
+router.get('/company-models', async (req, res) => {
+  try {
+    const tenant = requireConversationTenant(req, res);
+    if (!tenant) return;
+    res.json({ success: true, data: await getCompanyModelChoices(tenant.company_id) });
+  } catch (error) {
+    console.error('company models error:', error?.message);
+    res.status(500).json({ success: false, error: 'Failed to load models' });
+  }
+});
+
+/** Save the company's model per task: { daily?: "model-id", medium?: "model-id" }. An empty value uses the recommendation. */
+router.put('/company-models', async (req, res) => {
+  try {
+    const tenant = requireConversationTenant(req, res);
+    if (!tenant) return;
+    res.json({ success: true, data: await setCompanyModelChoices(tenant.company_id, req.body || {}) });
+  } catch (error) {
+    if (/is not available/.test(error?.message || '')) {
+      return res.status(400).json({ success: false, error: error.message });
+    }
+    console.error('save company models error:', error?.message);
+    res.status(500).json({ success: false, error: 'Failed to save models' });
   }
 });
 

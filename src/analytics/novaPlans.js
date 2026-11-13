@@ -1,51 +1,57 @@
 /**
- * Nova credit plans: pricing rule, catalog and customer view.
- * Price = Anthropic credit x (1 + margin), rounded to the cent. The company is credited the full `credit_usd`.
+ * Nova credit plans: catalogue and views.
+ * A plan is a price. The company pays `price_usd`; the credit it receives comes from the volume-discount rule
+ * (novaPricing.js): the same amount for small plans, a little more (bonus credit) for larger ones. Worxstream's margin is
+ * taken as the credit is spent.
  */
 
 import NovaPlan from './models/NovaPlan.js';
 import { config } from '../config/index.js';
-
-/** Dollars to charge for `creditUsd` of Anthropic usage with `marginRate` on top, rounded to the cent. */
-export function priceForCredit(creditUsd, marginRate) {
-  const credit = Number(creditUsd);
-  const margin = Number(marginRate);
-  if (!Number.isFinite(credit) || credit <= 0) throw new Error('credit_usd must be a positive number');
-  if (!Number.isFinite(margin) || margin < 0 || margin > 5) throw new Error('margin_rate must be between 0 and 5 (0.2 = +20%)');
-  return Math.round(credit * 100 * (1 + margin)) / 100;
-}
+import { getPricingSettings, quoteForPrice, toCustomerQuote } from './novaPricing.js';
 
 const slug = (s) => String(s || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
 
-/** Staff view: includes the margin and inactive plans. */
-export function toAdminPlan(doc) {
+const cleanFeatures = (list) =>
+  (Array.isArray(list) ? list : String(list || '').split('\n'))
+    .map((f) => String(f).trim().slice(0, 120))
+    .filter(Boolean)
+    .slice(0, 12);
+
+/** Staff view: price, the credit it buys, bonus, what it covers in Anthropic usage and the margin. */
+export function toAdminPlan(doc, ctx = {}) {
+  const q = quoteForPrice(doc.price_usd, ctx.settings, ctx.markup);
   return {
     plan_id: doc.plan_id,
     name: doc.name,
     description: doc.description || '',
-    credit_usd: doc.credit_usd,
-    margin_rate: doc.margin_rate,
+    features: doc.features || [],
     price_usd: doc.price_usd,
+    credit_usd: q.credit_usd,
+    bonus_pct: q.bonus_pct,
+    margin_rate: q.margin_rate,
+    anthropic_value_usd: q.anthropic_value_usd,
+    margin_usd: q.margin_usd,
+    estimated_requests: q.estimated_requests,
     active: Boolean(doc.active),
     sort: doc.sort ?? 0,
     updated_at: doc.updated_at ? new Date(doc.updated_at).toISOString() : null,
   };
 }
 
-/** Customer view: what they pay and what they get. Never the margin. */
-export function toCustomerPlan(doc) {
+/** Customer view: what they pay, what they receive and what is included. Never Anthropic's cost or the margin. */
+export function toCustomerPlan(doc, ctx = {}) {
+  const q = toCustomerQuote(quoteForPrice(doc.price_usd, ctx.settings, ctx.markup));
   return {
     plan_id: doc.plan_id,
     name: doc.name,
     description: doc.description || '',
-    credit_usd: doc.credit_usd,
-    price_usd: doc.price_usd,
+    features: doc.features || [],
+    ...q,
   };
 }
 
 export async function listNovaPlans({ activeOnly = false } = {}) {
-  const docs = await NovaPlan.find(activeOnly ? { active: true } : {}).sort({ sort: 1, credit_usd: 1 }).lean();
-  return docs;
+  return NovaPlan.find(activeOnly ? { active: true } : {}).sort({ sort: 1, price_usd: 1 }).lean();
 }
 
 export async function getNovaPlan(planId) {
@@ -54,9 +60,14 @@ export async function getNovaPlan(planId) {
   return NovaPlan.findOne({ plan_id: id }).lean();
 }
 
+/** Plans, pricing settings and markup together, so a view is built from one consistent snapshot. */
+export async function loadPlanContext() {
+  return { settings: await getPricingSettings(), markup: config.billing?.markupRate ?? 0 };
+}
+
 /**
- * Create or update a plan. price_usd is always recomputed from credit and margin, so it cannot drift.
- * @param {{ plan_id?: string, name?: string, description?: string, credit_usd?: number, margin_rate?: number, active?: boolean, sort?: number }} body
+ * Create or update a plan.
+ * @param {{ plan_id?: string, name?: string, description?: string, features?: string[]|string, price_usd?: number, active?: boolean, sort?: number }} body
  * @param {{ create?: boolean }} [opts]
  */
 export async function saveNovaPlan(body = {}, { create = false } = {}) {
@@ -68,11 +79,8 @@ export async function saveNovaPlan(body = {}, { create = false } = {}) {
 
   const name = body.name !== undefined ? String(body.name).trim() : existing?.name;
   if (!name) throw new Error('name is required');
-  const credit = body.credit_usd !== undefined ? Number(body.credit_usd) : existing?.credit_usd;
-  const margin = body.margin_rate !== undefined && body.margin_rate !== null && body.margin_rate !== ''
-    ? Number(body.margin_rate)
-    : (existing?.margin_rate ?? config.billing?.planMarginRate ?? 0.2);
-  const price = priceForCredit(credit, margin);
+  const price = body.price_usd !== undefined ? Number(body.price_usd) : existing?.price_usd;
+  if (!Number.isFinite(price) || price <= 0) throw new Error('price_usd must be a positive number');
 
   const now = new Date();
   const doc = await NovaPlan.findOneAndUpdate(
@@ -82,9 +90,8 @@ export async function saveNovaPlan(body = {}, { create = false } = {}) {
         plan_id: planId,
         name,
         description: body.description !== undefined ? String(body.description).slice(0, 500) : (existing?.description || ''),
-        credit_usd: Math.round(credit * 100) / 100,
-        margin_rate: margin,
-        price_usd: price,
+        features: body.features !== undefined ? cleanFeatures(body.features) : (existing?.features || []),
+        price_usd: Math.round(price * 100) / 100,
         active: body.active !== undefined ? Boolean(body.active) : (existing ? existing.active : true),
         sort: body.sort !== undefined ? Number(body.sort) || 0 : (existing?.sort ?? 0),
         updated_at: now,
@@ -93,16 +100,34 @@ export async function saveNovaPlan(body = {}, { create = false } = {}) {
     },
     { upsert: true, new: true },
   ).lean();
-  return toAdminPlan(doc);
+  return toAdminPlan(doc, await loadPlanContext());
 }
 
-/** First boot only (no plans at all): the default catalogue. Staff edit or deactivate these in the admin dashboard. */
+/**
+ * Plans saved by the earlier design had `credit_usd` (Anthropic value) and `margin_rate`, with the price derived from them.
+ * A plan is now just a price (what the company pays), so keep the credit figure as the price (50 / 250 / 1000 for the
+ * defaults) and drop the old fields. Safe to run at every boot: only plans that still carry the old fields are touched.
+ * @returns {Promise<number>} plans converted
+ */
+export async function migrateLegacyNovaPlans() {
+  const res = await NovaPlan.collection.updateMany(
+    { credit_usd: { $exists: true } },
+    [{ $set: { price_usd: '$credit_usd', updated_at: '$$NOW' } }, { $unset: ['credit_usd', 'margin_rate'] }],
+  );
+  return res.modifiedCount || 0;
+}
+
+/** First boot only (no plans at all): the default catalogue. Staff edit or hide these in the admin dashboard. */
 export async function ensureDefaultNovaPlans() {
   if ((await NovaPlan.estimatedDocumentCount()) > 0) return 0;
+  const common = ['Works across all your Worxstream apps', 'Usage reports by employee and by day'];
   const defaults = [
-    { plan_id: 'starter', name: 'Nova Starter', description: 'Light use for a small team.', credit_usd: 50, sort: 1 },
-    { plan_id: 'growth', name: 'Nova Growth', description: 'Everyday use across a team.', credit_usd: 250, sort: 2 },
-    { plan_id: 'scale', name: 'Nova Scale', description: 'Heavy use, many employees.', credit_usd: 1000, sort: 3 },
+    { plan_id: 'starter', name: 'Nova Starter', description: 'For trying Nova with a small team.', price_usd: 50, sort: 1,
+      features: ['Everyday questions, summaries and reports', ...common] },
+    { plan_id: 'growth', name: 'Nova Growth', description: 'Everyday use across your team.', price_usd: 250, sort: 2,
+      features: ['Reports, estimates and invoices on demand', 'Choose the AI model for each task', ...common] },
+    { plan_id: 'scale', name: 'Nova Scale', description: 'Heavy use across many employees.', price_usd: 1000, sort: 3,
+      features: ['Best value: the biggest bonus credit', 'Choose the AI model for each task', ...common] },
   ];
   for (const plan of defaults) await saveNovaPlan(plan, { create: true });
   return defaults.length;

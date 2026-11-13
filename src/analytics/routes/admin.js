@@ -21,7 +21,9 @@ import {
 import { getSummary, getUsage, getDirectory, getCompanyDetail } from '../adminQueries.js';
 import { getEconomics, getGrowth, getQuality, getWalletsInsights, getModelsOverview } from '../adminInsights.js';
 import { reconcileWithAnthropic } from '../anthropicReconcile.js';
-import { listNovaPlans, getNovaPlan, saveNovaPlan, toAdminPlan } from '../novaPlans.js';
+import { listNovaPlans, getNovaPlan, saveNovaPlan, toAdminPlan, loadPlanContext } from '../novaPlans.js';
+import { getPricingSettings, savePricingSettings, quoteForPrice } from '../novaPricing.js';
+import { listCompanyModelAssignments } from '../customerModels.js';
 import { config } from '../../config/index.js';
 
 const router = Router();
@@ -186,7 +188,7 @@ router.post('/analytics/companies/:companyId/wallet/credits', async (req, res, n
     const data = await grantWalletCredits(req.params.companyId, req.body || {});
     res.json({ success: true, data });
   } catch (err) {
-    if (err?.message?.includes('amount_usd') || err?.message?.includes('companyId') || /plan "/.test(err?.message || '')) {
+    if (/amount_usd|companyId|plan "|custom_amount_usd/.test(err?.message || '')) {
       return res.status(400).json({ success: false, error: err.message });
     }
     next(err);
@@ -194,18 +196,26 @@ router.post('/analytics/companies/:companyId/wallet/credits', async (req, res, n
 });
 
 // ---- Nova credit plans (what companies can buy) ----------------------------------
-/** All plans, with the margin. `usage_markup_rate` is a warning signal: plans already carry the margin, so it should be 0. */
+/** All plans with price, the credit it buys, bonus, what it covers in Anthropic usage and the margin, plus the pricing rules. */
 router.get('/analytics/nova-plans', async (req, res, next) => {
   try {
-    const plans = (await listNovaPlans()).map(toAdminPlan);
-    res.json({
-      success: true,
-      data: {
-        plans,
-        default_margin_rate: config.billing?.planMarginRate ?? 0.2,
-        usage_markup_rate: config.billing?.markupRate ?? 0,
-      },
-    });
+    const ctx = await loadPlanContext();
+    const plans = (await listNovaPlans()).map((p) => toAdminPlan(p, ctx));
+    res.json({ success: true, data: { plans, pricing: ctx.settings, usage_markup_rate: ctx.markup } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Price any amount (Laravel uses this to price a custom-amount payment on the server): ?amount=300 */
+router.get('/analytics/nova-plans/quote', async (req, res, next) => {
+  try {
+    const ctx = await loadPlanContext();
+    const amount = Number(req.query.amount);
+    if (!Number.isFinite(amount) || amount < ctx.settings.custom_min_usd || amount > ctx.settings.custom_max_usd) {
+      return res.status(400).json({ success: false, error: `amount must be between ${ctx.settings.custom_min_usd} and ${ctx.settings.custom_max_usd}` });
+    }
+    res.json({ success: true, data: quoteForPrice(amount, ctx.settings, ctx.markup) });
   } catch (err) {
     next(err);
   }
@@ -216,13 +226,40 @@ router.get('/analytics/nova-plans/:planId', async (req, res, next) => {
   try {
     const plan = await getNovaPlan(req.params.planId);
     if (!plan) return res.status(404).json({ success: false, error: 'Plan not found' });
-    res.json({ success: true, data: toAdminPlan(plan) });
+    res.json({ success: true, data: toAdminPlan(plan, await loadPlanContext()) });
   } catch (err) {
     next(err);
   }
 });
 
-const PLAN_INPUT_ERRORS = /plan_id|name is required|credit_usd|margin_rate|already exists|not found/;
+/** Every company with its plan, credit and the model it uses for each kind of task (the Subscriptions tab). */
+router.get('/analytics/company-models', async (req, res, next) => {
+  try {
+    res.json({ success: true, data: await listCompanyModelAssignments() });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Volume-discount tiers, custom-amount limits and the typical cost of a request. */
+router.get('/analytics/nova-pricing', async (req, res, next) => {
+  try {
+    res.json({ success: true, data: { pricing: await getPricingSettings(), usage_markup_rate: config.billing?.markupRate ?? 0 } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put('/analytics/nova-pricing', async (req, res, next) => {
+  try {
+    res.json({ success: true, data: { pricing: await savePricingSettings(req.body || {}), usage_markup_rate: config.billing?.markupRate ?? 0 } });
+  } catch (err) {
+    if (err?.name === 'PricingInputError') return res.status(400).json({ success: false, error: err.message });
+    next(err);
+  }
+});
+
+const PLAN_INPUT_ERRORS = /plan_id|name is required|price_usd|already exists|not found/;
 
 router.post('/analytics/nova-plans', async (req, res, next) => {
   try {

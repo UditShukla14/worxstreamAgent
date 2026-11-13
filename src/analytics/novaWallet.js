@@ -14,7 +14,8 @@ import CompanyNovaWallet from './models/CompanyNovaWallet.js';
 import { sanitizeModelTiers } from './taskModels.js';
 import LlmUsageEvent from './models/LlmUsageEvent.js';
 import WalletTransaction from './models/WalletTransaction.js';
-import { getNovaPlan } from './novaPlans.js';
+import { getNovaPlan, loadPlanContext } from './novaPlans.js';
+import { quoteForPrice } from './novaPricing.js';
 import { config } from '../config/index.js';
 import { clampMarkup, usdToMicros, microsToUsd } from './costing.js';
 
@@ -299,15 +300,30 @@ const remainingMicros = (doc) =>
 export async function grantWalletCredits(companyId, body = {}) {
   const id = String(companyId || '').trim();
   if (!id) throw new Error('companyId is required');
-  // A Nova plan purchase: the plan decides the credit and the price paid, and its name becomes the company's plan.
+  // A purchase: the server decides the credit and the price paid, so the caller cannot choose a better deal.
+  //  - plan_id: a Nova plan (its name becomes the company's plan)
+  //  - custom_amount_usd: the "type your own amount" plan, within the allowed range
+  // Both give the volume-discount credit for that price (see novaPricing.js).
   let plan = null;
+  let quote = null;
+  let custom = false;
   if (body.plan_id) {
     plan = await getNovaPlan(body.plan_id);
     if (!plan) throw new Error(`plan "${body.plan_id}" not found`);
+    const ctx = await loadPlanContext();
+    quote = quoteForPrice(plan.price_usd, ctx.settings, ctx.markup);
+  } else if (body.custom_amount_usd !== undefined && body.custom_amount_usd !== null && body.custom_amount_usd !== '') {
+    const ctx = await loadPlanContext();
+    const paid = Number(body.custom_amount_usd);
+    if (!Number.isFinite(paid) || paid < ctx.settings.custom_min_usd || paid > ctx.settings.custom_max_usd) {
+      throw new Error(`custom_amount_usd must be between ${ctx.settings.custom_min_usd} and ${ctx.settings.custom_max_usd}`);
+    }
+    quote = quoteForPrice(paid, ctx.settings, ctx.markup);
+    custom = true;
   }
-  const amount = body.amount_usd !== undefined && body.amount_usd !== null && body.amount_usd !== ''
-    ? Number(body.amount_usd)
-    : plan?.credit_usd;
+  const amount = quote
+    ? quote.credit_usd
+    : (body.amount_usd !== undefined && body.amount_usd !== null && body.amount_usd !== '' ? Number(body.amount_usd) : NaN);
   if (!Number.isFinite(amount) || amount <= 0) {
     throw new Error('amount_usd must be a positive number');
   }
@@ -363,13 +379,13 @@ export async function grantWalletCredits(companyId, body = {}) {
     type: 'grant',
     amount_micros: addMicros,
     balance_after_micros: remainingMicros(doc),
-    reason: body.reason || (plan ? `${plan.name} plan` : ''),
+    reason: body.reason || (plan ? `${plan.name} plan` : (custom ? 'Custom amount' : '')),
     payment_ref: ref,
-    plan_id: plan?.plan_id,
-    plan_name: plan?.name,
+    plan_id: plan ? plan.plan_id : (custom ? 'custom' : undefined),
+    plan_name: plan ? plan.name : (custom ? 'Custom amount' : undefined),
     paid_micros: body.paid_usd != null && body.paid_usd !== ''
       ? usdToMicros(Number(body.paid_usd))
-      : (plan ? usdToMicros(plan.price_usd) : null),
+      : (quote ? usdToMicros(quote.price_usd) : null),
     actor: body.actor || (ref ? 'stripe' : 'admin'),
   });
   return { ...walletToApi(doc), duplicate: false };
