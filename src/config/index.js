@@ -156,6 +156,12 @@ export const config = {
     secretKey: (process.env.STRIPE_SECRET_KEY || '').trim(),
     webhookSecret: (process.env.STRIPE_WEBHOOK_SECRET || '').trim(),
   },
+  /** Seller details printed on invoices. Address lines are separated with "|". */
+  invoice: {
+    sellerName: (process.env.INVOICE_SELLER_NAME || 'Worxstream').trim(),
+    sellerAddress: (process.env.INVOICE_SELLER_ADDRESS || '').trim(),
+    sellerTaxId: (process.env.INVOICE_SELLER_TAX_ID || '').trim(),
+  },
   /** Platform-ops key for /api/admin/* (token usage billing). */
   admin: {
     apiKey: (process.env.ADMIN_API_KEY || '').trim(),

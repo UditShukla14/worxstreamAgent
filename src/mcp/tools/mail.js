@@ -40,7 +40,7 @@ export function registerMailTools() {
       title: 'List Mail Accounts',
       description:
         'List the mailboxes the user has connected (address, provider, whether the connection has expired, and the category labels set up for AI sorting). '
-        + 'Call it first when the user asks about "my email" and you need an account address; if it returns no accounts, tell the user to connect one in Mail settings.',
+        + 'Call it first when the user asks about "my email" and you need an account address; if it returns no accounts, tell the user to connect one in Mail settings (and if it returns an error, report that error as it is).',
       inputSchema: {},
       capabilities: read('list'),
     },
@@ -80,12 +80,17 @@ export function registerMailTools() {
       title: 'Search Mail',
       description:
         'Search the user\'s synced mailbox and return a page of matches, newest first: sender, subject, date, read/important flags, a short preview and the AI summary, priority, category, sentiment and action items. '
-        + 'Filter by sender, free text (subject, sender or summary), priority, category, sentiment, unread, important, has action items, or a date range (YYYY-MM-DD). '
+        + 'Filter by sender, recipient, subject, free text (subject, sender, recipient, preview or AI summary), priority, category, sentiment, unread, important, has attachments, has action items, a conversation, or a date range (YYYY-MM-DD). '
+        + 'For a person or company use from (name or domain, e.g. "kevin" or "rxo") and also try to for mail you sent them. Each result carries conversationId: pass it to get_mail_conversation to read the whole thread. '
         + 'Default page size 10, at most 25; the response gives the total so you can say "Showing 10 of 34" and offer the next page. '
-        + 'Category values are the internal names from list_mail_accounts. Bodies are not included: use get_mail_message for one email.',
+        + 'Category values are the internal names from list_mail_accounts. Bodies are not included: use get_mail_message for one email or get_mail_conversation for a thread.',
       inputSchema: {
         q: z.string().optional().describe('Text to find in subject, sender or AI summary'),
         from: z.string().optional().describe('Part of the sender name or address'),
+        to: z.string().optional().describe('Part of a recipient (To or Cc) name or address'),
+        subject: z.string().optional().describe('Part of the subject'),
+        has_attachments: z.boolean().optional().describe('Only emails that have attachments'),
+        conversation_id: z.string().optional().describe('Only the messages of this conversation (from a search result)'),
         priority: z.enum(['urgent', 'high', 'medium', 'low']).optional(),
         sentiment: z.enum(['positive', 'negative', 'neutral']).optional(),
         category: z.string().optional().describe('Category name as returned in list_mail_accounts'),
@@ -118,6 +123,52 @@ export function registerMailTools() {
       capabilities: read('get'),
     },
     async ({ id, email }) => asText(withNote(await mailBackend.get(`/emails/${encodeURIComponent(id)}`, { email }))),
+  );
+
+  registerTool(
+    'get_mail_conversation',
+    {
+      title: 'Get Mail Conversation',
+      description:
+        'Read a whole email conversation (thread), oldest first: every message with sender, recipients, date, flags and its own new text (quoted replies are removed, text cut at about 3,000 characters each). '
+        + 'Up to 25 messages; the newest 8 include text, older ones only the summary fields. Needs conversationId from a search_mail or get_unread_mail_summary result. '
+        + 'Use it for "what is my conversation with Kevin about", "summarise this thread", "what did they say last" and before drafting a reply.',
+      inputSchema: {
+        conversation_id: z.string().describe('conversationId from a search_mail or get_unread_mail_summary result'),
+        email: accountField,
+      },
+      capabilities: read('get'),
+    },
+    async ({ conversation_id, email }) => asText(withNote(await mailBackend.get(`/emails/conversation/${encodeURIComponent(conversation_id)}`, { email }))),
+  );
+
+  registerTool(
+    'list_mail_folders',
+    {
+      title: 'List Mail Folders',
+      description:
+        'List the folders of the user\'s mailboxes (Inbox, Sent Items, Archive, custom folders and sub-folders) with their ids, how many messages are stored and how many are unread. '
+        + 'Use it to find a folder id for search_mail or to answer "which folders do I have" and "how much unread is in X".',
+      inputSchema: { email: accountField },
+      capabilities: read('list'),
+    },
+    async ({ email } = {}) => asText(await mailBackend.get('/emails/folders', { email })),
+  );
+
+  registerTool(
+    'list_mail_attachments',
+    {
+      title: 'List Mail Attachments',
+      description:
+        'The files attached to one email: name, type and size (the file contents are not read). Requires the message id from search_mail. '
+        + 'Use it for "does this email have an attachment" and "what did Kevin attach".',
+      inputSchema: {
+        id: z.string().describe('Message id from search_mail or get_unread_mail_summary'),
+        email: accountField,
+      },
+      capabilities: read('list'),
+    },
+    async ({ id, email }) => asText(withNote(await mailBackend.get(`/emails/${encodeURIComponent(id)}/attachments`, { email }))),
   );
 
   registerTool(

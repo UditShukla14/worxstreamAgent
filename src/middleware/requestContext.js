@@ -2,7 +2,7 @@
  * Bind per-request Worxstream tenant context (AsyncLocalStorage) for agent/tool routes.
  */
 
-import { enterRequestContext } from '../request/requestContext.js';
+import { enterRequestContext, requestContextFromReq } from '../request/requestContext.js';
 import { buildWorxstreamContext } from '../utils/worxstreamCredentials.js';
 
 const AGENT_PATH_PREFIXES = ['/api/agents', '/api/price-comparison'];
@@ -36,5 +36,6 @@ export function requestContextMiddleware(req, res, next) {
     { allowEnvTokenFallback: allowEnvTokenFallbackForPath(req.path || '') },
   );
 
-  enterRequestContext(ctx, () => next());
+  // What this very request carried as a token, kept apart from fallbacks (see getRequestUserToken).
+  enterRequestContext({ ...ctx, userToken: requestContextFromReq(req).apiToken }, () => next());
 }

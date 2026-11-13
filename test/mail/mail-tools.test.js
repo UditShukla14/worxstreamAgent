@@ -57,10 +57,30 @@ describe('mail backend client', () => {
   });
 });
 
+describe('mail identity', () => {
+  it('uses only the token the request itself carried, never a fallback', async () => {
+    const { runWithRequestContext } = await import('../../src/request/requestContext.js');
+    process.env.WORXSTREAM_API_TOKEN = 'service-account-token';
+    const seen = [];
+    const client = createMailBackendClient({ baseUrl: 'http://mail', http: fakeHttp((url, opts) => { seen.push(opts.headers.Authorization); return { data: { success: true, data: [] } }; }) });
+
+    // a request that carried the user's token
+    await runWithRequestContext({ companyId: '1', userId: '2', apiToken: 'user-jwt', userToken: 'user-jwt' }, () => client.get('/account/accounts'));
+    assert.deepEqual(seen, ['Bearer user-jwt']);
+
+    // a request that carried none: the service token must NOT be used, and the call is refused
+    const res = await runWithRequestContext({ companyId: '1', userId: '2', apiToken: 'service-account-token' }, () => client.get('/account/accounts'));
+    assert.equal(res.status, 401);
+    assert.match(res.error, /signed-in session/);
+    assert.equal(seen.length, 1);
+    delete process.env.WORXSTREAM_API_TOKEN;
+  });
+});
+
 describe('mail tools', () => {
-  it('registers the five read-only tools under the mail domain', () => {
+  it('registers the eight read-only tools under the mail domain', () => {
     const names = (getToolIndex().byDomain.mail || []).map((t) => t.name).sort();
-    assert.deepEqual(names, ['get_mail_message', 'get_mailbox_overview', 'get_unread_mail_summary', 'list_mail_accounts', 'search_mail']);
+    assert.deepEqual(names, ['get_mail_conversation', 'get_mail_message', 'get_mailbox_overview', 'get_unread_mail_summary', 'list_mail_accounts', 'list_mail_attachments', 'list_mail_folders', 'search_mail']);
   });
 
   it('drops zero-count days from the volume series', () => {

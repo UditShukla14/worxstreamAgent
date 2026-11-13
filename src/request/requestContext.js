@@ -10,6 +10,7 @@ import { AsyncLocalStorage } from 'async_hooks';
  *   companyId?: string,
  *   userId?: string,
  *   apiToken?: string,
+ *   userToken?: string,  // the token the caller itself sent (never the server's fallback); used for per-user services like mail
  *   freshData?: boolean,
  *   taskModels?: { daily?: string, medium?: string, hard?: string, advanced?: string },
  * }} RequestContextStore
@@ -34,6 +35,7 @@ export function setRequestContext(partial) {
   if (partial.companyId != null) store.companyId = String(partial.companyId).trim();
   if (partial.userId != null) store.userId = String(partial.userId).trim();
   if (partial.apiToken != null) store.apiToken = String(partial.apiToken).trim();
+  if (partial.userToken != null) store.userToken = String(partial.userToken).trim();
   if (partial.taskModels != null && typeof partial.taskModels === 'object') {
     store.taskModels = { ...partial.taskModels };
   }
@@ -44,6 +46,7 @@ function normalizeStore(ctx) {
     companyId: ctx.companyId != null ? String(ctx.companyId).trim() : undefined,
     userId: ctx.userId != null ? String(ctx.userId).trim() : undefined,
     apiToken: ctx.apiToken != null ? String(ctx.apiToken).trim() : undefined,
+    userToken: ctx.userToken != null ? String(ctx.userToken).trim() : undefined,
     freshData: ctx.freshData === true,
     taskModels: ctx.taskModels && typeof ctx.taskModels === 'object'
       ? { ...ctx.taskModels }
@@ -118,4 +121,13 @@ export function requestContextFromReq(req) {
     userId: userId != null ? String(userId) : undefined,
     apiToken: apiToken || undefined,
   };
+}
+
+/**
+ * The token the current request itself carried (Authorization / X-Worxstream-Token / body), or ''. Unlike the usual API
+ * token it never falls back to WORXSTREAM_API_TOKEN or the shared login session, so a per-user service (mail) can only
+ * ever act as the person who is actually asking.
+ */
+export function getRequestUserToken() {
+  return storage.getStore()?.userToken || '';
 }

@@ -5,14 +5,17 @@
  */
 
 import axios from 'axios';
-import { config, getWorxstreamApiToken } from '../config/index.js';
+import { config } from '../config/index.js';
+import { getRequestUserToken } from '../request/requestContext.js';
 
 /**
  * @param {{ baseUrl?: string, timeoutMs?: number, getToken?: () => string, http?: { get: Function } }} [deps]
  */
 export function createMailBackendClient(deps = {}) {
   const baseUrl = () => (deps.baseUrl ?? config.mail.baseUrl);
-  const getToken = deps.getToken ?? getWorxstreamApiToken;
+  // Only the token the request itself carried: never the server's fallback token or a shared login session, which
+  // would make the mail backend answer for some other person's mailbox.
+  const getToken = deps.getToken ?? getRequestUserToken;
   const http = deps.http ?? axios;
   const timeout = deps.timeoutMs ?? config.mail.timeoutMs;
 
@@ -21,7 +24,13 @@ export function createMailBackendClient(deps = {}) {
     const base = baseUrl();
     if (!base) return { success: false, error: 'Mail is not configured for this workspace (MAIL_AGENT_API_URL).' };
     const token = getToken();
-    if (!token) return { success: false, error: 'Not signed in.', status: 401 };
+    if (!token) {
+      return {
+        success: false,
+        status: 401,
+        error: 'Mail needs your own signed-in session, and this request did not carry it. Reload the page and sign in again, then retry.',
+      };
+    }
 
     const query = Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== ''));
     try {
