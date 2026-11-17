@@ -3,6 +3,13 @@ import { Row, api, usd, useApi } from '../lib';
 import { Badge, Card, DataTable, ErrorBox, Modal } from '../components/ui';
 
 type Tier = { min_usd: number; margin_rate: number };
+
+/** The two apps sell credit through the same screens; only the endpoints and a few words differ. */
+const APP_CFG = {
+  nova: { name: 'Nova', plans: '/analytics/nova-plans', pricing: '/analytics/nova-pricing', env: 'NOVA_MARKUP_RATE', unit: 'request', unitPlural: 'requests', samples: [20, 50, 250, 500, 1000, 5000], desc: 'What companies can buy for the Nova app, separate from the Worxstream app subscription plans.' },
+  raven: { name: 'Raven', plans: '/analytics/apps/raven/plans', pricing: '/analytics/apps/raven/pricing', env: 'RAVEN_MARKUP_RATE (or NOVA_MARKUP_RATE)', unit: 'mail analysis', unitPlural: 'mails analysed', samples: [5, 20, 100, 500, 1000, 2000], desc: 'What companies can buy for Raven, the mail agent. Raven has its own wallet, so this credit is separate from Nova credit.' },
+} as const;
+type Cfg = (typeof APP_CFG)[keyof typeof APP_CFG];
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
 /** Mirrors the server's quote: the margin for the amount (never above the markup), the credit it buys, and what it covers. */
@@ -15,8 +22,23 @@ function quote(price: number, tiers: Tier[], markup: number) {
   return { margin, credit, value, profit: r2(price - value), bonusPct: Math.round((credit / price - 1) * 1000) / 10 };
 }
 
+/** Credit plans and pricing for each AI app: pick the app, then the same editor. */
 export default function NovaPlans() {
-  const { data, error, loading, reload } = useApi<Row>('/analytics/nova-plans');
+  const [app, setApp] = useState<'nova' | 'raven'>('nova');
+  return (
+    <div className="stack">
+      <div className="row">
+        <div className="seg" role="group" aria-label="AI app">
+          {(['nova', 'raven'] as const).map((a) => (<button key={a} className={app === a ? 'on' : ''} onClick={() => setApp(a)}>{APP_CFG[a].name}</button>))}
+        </div>
+      </div>
+      <AppPlans key={app} cfg={APP_CFG[app]} />
+    </div>
+  );
+}
+
+function AppPlans({ cfg }: { cfg: Cfg }) {
+  const { data, error, loading, reload } = useApi<Row>(cfg.plans);
   const [editing, setEditing] = useState<Row | 'new' | null>(null);
 
   if (error) return <ErrorBox error={error} />;
@@ -28,17 +50,17 @@ export default function NovaPlans() {
   return (
     <div className={`stack ${loading ? 'loading' : ''}`}>
       <Card
-        title="Nova credit plans"
-        sub="What companies can buy for the Nova app, separate from the Worxstream app subscription plans. A company pays the price and receives that much credit, plus bonus credit on larger plans. Companies never see Anthropic's cost or your margin."
+        title={`${cfg.name} credit plans`}
+        sub={`${cfg.desc} A company pays the price and receives that much credit, plus bonus credit on larger plans. Companies never see Anthropic's cost or your margin.`}
         right={<button className="btn primary sm" onClick={() => setEditing('new')}>New plan</button>}
       >
         {markup <= 0 ? (
           <div className="err" role="alert" style={{ marginBottom: 12 }}>
-            The margin (NOVA_MARKUP_RATE) is 0, so every plan is sold at Anthropic's cost with no margin. Set it to 0.2 for +20%.
+            The margin ({cfg.env}) is 0, so every plan is sold at Anthropic's cost with no margin. Set it to 0.2 for +20%.
           </div>
         ) : (
           <div className="note" style={{ marginBottom: 12 }}>
-            Base margin on Anthropic's price: <b>{Math.round(markup * 1000) / 10}%</b> (NOVA_MARKUP_RATE). Larger purchases earn less (see Volume discounts below) and the difference is given back as bonus credit.
+            Base margin on Anthropic's price: <b>{Math.round(markup * 1000) / 10}%</b> ({cfg.env}). Larger purchases earn less (see Volume discounts below) and the difference is given back as bonus credit.
           </div>
         )}
         <DataTable
@@ -57,14 +79,14 @@ export default function NovaPlans() {
         />
       </Card>
 
-      <PricingCard pricing={pricing} markup={markup} onSaved={reload} />
+      <PricingCard cfg={cfg} pricing={pricing} markup={markup} onSaved={reload} />
 
-      {editing && <PlanModal plan={editing === 'new' ? null : editing} pricing={pricing} markup={markup} onClose={() => setEditing(null)} onDone={() => { setEditing(null); reload(); }} />}
+      {editing && <PlanModal cfg={cfg} plan={editing === 'new' ? null : editing} pricing={pricing} markup={markup} onClose={() => setEditing(null)} onDone={() => { setEditing(null); reload(); }} />}
     </div>
   );
 }
 
-function PricingCard({ pricing, markup, onSaved }: { pricing: Row; markup: number; onSaved: () => void }) {
+function PricingCard({ cfg, pricing, markup, onSaved }: { cfg: Cfg; pricing: Row; markup: number; onSaved: () => void }) {
   const [tiers, setTiers] = useState<{ min: string; margin: string }[]>(
     (pricing.tiers as Tier[]).map((t) => ({ min: String(t.min_usd), margin: String(Math.round(t.margin_rate * 1000) / 10) })),
   );
@@ -80,7 +102,7 @@ function PricingCard({ pricing, markup, onSaved }: { pricing: Row; markup: numbe
   const save = async () => {
     setBusy(true); setErr(''); setSaved(false);
     try {
-      await api('/analytics/nova-pricing', {
+      await api(cfg.pricing, {
         method: 'PUT',
         body: {
           tiers: tiers.map((t) => ({ min_usd: Number(t.min), margin_rate: Number(t.margin) / 100 })),
@@ -92,7 +114,7 @@ function PricingCard({ pricing, markup, onSaved }: { pricing: Row; markup: numbe
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   };
 
-  const sample = [20, 50, 250, 500, 1000, 5000].map((amount) => ({ amount, ...quote(amount, tiers.map((t) => ({ min_usd: Number(t.min) || 0, margin_rate: (Number(t.margin) || 0) / 100 })), markup) }));
+  const sample = cfg.samples.map((amount) => ({ amount, ...quote(amount, tiers.map((t) => ({ min_usd: Number(t.min) || 0, margin_rate: (Number(t.margin) || 0) / 100 })), markup) }));
 
   return (
     <Card title="Volume discounts and custom amount" sub="Larger purchases earn a lower margin (typically 20% down to 15%). The company still pays the amount it chose and receives bonus credit for the difference.">
@@ -114,9 +136,9 @@ function PricingCard({ pricing, markup, onSaved }: { pricing: Row; markup: numbe
         <div className="grid c3">
           <label className="field">Custom amount: minimum (USD)<input className="input" type="number" min="1" value={min} onChange={(e) => { setSaved(false); setMin(e.target.value); }} /></label>
           <label className="field">Custom amount: maximum (USD)<input className="input" type="number" min="1" value={max} onChange={(e) => { setSaved(false); setMax(e.target.value); }} /></label>
-          <label className="field">Typical cost of one request (USD, charged)<input className="input" type="number" min="0.01" step="0.01" value={typical} onChange={(e) => { setSaved(false); setTypical(e.target.value); }} /></label>
+          <label className="field">Typical cost of one {cfg.unit} (USD, charged)<input className="input" type="number" min="0.01" step="0.01" value={typical} onChange={(e) => { setSaved(false); setTypical(e.target.value); }} /></label>
         </div>
-        <div className="note">The typical request cost only drives the "about N requests" estimate shown on the pricing cards.</div>
+        <div className="note">The typical cost only drives the "about N {cfg.unitPlural}" estimate shown on the pricing cards.</div>
         <DataTable
           rows={sample}
           empty=""
@@ -137,7 +159,7 @@ function PricingCard({ pricing, markup, onSaved }: { pricing: Row; markup: numbe
   );
 }
 
-function PlanModal({ plan, pricing, markup, onClose, onDone }: { plan: Row | null; pricing: Row; markup: number; onClose: () => void; onDone: () => void }) {
+function PlanModal({ cfg, plan, pricing, markup, onClose, onDone }: { cfg: Cfg; plan: Row | null; pricing: Row; markup: number; onClose: () => void; onDone: () => void }) {
   const [v, setV] = useState({
     name: plan?.name || '',
     description: plan?.description || '',
@@ -157,14 +179,14 @@ function PlanModal({ plan, pricing, markup, onClose, onDone }: { plan: Row | nul
     setBusy(true); setErr('');
     const body = { name: v.name.trim(), description: v.description, features: v.features, price_usd: price, active: v.active, sort: Number(v.sort) || 0 };
     try {
-      if (plan) await api(`/analytics/nova-plans/${encodeURIComponent(plan.plan_id)}`, { method: 'PUT', body });
-      else await api('/analytics/nova-plans', { method: 'POST', body });
+      if (plan) await api(`${cfg.plans}/${encodeURIComponent(plan.plan_id)}`, { method: 'PUT', body });
+      else await api(cfg.plans, { method: 'POST', body });
       onDone();
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   };
 
   return (
-    <Modal title={plan ? `Edit ${plan.name}` : 'New Nova plan'} onClose={onClose}>
+    <Modal title={plan ? `Edit ${plan.name}` : `New ${cfg.name} plan`} onClose={onClose}>
       <div className="stack">
         <label className="field">Name<input className="input" value={v.name} onChange={(e) => set('name', e.target.value)} autoFocus /></label>
         <label className="field">Short description (shown to companies)<input className="input" value={v.description} onChange={(e) => set('description', e.target.value)} /></label>

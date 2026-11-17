@@ -19,6 +19,7 @@ import { clearOldToolResults } from '../../utils/contextWindow.js';
 import { countMessagesTokens } from '../../utils/tokenCounter.js';
 import { computeEventCost } from '../../analytics/costing.js';
 import { getTurnCreditCapUsd } from '../../analytics/novaWallet.js';
+import { CreditExhaustedError } from '../../analytics/creditGuard.js';
 import { usageMetaFromContext } from '../../analytics/usageMeta.js';
 import { getModelForTier, inferTaskTier } from '../../analytics/taskModels.js';
 import { getAnthropicTools, getAnthropicToolsForToolSearch, executeMcpTool } from '../../mcp/server.js';
@@ -552,6 +553,13 @@ export class BaseAgent {
           }
         } catch (err) {
           if (isAbortError(err)) return abortedResult();
+          if (err instanceof CreditExhaustedError) {
+            // Not even a short answer fits the credit left: stop here with the credit message (nothing was charged).
+            spendCapHit = true;
+            creditCapHit = true;
+            console.log(`  [credit guard] ${this.name}: the credit left cannot cover another model call`);
+            break;
+          }
           throw err;
         }
         lastCallModel = response.model || model;

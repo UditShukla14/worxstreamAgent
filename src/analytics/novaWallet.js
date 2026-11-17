@@ -10,6 +10,7 @@
  * recorded (see costing.js), and the wallet is debited the billable amount.
  */
 
+import CompanyAppSubscription from '../apps/models/CompanyAppSubscription.js';
 import CompanyNovaWallet from './models/CompanyNovaWallet.js';
 import { sanitizeModelTiers } from './taskModels.js';
 import LlmUsageEvent from './models/LlmUsageEvent.js';
@@ -20,6 +21,9 @@ import { config } from '../config/index.js';
 import { clampMarkup, usdToMicros, microsToUsd } from './costing.js';
 
 export const NOVA_CREDIT_EXHAUSTED = 'NOVA_CREDIT_EXHAUSTED';
+
+/** Below this many billable dollars no useful answer fits, so the credit counts as used up (cents left by the safety margin). */
+export const CREDIT_FLOOR_USD = 0.02;
 
 const MICROS = 1_000_000;
 
@@ -105,7 +109,7 @@ export function walletToApi(doc) {
     purchased_credit_usd: microsToUsd(walletMicros(doc, 'purchased_credit')),
     spent_usd: microsToUsd(walletMicros(doc, 'spent')),
     remaining_usd: remaining,
-    exhausted: enforced && remaining != null && remaining <= 0,
+    exhausted: enforced && remaining != null && remaining < CREDIT_FLOOR_USD,
     low_balance: isLowBalance({ enforced, remaining, granted }),
     plan_name: String(doc.plan_name || ''),
     seats: doc.seats ?? null,
@@ -437,7 +441,7 @@ export async function reverseWalletCredit(companyId, body = {}) {
 export async function listWalletTransactions(companyId, { limit = 25, before } = {}) {
   const id = String(companyId || '').trim();
   if (!id) return [];
-  const query = { company_id: id };
+  const query = { company_id: id, app: { $ne: 'raven' } };
   if (before) {
     const d = new Date(before);
     if (!Number.isNaN(d.getTime())) query.created_at = { $lt: d };
@@ -545,6 +549,56 @@ export async function getTurnCreditCapUsd(companyId) {
   return Math.max(0, remaining) / (1 + markup);
 }
 
+const HOLD_TTL_MS = 10 * 60 * 1000; // a hold whose turn died is forgotten after this
+
+/**
+ * Hold part of a company's remaining credit for ONE running turn, atomically. Everything else the company runs at the same
+ * time can only use what is not held, so two chats can never both spend the last dollar.
+ *
+ * One update on the wallet document: forget expired holds, work out what is free (remaining minus holds), and add this hold
+ * only if at least `minMicros` is free. Returns what was granted (at most `desiredMicros`), or null when too little is free.
+ *
+ * @param {string} companyId
+ * @param {{ holdId: string, desiredMicros: number, minMicros: number, ttlMs?: number }} opts
+ * @returns {Promise<{ grantedMicros: number }|null>}
+ */
+export async function reserveCredit(companyId, { holdId, desiredMicros, minMicros, ttlMs = HOLD_TTL_MS }) {
+  const id = String(companyId || '').trim();
+  if (!id) return null;
+  const now = new Date();
+  const remaining = { $subtract: [{ $add: [microsExpr('free_allowance'), microsExpr('purchased_credit')] }, microsExpr('spent')] };
+  const res = await CompanyNovaWallet.collection.findOneAndUpdate(
+    { company_id: id },
+    [
+      { $set: { holds: { $filter: { input: { $ifNull: ['$holds', []] }, as: 'h', cond: { $gt: ['$$h.expires_at', now] } } } } },
+      { $set: { _free: { $subtract: [remaining, { $sum: '$holds.micros' }] } } },
+      {
+        $set: {
+          holds: {
+            $cond: [
+              { $gte: ['$_free', Math.max(1, minMicros)] },
+              { $concatArrays: ['$holds', [{ id: holdId, micros: { $min: ['$_free', Math.round(desiredMicros)] }, expires_at: new Date(now.getTime() + ttlMs) }]] },
+              '$holds',
+            ],
+          },
+        },
+      },
+      { $unset: '_free' },
+    ],
+    { returnDocument: 'after' },
+  );
+  const doc = res?.value ?? res;
+  const hold = (doc?.holds || []).find((h) => h.id === holdId);
+  return hold ? { grantedMicros: hold.micros } : null;
+}
+
+/** Give a turn's held credit back (what it really spent is already on the wallet). */
+export async function releaseCredit(companyId, holdId) {
+  const id = String(companyId || '').trim();
+  if (!id || !holdId) return;
+  await CompanyNovaWallet.collection.updateOne({ company_id: id }, { $pull: { holds: { id: holdId } } });
+}
+
 /**
  * Pre-turn gate. No wallet doc → allow (unlimited).
  * @param {string} companyId
@@ -553,6 +607,22 @@ export async function assertNovaCredits(companyId) {
   const id = String(companyId || '').trim();
   if (!id) {
     return { ok: true, wallet: walletToApi(null) };
+  }
+  // A company whose Nova subscription was paused or switched off in the AI apps hub cannot chat or run schedules.
+  // (No subscription row = an existing customer: Nova keeps working under the wallet rules below.)
+  const sub = await CompanyAppSubscription.findOne({ company_id: id, app: 'nova' }, { status: 1 }).lean();
+  if (sub && sub.status !== 'active') {
+    return {
+      ok: false,
+      status: 402,
+      body: {
+        success: false,
+        code: NOVA_CREDIT_EXHAUSTED,
+        remaining_usd: 0,
+        message: `Nova is ${sub.status === 'paused' ? 'paused' : 'switched off'} for this company. Contact your administrator.`,
+        wallet: walletToApi(await getWallet(id)),
+      },
+    };
   }
   let doc = await getWallet(id);
   if (!doc) doc = await provisionTrialWallet(id);
@@ -574,7 +644,7 @@ export async function assertNovaCredits(companyId) {
   }
   const remaining = computeRemainingUsd(doc);
   const wallet = walletToApi(doc);
-  if (remaining != null && remaining <= 0) {
+  if (remaining != null && remaining < CREDIT_FLOOR_USD) {
     return {
       ok: false,
       status: 402,
@@ -665,7 +735,7 @@ export async function listWallets() {
     const pctLeft = total > 0 ? remaining / total : null;
     let status = 'unlimited';
     if (d.limits_enabled) {
-      status = remaining <= 0
+      status = microsToUsd(remaining) < CREDIT_FLOOR_USD
         ? 'exhausted'
         : isLowBalance({ enforced: true, remaining: microsToUsd(remaining), granted: microsToUsd(total) }) ? 'low' : 'ok';
     }
@@ -678,6 +748,8 @@ export async function listWallets() {
       purchased_credit_usd: microsToUsd(walletMicros(d, 'purchased_credit')),
       spent_usd: microsToUsd(spent),
       remaining_usd: microsToUsd(remaining),
+      // What the company used beyond its credit (a reply that finished after the balance reached zero). Staff only.
+      overdraft_usd: remaining < 0 ? microsToUsd(-remaining) : 0,
       pct_left: pctLeft,
       markup_rate: d.markup_rate ?? null,
       status,

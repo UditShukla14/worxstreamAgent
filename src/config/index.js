@@ -166,6 +166,10 @@ export const config = {
   admin: {
     apiKey: (process.env.ADMIN_API_KEY || '').trim(),
   },
+  /** Service-to-service key for /api/internal/* (the mail service reports Raven usage and asks whether Raven is allowed). */
+  apps: {
+    serviceKey: (process.env.APP_SERVICE_KEY || '').trim(),
+  },
   worxstream: {
     baseUrl: process.env.WORXSTREAM_BASE_URL || '',
     get apiToken() {

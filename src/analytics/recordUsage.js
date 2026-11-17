@@ -12,6 +12,8 @@ import { getRequestContext } from '../request/requestContext.js';
 import { config } from '../config/index.js';
 import { computeEventCost } from './costing.js';
 import { incrementWalletSpent, resolveMarkupRate } from './novaWallet.js';
+import { appForAgentKey } from '../apps/registry.js';
+import { debitAppWallet, resolveAppMarkup } from '../apps/appWallet.js';
 import LlmUsageEvent, { LLM_USAGE_PHASES } from './models/LlmUsageEvent.js';
 import LlmUsageDaily from './models/LlmUsageDaily.js';
 
@@ -71,7 +73,9 @@ export async function recordUsage(meta = {}, usage = null, model, responseModel 
     const date = utcDateKey(now);
     const modelId = String(model || meta.model || config.anthropic.model);
 
-    const markupRate = unattributed ? 0 : await resolveMarkupRate(companyId);
+    // Each AI app is paid for from its own wallet and has its own markup (Nova: the Nova wallet; Raven: the Raven wallet).
+    const app = appForAgentKey(agentKey);
+    const markupRate = unattributed ? 0 : app === 'nova' ? await resolveMarkupRate(companyId) : await resolveAppMarkup(companyId, app);
     const cost = computeEventCost({ model: modelId, responseModel, usage, markupRate });
     if (cost.estimated) warnEstimatedPricingOnce(String(responseModel || modelId), cost.reason);
     const billed = { ...cost.tokens, ...cost.components_usd };
@@ -112,7 +116,8 @@ export async function recordUsage(meta = {}, usage = null, model, responseModel 
     let walletApplied = true;
     if (!unattributed && cost.billableUsd > 0) {
       try {
-        await incrementWalletSpent(companyId, cost.billableUsd);
+        if (app === 'nova') await incrementWalletSpent(companyId, cost.billableUsd);
+        else await debitAppWallet(companyId, app, cost.billableUsd);
       } catch (err) {
         walletApplied = false;
         console.error('⚠️  Wallet debit failed (shows as drift in reconcile):', err?.message || err);
@@ -195,7 +200,10 @@ export async function recordUsage(meta = {}, usage = null, model, responseModel 
  * Fire-and-forget wrapper — never blocks the LLM response path.
  */
 export function recordUsageAsync(meta, usage, model, responseModel = '', extra = {}) {
-  setImmediate(() => {
-    recordUsage(meta, usage, model, responseModel, extra).catch(() => {});
+  // Fire-and-forget for the caller; the returned promise lets a turn wait until its usage is on the wallet.
+  return new Promise((resolve) => {
+    setImmediate(() => {
+      recordUsage(meta, usage, model, responseModel, extra).catch(() => {}).finally(resolve);
+    });
   });
 }

@@ -11,6 +11,8 @@ import { Router } from 'express';
 import { resolveConversationTenantIds } from '../../utils/worxstreamCredentials.js';
 import { isStripeConfigured } from './stripeClient.js';
 import { createNovaPayment, getNovaPaymentStatus } from './novaCheckout.js';
+import { createAppPayment, getAppPaymentStatus, isAppCreditsKind } from './appCheckout.js';
+import { isAppKey } from '../../apps/registry.js';
 import mongoose from 'mongoose';
 import { config } from '../../config/index.js';
 import WalletTransaction from '../../analytics/models/WalletTransaction.js';
@@ -42,8 +44,12 @@ router.post('/checkout', async (req, res, next) => {
   if (!t) return;
   if (!isStripeConfigured()) return res.status(503).json({ success: false, error: 'Online payment is not available yet' });
   try {
-    const { plan_id, custom_amount_usd } = req.body || {};
-    const data = await createNovaPayment({ ...t, purchase: { plan_id, custom_amount_usd } });
+    const { plan_id, custom_amount_usd, app } = req.body || {};
+    // `app` picks whose wallet is credited: omitted or "nova" = Nova (as before), "raven" = Raven.
+    if (app && app !== 'nova' && !isAppKey(app)) return res.status(400).json({ success: false, error: 'Unknown app' });
+    const data = app && app !== 'nova'
+      ? await createAppPayment({ app, ...t, purchase: { plan_id, custom_amount_usd } })
+      : await createNovaPayment({ ...t, purchase: { plan_id, custom_amount_usd } });
     res.json({ success: true, data });
   } catch (err) {
     fail(res, next, err);
@@ -54,7 +60,11 @@ router.get('/payments/:paymentIntentId', async (req, res, next) => {
   const t = tenant(req, res);
   if (!t) return;
   try {
-    res.json({ success: true, data: await getNovaPaymentStatus({ companyId: t.companyId, paymentIntentId: req.params.paymentIntentId }) });
+    // Look at the payment first to know whose credit it is, then settle it through the matching flow.
+    const { getStripe } = await import('./stripeClient.js');
+    const intent = await getStripe().paymentIntents.retrieve(String(req.params.paymentIntentId));
+    const status = isAppCreditsKind(intent.metadata?.kind) ? getAppPaymentStatus : getNovaPaymentStatus;
+    res.json({ success: true, data: await status({ companyId: t.companyId, paymentIntentId: req.params.paymentIntentId }) });
   } catch (err) {
     fail(res, next, err);
   }

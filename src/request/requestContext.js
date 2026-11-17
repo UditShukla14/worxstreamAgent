@@ -36,6 +36,7 @@ export function setRequestContext(partial) {
   if (partial.userId != null) store.userId = String(partial.userId).trim();
   if (partial.apiToken != null) store.apiToken = String(partial.apiToken).trim();
   if (partial.userToken != null) store.userToken = String(partial.userToken).trim();
+  if (partial.creditBudget !== undefined) store.creditBudget = partial.creditBudget; // the running turn's credit budget (creditGuard.js)
   if (partial.taskModels != null && typeof partial.taskModels === 'object') {
     store.taskModels = { ...partial.taskModels };
   }

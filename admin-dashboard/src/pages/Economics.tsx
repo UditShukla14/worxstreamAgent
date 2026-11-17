@@ -1,6 +1,7 @@
 import { Range, Row, compact, go, int, pct100, usd, useApi } from '../lib';
 import { BarList } from '../components/charts';
-import { Badge, Card, ChartCard, DataTable, ErrorBox, Kpi, Section } from '../components/ui';
+import ByApp from '../components/ByApp';
+import { AppScope, Badge, Card, ChartCard, DataTable, ErrorBox, Kpi, Section } from '../components/ui';
 
 const sliceCols = (key: string, label: string) => [
   { key, label },
@@ -14,14 +15,18 @@ const sliceCols = (key: string, label: string) => [
   { key: 'share_pct', label: 'Share', align: 'r' as const, render: (r: Row) => pct100(r.share_pct, 0) },
 ];
 
-export default function Economics({ range }: { range: Range }) {
-  const { data, error, loading } = useApi<Row>('/analytics/economics', range);
+export default function Economics({ range, app = '' }: { range: Range; app?: AppScope }) {
+  const { data, error, loading } = useApi<Row>('/analytics/economics', { ...range, app });
   if (error) return <ErrorBox error={error} />;
   if (!data) return <div className="empty">Loading…</div>;
   const r = data.runrate, u = data.unit, c = data.concentration, k = data.cache;
 
   return (
     <div className={loading ? 'loading' : ''}>
+      <Section title="By AI app" desc="Nova and Raven side by side for the selected range, and their sum.">
+        <ByApp rows={data.by_app} title="Revenue and cost by app" sub="Cumulative across both apps." />
+      </Section>
+
       <Section title="Revenue run-rate" desc="Always the latest 30 days and the current month — not affected by the date range.">
         <div className="grid k4">
           <Kpi label="Last 30 days revenue" value={usd(r.trailing_30d_billable)} hint={r.growth_pct == null ? 'no prior 30 days to compare' : `${r.growth_pct > 0 ? '▲' : r.growth_pct < 0 ? '▼' : ''} ${Math.abs(r.growth_pct)}% vs prior 30 days`} />

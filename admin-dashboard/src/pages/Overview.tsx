@@ -1,9 +1,10 @@
 import { Range, Row, compact, go, int, pct, pct100, usd, useApi } from '../lib';
 import { BarList } from '../components/charts';
-import { Badge, Card, ChartCard, DataTable, ErrorBox, Kpi } from '../components/ui';
+import ByApp from '../components/ByApp';
+import { AppScope, Badge, Card, ChartCard, DataTable, ErrorBox, Kpi } from '../components/ui';
 
-export default function Overview({ range }: { range: Range }) {
-  const { data, error, loading } = useApi<Row>('/analytics/summary', range);
+export default function Overview({ range, app = '' }: { range: Range; app?: AppScope }) {
+  const { data, error, loading } = useApi<Row>('/analytics/summary', { ...range, app });
   if (error) return <ErrorBox error={error} />;
   if (!data) return <div className="empty">Loading…</div>;
   const k = data.kpis, p = data.previous_kpis, a = data.alerts, w = data.wallets;
@@ -17,10 +18,12 @@ export default function Overview({ range }: { range: Range }) {
         <Kpi label="Gross margin" value={usd(k.margin_usd)} hint={`${pct100(k.margin_pct)} of revenue`} />
         <Kpi label="Active companies" value={int(k.active_companies)} cur={k.active_companies} prev={p.active_companies} />
         <Kpi label="Active employees" value={int(k.active_users)} cur={k.active_users} prev={p.active_users} />
-        <Kpi label="Chat turns" value={int(k.turns)} hint={k.turns ? `${usd(k.avg_cost_per_turn_usd)} avg revenue / turn` : ''} />
+        <Kpi label="Nova chat turns" value={int(k.turns)} hint={app === 'raven' ? 'Raven works per mail (see model calls)' : k.turns ? `${usd(k.avg_cost_per_turn_usd)} avg revenue / turn` : ''} />
         <Kpi label="Model calls" value={compact(k.call_count)} cur={k.call_count} prev={p.call_count} />
         <Kpi label="Prompt-cache hit rate" value={pct(k.cache_hit_rate)} hint="share of input tokens read from cache" />
       </div>
+
+      <ByApp rows={data.by_app} />
 
       <ChartCard
         title="Daily revenue vs Anthropic cost"
@@ -35,7 +38,7 @@ export default function Overview({ range }: { range: Range }) {
 
       <div className="grid c2">
         <ChartCard title="Daily active employees" data={data.daily} yFmt={(n) => String(Math.round(n))} height={180} series={[{ key: 'active_users', label: 'Active employees', color: 'var(--series-3)' }]} />
-        <ChartCard title="Daily chat turns" data={data.daily} yFmt={(n) => compact(n)} height={180} series={[{ key: 'turns', label: 'Turns', color: 'var(--series-7)', fmt: int }]} />
+        <ChartCard title="Daily Nova chat turns" data={data.daily} yFmt={(n) => compact(n)} height={180} series={[{ key: 'turns', label: 'Turns', color: 'var(--series-7)', fmt: int }]} />
       </div>
 
       <div className="grid c3">
@@ -43,7 +46,7 @@ export default function Overview({ range }: { range: Range }) {
           <BarList rows={data.top_companies.map((c: Row) => ({ ...c, label: name(c) }))} labelKey="company_id" valueKey="billable_usd" fmt={(n) => usd(n)} onClick={(r) => go(`company/${encodeURIComponent(r.company_id)}`)} secondary={(r) => `${int(r.call_count)} calls`} />
         </Card>
         <div className="stack">
-          <Card title="Wallet health" sub="Click to review">
+          <Card title="Wallet health" sub="Nova and Raven wallets. Click to review">
             <div className="row" style={{ gap: 8 }} onClick={() => go('wallets')}>
               <Badge tone="bad">{w.exhausted || 0} exhausted</Badge>
               <Badge tone="warn">{w.low || 0} low</Badge>

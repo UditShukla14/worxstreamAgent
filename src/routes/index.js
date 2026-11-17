@@ -14,6 +14,7 @@ import controlRoutes from '../governance/routes/control.js';
 import mcpRoutes from './mcp.js';
 import stripeWebhook from '../billing/stripe/webhook.js';
 import adminAnalyticsRoutes from '../analytics/routes/admin.js';
+import internalAppRoutes from '../apps/routes/internal.js';
 
 const router = Router();
 
@@ -29,6 +30,7 @@ router.use('/api/webhooks/stripe', stripeWebhook); // Stripe payment events (sig
 router.use('/api/webhooks', webhookRoutes);
 router.use('/api/control', controlRoutes);
 router.use('/api/admin', adminAnalyticsRoutes);
+router.use('/api/internal', internalAppRoutes);
 router.use('/mcp', mcpRoutes); // MCP Streamable HTTP endpoint (external MCP clients)
 
 // Rex UI route - handled by frontend routing

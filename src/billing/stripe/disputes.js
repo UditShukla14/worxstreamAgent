@@ -13,6 +13,7 @@
 
 import WalletTransaction from '../../analytics/models/WalletTransaction.js';
 import { grantWalletCredits, reverseWalletCredit } from '../../analytics/novaWallet.js';
+import { grantAppCredits, reverseAppCredit } from '../../apps/appWallet.js';
 
 const paymentIntentId = (dispute) => (typeof dispute.payment_intent === 'string' ? dispute.payment_intent : dispute.payment_intent?.id || '');
 const reversalRef = (dispute) => `dispute:${dispute.id}`;
@@ -38,7 +39,8 @@ export async function handleDisputeCreated(dispute) {
   const micros = Math.round(grant.amount_micros * share);
   if (micros <= 0) return { handled: false, reason: 'nothing to take back' };
 
-  const out = await reverseWalletCredit(grant.company_id, {
+  const reverse = grant.app && grant.app !== 'nova' ? (c, o) => reverseAppCredit(c, grant.app, o) : reverseWalletCredit;
+  const out = await reverse(grant.company_id, {
     amount_micros: micros,
     ref: reversalRef(dispute),
     reason: 'Payment disputed with the bank',
@@ -53,7 +55,8 @@ export async function handleDisputeClosed(dispute) {
   const reversal = await WalletTransaction.findOne({ payment_ref: reversalRef(dispute), type: 'reversal' }).lean();
   if (!reversal) return { handled: false, reason: 'no credit was taken back' };
 
-  const out = await grantWalletCredits(reversal.company_id, {
+  const restore = reversal.app && reversal.app !== 'nova' ? (c, b) => grantAppCredits(c, reversal.app, b) : grantWalletCredits;
+  const out = await restore(reversal.company_id, {
     amount_usd: Math.abs(reversal.amount_micros) / 1e6,
     payment_ref: restoreRef(dispute),
     reason: 'Dispute won: credit restored',

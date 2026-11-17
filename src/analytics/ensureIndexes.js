@@ -7,6 +7,12 @@ import mongoose from 'mongoose';
 import WalletTransaction from './models/WalletTransaction.js';
 import NovaPlan from './models/NovaPlan.js';
 import { ensureDefaultNovaPlans, migrateLegacyNovaPlans } from './novaPlans.js';
+import AppPlan from '../apps/models/AppPlan.js';
+import CompanyAppWallet from '../apps/models/CompanyAppWallet.js';
+import CompanyAppSubscription from '../apps/models/CompanyAppSubscription.js';
+import { ensureDefaultPlans } from '../apps/plans.js';
+import { capExistingRavenCompanies } from '../apps/subscriptions.js';
+import LlmUsageDaily from './models/LlmUsageDaily.js';
 
 export async function ensureAnalyticsIndexes() {
   const db = mongoose.connection?.db;
@@ -55,6 +61,20 @@ export async function ensureAnalyticsIndexes() {
     if (seeded) console.log(`📦 Seeded ${seeded} default Nova credit plans`);
   } catch (err) {
     console.warn('⚠️  Could not prepare Nova plans:', err?.message || err);
+  }
+
+  // AI apps hub (Raven): unique (company, app) rows and plans, and the default Raven catalogue on a first boot.
+  try {
+    await Promise.all([AppPlan.createIndexes(), CompanyAppWallet.createIndexes(), CompanyAppSubscription.createIndexes()]);
+    const seeded = await ensureDefaultPlans('raven');
+    if (seeded) console.log(`📦 Seeded ${seeded} default Raven credit plans`);
+    // Companies that already used Raven without a credit limit are capped at the default credit. New companies get nothing free.
+    const { capped, subscribed } = await capExistingRavenCompanies({
+      usageCompanyIds: () => LlmUsageDaily.distinct('company_id', { agent_key: 'raven', user_id: '', model: '' }),
+    });
+    if (capped || subscribed) console.log(`📦 Raven: ${capped} existing companies capped at the default credit (${subscribed} added as existing users)`);
+  } catch (err) {
+    console.warn('⚠️  Could not prepare AI app plans:', err?.message || err);
   }
 
   // Backfill missing dimension fields on older daily rows.

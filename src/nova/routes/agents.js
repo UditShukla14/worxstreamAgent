@@ -48,6 +48,9 @@ import { getCompanyModelChoices, setCompanyModelChoices } from '../../analytics/
 import { listModelCatalogForApi } from '../../analytics/modelPricing.js';
 import { config } from '../../config/index.js';
 import creditsRoutes from '../../billing/stripe/routes.js';
+import customerAppRoutes from '../../apps/routes/customer.js';
+import { creditHold } from './creditHold.js';
+import { CreditExhaustedError } from '../../analytics/creditGuard.js';
 import LlmUsageEvent from '../../analytics/models/LlmUsageEvent.js';
 import { computeContextBudget } from '../../utils/contextBudget.js';
 import { clampMarkup } from '../../analytics/costing.js';
@@ -63,6 +66,8 @@ const router = Router();
 
 router.use(requireWorxstreamAuth);
 router.use('/credits', creditsRoutes); // Nova credit checkout (Stripe)
+router.use('/apps', customerAppRoutes); // Raven wallet, plans and trial (customer)
+router.use(creditHold); // chat/route/multi/confirm/direct: hold the company's credit for the request
 
 /**
  * Block LLM turns when the company Nova wallet is exhausted.
@@ -637,8 +642,9 @@ router.post('/stream', async (req, res) => {
     console.error('❌ Agent stream error:', error);
     rex.endRequest(requestId, error);
     if (!res.headersSent) {
-      return res.status(500).json({
+      return res.status(error instanceof CreditExhaustedError ? error.status : 500).json({
         success: false,
+        ...(error instanceof CreditExhaustedError ? { code: error.code } : {}),
         error: error.message || 'Internal server error',
       });
     }
@@ -684,7 +690,7 @@ router.post('/route', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Agent route error:', error);
-    res.status(500).json({ success: false, error: error.message });
+    res.status(error instanceof CreditExhaustedError ? error.status : 500).json({ success: false, ...(error instanceof CreditExhaustedError ? { code: error.code } : {}), error: error.message });
   }
 });
 

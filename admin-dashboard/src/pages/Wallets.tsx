@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { Row, go, int, pct, shortDate, usd, useApi } from '../lib';
-import { Badge, Card, DataTable, ErrorBox, Kpi, Section, walletBadge } from '../components/ui';
+import { AppScope, Badge, Card, DataTable, ErrorBox, Kpi, Section, appBadge, walletBadge } from '../components/ui';
 
-export default function Wallets() {
-  const { data, error, loading } = useApi<Row>('/analytics/wallets');
+export default function Wallets({ app = '' }: { app?: AppScope }) {
+  const { data, error, loading } = useApi<Row>('/analytics/wallets', { app });
   const [status, setStatus] = useState('');
   if (error) return <ErrorBox error={error} />;
   if (!data) return <div className="empty">Loading…</div>;
@@ -24,6 +24,14 @@ export default function Wallets() {
         </div>
       </Section>
 
+      <Section title="By AI app" desc="Each app is paid for from its own wallet, so a company with both has two.">
+        <div className="grid k4">
+          {(s.by_app as Row[]).map((a) => (
+            <Kpi key={a.app} label={`${a.app === 'raven' ? 'Raven' : 'Nova'} credit outstanding`} value={usd(a.outstanding_credit_usd)} hint={`${int(a.wallets)} wallets · ${usd(a.purchased_total_usd)} purchased · ${int(a.exhausted)} exhausted`} />
+          ))}
+        </div>
+      </Section>
+
       <Section title="Company wallets">
         <div className="row">
           <div className="seg" role="group" aria-label="Wallet status">
@@ -32,15 +40,17 @@ export default function Wallets() {
             ))}
           </div>
         </div>
-        <Card sub="Low = under 20% of credits left. Runway = remaining balance ÷ daily burn.">
+        <Card sub="Low = under 20% of credits left. Runway = remaining balance ÷ the daily burn of that wallet's own app.">
           <DataTable
             rows={rows}
             initialSort={{ key: 'runway_days' }}
             onRow={(r) => go(`company/${encodeURIComponent(r.company_id)}`)}
             cols={[
               { key: 'company_id', label: 'Company', sortValue: (r) => r.display_name || r.company_id, render: (r) => (<div>{r.display_name ? <b>{r.display_name}</b> : null}<div className="id muted">{r.company_id}</div></div>) },
+              { key: 'app', label: 'App', render: (r) => appBadge(r.app) },
               { key: 'status', label: 'Status', render: (r) => walletBadge(r.status) },
               { key: 'remaining_usd', label: 'Remaining', align: 'r', render: (r) => (r.enforced ? usd(r.remaining_usd) : '—') },
+              { key: 'overdraft_usd', label: 'Overdraft', align: 'r', render: (r) => (r.overdraft_usd > 0 ? <span className="bad">{usd(r.overdraft_usd)}</span> : <span className="muted">—</span>) },
               { key: 'burn_per_day_usd', label: 'Burn / day', align: 'r', render: (r) => usd(r.burn_per_day_usd) },
               { key: 'runway_days', label: 'Runway', align: 'r', sortValue: (r) => r.runway_days ?? 1e9, render: (r) => (r.runway_days == null ? '—' : r.runway_days < 7 ? <Badge tone="bad">{r.runway_days} days</Badge> : r.runway_days < 21 ? <Badge tone="warn">{r.runway_days} days</Badge> : `${Math.round(r.runway_days)} days`) },
               { key: 'projected_exhaustion', label: 'Runs out', render: (r) => (r.projected_exhaustion ? shortDate(r.projected_exhaustion) : '—') },

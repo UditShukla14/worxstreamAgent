@@ -7,6 +7,7 @@ import { Router } from 'express';
 import { config } from '../../config/index.js';
 import { getStripe } from './stripeClient.js';
 import { settleNovaPayment } from './novaCheckout.js';
+import { settleAppPayment } from './appCheckout.js';
 import { handleDisputeCreated, handleDisputeClosed } from './disputes.js';
 
 const router = Router();
@@ -25,8 +26,9 @@ router.post('/', async (req, res) => {
 
   try {
     if (event.type === 'payment_intent.succeeded') {
-      const result = await settleNovaPayment(event.data.object);
-      if (result.credited) console.log(`💳 Nova credit granted for ${event.data.object.id}`);
+      const intent = event.data.object;
+      const result = (await settleNovaPayment(intent)).credited ? { credited: true, app: 'Nova' } : { ...(await settleAppPayment(intent)), app: 'AI app' };
+      if (result.credited) console.log(`💳 ${result.app} credit granted for ${intent.id}`);
     }
     if (event.type === 'charge.dispute.created') {
       const r = await handleDisputeCreated(event.data.object);

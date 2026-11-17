@@ -149,3 +149,29 @@ export function ChartCard({ title, sub, data, series, yFmt, cols, height }: { ti
     </Card>
   );
 }
+
+/** Subscription state of an AI app. `implicit` = Nova for a company with no subscription row (it keeps working). */
+export function appStatusBadge(status?: string | null) {
+  if (status === 'active') return <Badge tone="good">active</Badge>;
+  if (status === 'implicit') return <Badge tone="good">active (no plan set)</Badge>;
+  if (status === 'paused') return <Badge tone="warn">paused</Badge>;
+  if (status === 'off') return <Badge>off</Badge>;
+  return <Badge>not subscribed</Badge>;
+}
+
+export type AppScope = '' | 'nova' | 'raven';
+
+/** Which AI app the usage tabs show: both together (cumulative, the default) or one of them. */
+export function AppScopeBar({ value, onChange }: { value: AppScope; onChange: (v: AppScope) => void }) {
+  return (
+    <div className="seg" role="group" aria-label="AI app">
+      {([['', 'Nova + Raven'], ['nova', 'Nova'], ['raven', 'Raven']] as [AppScope, string][]).map(([v, label]) => (
+        <button key={v || 'all'} className={value === v ? 'on' : ''} onClick={() => onChange(v)}>{label}</button>
+      ))}
+    </div>
+  );
+}
+
+export function appBadge(app?: string) {
+  return <Badge>{app === 'raven' ? 'Raven' : 'Nova'}</Badge>; // neutral: an app name is not a status
+}

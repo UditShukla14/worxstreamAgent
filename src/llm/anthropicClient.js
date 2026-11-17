@@ -5,8 +5,14 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config/index.js';
 import { recordUsageAsync } from '../analytics/recordUsage.js';
+import { fitCallToBudget, getCreditBudget, noteCallCost } from '../analytics/creditGuard.js';
 
-const client = new Anthropic({ apiKey: config.anthropic.apiKey });
+let client = new Anthropic({ apiKey: config.anthropic.apiKey });
+
+/** Tests only: replace the SDK client with a fake. */
+export function __setAnthropicClientForTests(fake) {
+  client = fake;
+}
 
 /**
  * @typedef {object} LlmCallMeta
@@ -26,10 +32,17 @@ const client = new Anthropic({ apiKey: config.anthropic.apiKey });
  * @returns {Promise<import('@anthropic-ai/sdk').Anthropic.Message>}
  */
 export async function createMessage(params, meta = {}, requestOptions = undefined) {
+  // Inside a chat turn the call is first fitted to the company's remaining credit (see creditGuard.js).
+  const budget = getCreditBudget();
+  const sent = budget ? fitCallToBudget(budget, params) : params;
   const response = requestOptions
-    ? await client.messages.create(params, requestOptions)
-    : await client.messages.create(params);
-  recordUsageAsync(meta, response.usage, params.model || config.anthropic.model, response.model, { messageId: response.id });
+    ? await client.messages.create(sent, requestOptions)
+    : await client.messages.create(sent);
+  const recorded = recordUsageAsync(meta, response.usage, sent.model || config.anthropic.model, response.model, { messageId: response.id });
+  if (budget) {
+    noteCallCost(budget, { model: sent.model || config.anthropic.model, responseModel: response.model, usage: response.usage });
+    budget.pending.push(recorded);
+  }
   return response;
 }
 
@@ -45,7 +58,9 @@ export async function createMessage(params, meta = {}, requestOptions = undefine
  * @returns {Promise<{ text: string, message: import('@anthropic-ai/sdk').Anthropic.Message }>}
  */
 export async function streamMessage(params, meta = {}, onTextDelta = () => {}, requestOptions = undefined, thinking = undefined) {
-  const stream = requestOptions ? client.messages.stream(params, requestOptions) : client.messages.stream(params);
+  const budget = getCreditBudget();
+  const sent = budget ? fitCallToBudget(budget, params) : params;
+  const stream = requestOptions ? client.messages.stream(sent, requestOptions) : client.messages.stream(sent);
   let text = '';
 
   const blockTypes = new Map();
@@ -62,10 +77,14 @@ export async function streamMessage(params, meta = {}, onTextDelta = () => {}, r
       }
     }
     const message = await stream.finalMessage();
-    recordUsageAsync(
-      meta, message?.usage, params.model || config.anthropic.model, message?.model,
+    const recorded = recordUsageAsync(
+      meta, message?.usage, sent.model || config.anthropic.model, message?.model,
       { messageId: message?.id },
     );
+    if (budget) {
+      noteCallCost(budget, { model: sent.model || config.anthropic.model, responseModel: message?.model, usage: message?.usage });
+      budget.pending.push(recorded);
+    }
     return { text, message };
   } catch (err) {
     // Aborted / failed mid-stream: Anthropic still bills the tokens generated so far.
@@ -75,10 +94,14 @@ export async function streamMessage(params, meta = {}, onTextDelta = () => {}, r
         ...partial.usage,
         output_tokens: Math.max(partial.usage.output_tokens || 0, Math.ceil(text.length / 4)),
       };
-      recordUsageAsync(
-        meta, usage, params.model || config.anthropic.model, partial.model,
+      const recorded = recordUsageAsync(
+        meta, usage, sent.model || config.anthropic.model, partial.model,
         { messageId: partial.id, partial: true },
       );
+      if (budget) {
+        noteCallCost(budget, { model: sent.model || config.anthropic.model, responseModel: partial.model, usage });
+        budget.pending.push(recorded);
+      }
     }
     throw err;
   }

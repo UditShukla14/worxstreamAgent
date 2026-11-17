@@ -1,14 +1,16 @@
 import { useState } from 'react';
 import { Range, Row, api, compact, downloadCsv, go, int, pct, pct100, usd, useApi } from '../lib';
 import { BarList } from '../components/charts';
-import { Badge, Card, ChartCard, DataTable, ErrorBox, Kpi, Modal, walletBadge } from '../components/ui';
+import CompanyApps from '../components/CompanyApps';
+import ByApp from '../components/ByApp';
+import { AppScope, Badge, Card, ChartCard, DataTable, ErrorBox, Kpi, Modal, walletBadge } from '../components/ui';
 
 type Action = null | 'allowance' | 'credits' | 'markup' | 'name' | 'seats' | 'reconcile' | 'plan' | 'tiers';
 
 const TX_LABEL: Record<string, string> = { grant: 'Credits added', trial: 'Trial', allowance_set: 'Allowance change', reconcile: 'Reconciled' };
 
-export default function CompanyDetail({ id, range }: { id: string; range: Range }) {
-  const { data, error, loading, reload } = useApi<Row>(`/analytics/companies/${encodeURIComponent(id)}/detail`, range);
+export default function CompanyDetail({ id, range, app = '' }: { id: string; range: Range; app?: AppScope }) {
+  const { data, error, loading, reload } = useApi<Row>(`/analytics/companies/${encodeURIComponent(id)}/detail`, { ...range, app });
   const [action, setAction] = useState<Action>(null);
   const history = useApi<Row[]>(`/analytics/companies/${encodeURIComponent(id)}/wallet/transactions`, { limit: 50 });
 
@@ -31,6 +33,10 @@ export default function CompanyDetail({ id, range }: { id: string; range: Range 
         <Kpi label="Employees using it" value={int(data.users.length)} hint={`${int(data.daily.reduce((a: number, d: Row) => a + d.turns, 0))} turns`} />
         <Kpi label="Model calls" value={compact(t.call_count)} hint={`${pct(t.cache_hit_rate, 0)} cache hit`} />
       </div>
+
+      <CompanyApps id={id} />
+
+      <ByApp rows={data.by_app} />
 
       <div className="grid c3">
         <ChartCard

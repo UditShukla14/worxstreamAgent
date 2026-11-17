@@ -1167,7 +1167,13 @@ export async function runCoworkerTurn({
   );
   let attempts = planState.attempts || 0;
   for (let i = 0; i < Math.max(0, maxSelfCheckLoops); i++) {
-    const check = await selfCheckCompletion(message, combinedRawText, usageMeta);
+    let check;
+    try {
+      check = await selfCheckCompletion(message, combinedRawText, usageMeta);
+    } catch (err) {
+      if (err?.code === 'NOVA_CREDIT_EXHAUSTED') break; // no credit for an optional check: the answer stands
+      throw err;
+    }
     if (check.done || !check.next_instruction) break;
     attempts += 1;
     await setPlanState(planRef, { attempts });

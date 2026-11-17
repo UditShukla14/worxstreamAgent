@@ -42,6 +42,8 @@ const companyNovaWalletSchema = new mongoose.Schema(
     notes: { type: String, default: '' },
     /** Payment references already credited (most recent 500) — makes grants idempotent. Never sent to clients. */
     grant_refs: { type: [String], default: undefined, select: false },
+    /** Credit held for turns that are running right now ({ id, micros, expires_at }); see reserveCredit. Never sent to clients. */
+    holds: { type: [mongoose.Schema.Types.Mixed], default: undefined, select: false },
     updated_at: { type: Date, default: Date.now },
   },
   {

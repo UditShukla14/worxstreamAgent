@@ -1,12 +1,12 @@
 import { useMemo } from 'react';
 import { Range, Row, compact, downloadCsv, go, int, pct, usd, useApi, useRoute } from '../lib';
-import { Card, ChartCard, DataTable, ErrorBox, Kpi } from '../components/ui';
+import { AppScope, Card, ChartCard, DataTable, ErrorBox, Kpi } from '../components/ui';
 
-const GROUPS = ['date', 'company', 'user', 'agent', 'model'] as const;
-const LABEL: Record<string, string> = { date: 'Day', company: 'Company', user: 'Employee', agent: 'Agent', model: 'Model' };
+const GROUPS = ['date', 'company', 'user', 'app', 'agent', 'model'] as const;
+const LABEL: Record<string, string> = { date: 'Day', company: 'Company', user: 'Employee', app: 'AI app', agent: 'Agent', model: 'Model' };
 
 /** Filter + group usage explorer. Filters live in the URL hash so a view can be shared/bookmarked. */
-export default function Explorer({ range }: { range: Range }) {
+export default function Explorer({ range, app = '' }: { range: Range; app?: AppScope }) {
   const route = useRoute();
   const q = route.query;
   const company = q.company || '', user = q.user || '', agent = q.agent || '', model = q.model || '';
@@ -18,10 +18,10 @@ export default function Explorer({ range }: { range: Range }) {
     set({ group: (next.length ? next : ['date']).join(',') });
   };
 
-  const dir = useApi<Row>('/analytics/directory', range);
-  const sum = useApi<Row>('/analytics/summary', range);
+  const dir = useApi<Row>('/analytics/directory', { ...range, app });
+  const sum = useApi<Row>('/analytics/summary', { ...range, app });
   const detail = useApi<Row>(company ? `/analytics/companies/${encodeURIComponent(company)}/detail` : null, range);
-  const { data, error, loading } = useApi<Row>('/analytics/usage', { ...range, company_id: company, user_id: user, agent_key: agent, model, group_by: group.join(',') });
+  const { data, error, loading } = useApi<Row>('/analytics/usage', { ...range, app, company_id: company, user_id: user, agent_key: agent, model, group_by: group.join(',') });
 
   const companies: Row[] = dir.data?.companies || [];
   const users: Row[] = detail.data?.users || [];
@@ -34,7 +34,7 @@ export default function Explorer({ range }: { range: Range }) {
 
   const cols = useMemo(() => {
     const dims = group.map((g) => {
-      const key = g === 'date' ? 'date' : g === 'company' ? 'company_id' : g === 'user' ? 'user_id' : g === 'agent' ? 'agent_key' : 'model';
+      const key = g === 'date' ? 'date' : g === 'company' ? 'company_id' : g === 'user' ? 'user_id' : g === 'app' ? 'app' : g === 'agent' ? 'agent_key' : 'model';
       return { key, label: LABEL[g], className: key.endsWith('_id') ? 'id' : '' };
     });
     return [

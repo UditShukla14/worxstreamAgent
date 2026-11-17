@@ -14,13 +14,14 @@ import ConversationTurn from '../nova/models/ConversationTurn.js';
 import { parseDateRange } from './queries.js';
 import { UNATTRIBUTED } from './recordUsage.js';
 import { listWallets } from './novaWallet.js';
+import { listAllWallets } from '../apps/walletsView.js';
 import { MODEL_CATALOG, resolveModelRates, PRICING_SOURCE_URL, PRICING_VERSION } from './modelPricing.js';
 import { DEFAULT_TASK_MODELS } from './taskModels.js';
 import { getModelLimits, listLiveModels } from '../llm/modelLimits.js';
 import { getAvailableTools } from '../mcp/server.js';
 import { config } from '../config/index.js';
 import {
-  SUMS, finishTotals, companyTotalRows, dateBounds, dayMs, totalsFor,
+  SUMS, finishTotals, companyTotalRows, dateBounds, dayMs, totalsFor, normalizeApp, agentScope, agentListScope, foldByApp,
 } from './adminQueries.js';
 
 const r2 = (n) => Number((n || 0).toFixed(2));
@@ -36,11 +37,19 @@ function* eachDay(from, to) {
 }
 
 /** Distinct employees (company+user) active in a range, per-day counts and per-user active days. */
-async function employeeActivity(from, to) {
-  const rows = await LlmUsageDaily.aggregate([
-    { $match: { ...attributed, date: { $gte: from, $lte: to }, user_id: { $ne: '' }, agent_key: '', model: '', call_count: { $gt: 0 } } },
+async function employeeActivity(from, to, app = '') {
+  const raw = await LlmUsageDaily.aggregate([
+    { $match: { ...attributed, date: { $gte: from, $lte: to }, user_id: { $ne: '' }, agent_key: agentScope(app), model: '', call_count: { $gt: 0 } } },
     { $project: { company_id: 1, user_id: 1, date: 1 } },
   ]);
+  // A scoped app has several agent rows per user and day: count each employee-day once.
+  const seen = new Set();
+  const rows = raw.filter((r) => {
+    const key = `${r.company_id}\u0000${r.user_id}\u0000${r.date}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
   const perDay = {};
   const perUser = new Map();
   const perCompany = new Map();
@@ -56,7 +65,9 @@ async function employeeActivity(from, to) {
 
 // ───────────────────────────── Economics ─────────────────────────────
 
-export async function getEconomics({ from, to } = {}) {
+export async function getEconomics({ from, to, app: appRaw } = {}) {
+  const app = normalizeApp(appRaw);
+  const scope = agentScope(app);
   const range = parseDateRange(from, to);
   const today = iso(Date.now());
   const t30 = { from: addDays(today, -29), to: today };
@@ -66,17 +77,18 @@ export async function getEconomics({ from, to } = {}) {
   const dayOfMonth = Number(today.slice(8, 10));
   const inRange = { date: { $gte: range.from, $lte: range.to }, ...attributed };
 
-  const [cur, trail, prevTrail, mtd, daily, companyRows, agentRows, modelRows, activity, turns] = await Promise.all([
-    totalsFor(range),
-    totalsFor(t30),
-    totalsFor(p30),
-    totalsFor({ from: monthStart, to: today }),
-    LlmUsageDaily.aggregate([{ $match: { ...inRange, ...companyTotalRows() } }, { $group: { _id: '$date', ...SUMS } }, { $sort: { _id: 1 } }]),
-    LlmUsageDaily.aggregate([{ $match: { ...inRange, ...companyTotalRows() } }, { $group: { _id: '$company_id', ...SUMS } }, { $sort: { billable_usd: -1 } }]),
-    LlmUsageDaily.aggregate([{ $match: { ...inRange, user_id: '', agent_key: { $ne: '' }, model: '' } }, { $group: { _id: '$agent_key', ...SUMS } }, { $sort: { billable_usd: -1 } }]),
-    LlmUsageDaily.aggregate([{ $match: { ...inRange, user_id: '', agent_key: '', model: { $ne: '' } } }, { $group: { _id: '$model', ...SUMS } }, { $sort: { billable_usd: -1 } }]),
-    employeeActivity(range.from, range.to),
-    ConversationTurn.countDocuments({ created_at: dateBounds(range) }),
+  const [cur, trail, prevTrail, mtd, daily, companyRows, agentRows, modelRows, activity, turns, allAgentRows] = await Promise.all([
+    totalsFor(range, app),
+    totalsFor(t30, app),
+    totalsFor(p30, app),
+    totalsFor({ from: monthStart, to: today }, app),
+    LlmUsageDaily.aggregate([{ $match: { ...inRange, ...companyTotalRows({ agent_key: scope }) } }, { $group: { _id: '$date', ...SUMS } }, { $sort: { _id: 1 } }]),
+    LlmUsageDaily.aggregate([{ $match: { ...inRange, ...companyTotalRows({ agent_key: scope }) } }, { $group: { _id: '$company_id', ...SUMS } }, { $sort: { billable_usd: -1 } }]),
+    LlmUsageDaily.aggregate([{ $match: { ...inRange, user_id: '', agent_key: agentListScope(app), model: '' } }, { $group: { _id: '$agent_key', ...SUMS } }, { $sort: { billable_usd: -1 } }]),
+    LlmUsageDaily.aggregate([{ $match: { ...inRange, user_id: '', agent_key: scope, model: { $ne: '' } } }, { $group: { _id: '$model', ...SUMS } }, { $sort: { billable_usd: -1 } }]),
+    employeeActivity(range.from, range.to, app),
+    app === 'raven' ? 0 : ConversationTurn.countDocuments({ created_at: dateBounds(range) }), // chat turns are Nova's
+    LlmUsageDaily.aggregate([{ $match: { ...inRange, user_id: '', agent_key: { $ne: '' }, model: '' } }, { $group: { _id: '$agent_key', ...SUMS } }]),
   ]);
 
   // run-rate (independent of the selected range)
@@ -163,6 +175,8 @@ export async function getEconomics({ from, to } = {}) {
 
   return {
     from: range.from, to: range.to,
+    app,
+    by_app: foldByApp(allAgentRows),
     totals: cur,
     runrate, unit, concentration, margin_trend,
     agents: slice(agentRows, 'agent_key'),
@@ -393,20 +407,20 @@ export async function getQuality({ from, to } = {}) {
 
 const BURN_WINDOW_DAYS = 14;
 
-export async function getWalletsInsights() {
+export async function getWalletsInsights({ app: appRaw } = {}) {
+  const app = normalizeApp(appRaw);
   const today = iso(Date.now());
   const from = addDays(today, -(BURN_WINDOW_DAYS - 1));
-  const [wallets, burnRows] = await Promise.all([
-    listWallets(),
-    LlmUsageDaily.aggregate([
-      { $match: { ...attributed, ...companyTotalRows(), date: { $gte: from, $lte: today } } },
-      { $group: { _id: '$company_id', billable: { $sum: { $ifNull: ['$billable_usd', '$cost_usd'] } } } },
-    ]),
+  const burnOf = (scope) => LlmUsageDaily.aggregate([
+    { $match: { ...attributed, ...companyTotalRows({ agent_key: scope }), date: { $gte: from, $lte: today } } },
+    { $group: { _id: '$company_id', billable: { $sum: { $ifNull: ['$billable_usd', '$cost_usd'] } } } },
   ]);
-  const burn = new Map(burnRows.map((b) => [b._id, b.billable / BURN_WINDOW_DAYS]));
+  // Each wallet burns only its own app's usage: Nova's wallet pays for Nova, Raven's for Raven.
+  const [wallets, novaBurn, ravenBurn] = await Promise.all([listAllWallets(app), burnOf(agentScope('nova')), burnOf(agentScope('raven'))]);
+  const burnMaps = { nova: new Map(novaBurn.map((b) => [b._id, b.billable / BURN_WINDOW_DAYS])), raven: new Map(ravenBurn.map((b) => [b._id, b.billable / BURN_WINDOW_DAYS])) };
 
   const rows = wallets.map((w) => {
-    const perDay = burn.get(w.company_id) || 0;
+    const perDay = burnMaps[w.app]?.get(w.company_id) || 0;
     const runway = w.enforced && w.remaining_usd > 0 && perDay > 0 ? w.remaining_usd / perDay : null;
     return {
       ...w,
@@ -420,8 +434,10 @@ export async function getWalletsInsights() {
   const usedFree = rows.filter((w) => w.free_allowance_usd > 0 && w.spent_usd >= w.free_allowance_usd);
   const converted = usedFree.filter((w) => w.purchased_credit_usd > 0);
   const summary = {
+    app,
     burn_window_days: BURN_WINDOW_DAYS,
-    companies: rows.length,
+    companies: new Set(rows.map((w) => w.company_id)).size,
+    wallets: rows.length,
     exhausted: rows.filter((w) => w.status === 'exhausted').length,
     low: rows.filter((w) => w.status === 'low').length,
     runway_under_7d: rows.filter((w) => w.runway_days != null && w.runway_days < 7).length,
@@ -431,6 +447,10 @@ export async function getWalletsInsights() {
     exhausted_free_allowance: usedFree.length,
     converted_to_paid: converted.length,
     conversion_pct: r2(safeDiv(converted.length, usedFree.length) * 100),
+    by_app: ['nova', 'raven'].map((key) => {
+      const own = rows.filter((w) => w.app === key);
+      return { app: key, wallets: own.length, outstanding_credit_usd: r2(own.filter((w) => w.enforced).reduce((a, w) => a + Math.max(0, w.remaining_usd), 0)), purchased_total_usd: r2(own.reduce((a, w) => a + w.purchased_credit_usd, 0)), exhausted: own.filter((w) => w.status === 'exhausted').length };
+    }),
   };
   return { wallets: rows, summary };
 }

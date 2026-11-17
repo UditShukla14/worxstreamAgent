@@ -12,6 +12,8 @@ export const WALLET_TX_TYPES = ['grant', 'trial', 'allowance_set', 'reconcile', 
 const walletTransactionSchema = new mongoose.Schema(
   {
     company_id: { type: String, required: true, index: true },
+    /** Which AI app's wallet this row belongs to. Rows from before the field existed are Nova's. */
+    app: { type: String, default: 'nova' },
     type: { type: String, enum: WALLET_TX_TYPES, required: true },
     /** Integer micro-USD that this event added to what the company can spend (can be negative for reconcile). */
     amount_micros: { type: Number, required: true },
