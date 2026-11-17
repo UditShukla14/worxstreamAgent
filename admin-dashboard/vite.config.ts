@@ -8,7 +8,8 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5174,
-    proxy: { '/api': process.env.AGENT_URL || 'http://127.0.0.1:3000' },
+    // changeOrigin lets the proxy reach a remote https agent too (AGENT_URL=https://mcp.worxstream.ai npm run dev).
+    proxy: { '/api': { target: process.env.AGENT_URL || 'http://127.0.0.1:3000', changeOrigin: true } },
   },
   build: { outDir: 'dist', sourcemap: false },
 });
