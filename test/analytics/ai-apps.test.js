@@ -345,3 +345,16 @@ describe('customer Raven usage view', async () => {
     assert.ok(days.every((d) => !('cost_usd' in d) && !('billable_usd' in d)));
   });
 });
+
+describe('Raven usage by employee', async () => {
+  const { summarizeUsers } = await import('../../src/apps/customerUsage.js');
+  it('lists each employee, biggest spender first, without the provider cost', () => {
+    const out = summarizeUsers([
+      { _id: '7', call_count: 3, total_tokens: 6000, billable_usd: 0.01, billable: 1, cost_usd: 0.008, active_days: 2, last_active: '2026-11-10' },
+      { _id: '9', call_count: 40, total_tokens: 90000, billable_usd: 0.14, active_days: 9, last_active: '2026-11-17' },
+    ]);
+    assert.deepEqual(out.map((u) => u.user_id), ['9', '7']);
+    assert.equal(out[0].calls, 40);
+    assert.ok(out.every((u) => !('cost_usd' in u) && !('billable_usd' in u)));
+  });
+});
