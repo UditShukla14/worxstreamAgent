@@ -20,34 +20,14 @@ export function fillDays(rows, range) {
   return out;
 }
 
-/** Per-employee totals, biggest user first (rows are the per-user rollup rows of one app). */
-export function summarizeUsers(rows) {
-  return rows
-    .map((r) => ({ user_id: String(r._id), calls: r.call_count || 0, tokens: r.total_tokens || 0, charged_usd: r6(r.billable_usd), active_days: r.active_days || 0, last_active: r.last_active || null }))
-    .sort((a, b) => b.charged_usd - a.charged_usd || b.calls - a.calls);
-}
-
-/**
- * @param {string} companyId
- * @param {string} app
- * @param {{ from?: string, to?: string, userId?: string }} [q] userId = only that employee's usage (an employee's own view);
- *   without it: the whole company, with the per-employee division in `users`.
- */
+/** @param {string} companyId @param {{ from?: string, to?: string }} [q] */
 export async function getAppUsageForCompany(companyId, app, q = {}) {
   const range = parseDateRange(q.from, q.to);
-  const user = q.userId ? String(q.userId) : '';
-  const base = { company_id: String(companyId), agent_key: app, model: '', date: { $gte: range.from, $lte: range.to } };
-  const sums = { call_count: { $sum: '$call_count' }, total_tokens: { $sum: '$total_tokens' }, billable_usd: { $sum: { $ifNull: ['$billable_usd', '$cost_usd'] } } };
-  const [dayRows, userRows] = await Promise.all([
-    LlmUsageDaily.aggregate([{ $match: { ...base, user_id: user } }, { $group: { _id: '$date', ...sums } }]),
-    user
-      ? []
-      : LlmUsageDaily.aggregate([
-          { $match: { ...base, user_id: { $ne: '' } } },
-          { $group: { _id: '$user_id', ...sums, last_active: { $max: '$date' }, active_days: { $sum: { $cond: [{ $gt: ['$call_count', 0] }, 1, 0] } } } },
-        ]),
+  const rows = await LlmUsageDaily.aggregate([
+    { $match: { company_id: String(companyId), user_id: '', agent_key: app, model: '', date: { $gte: range.from, $lte: range.to } } },
+    { $group: { _id: '$date', call_count: { $sum: '$call_count' }, total_tokens: { $sum: '$total_tokens' }, billable_usd: { $sum: { $ifNull: ['$billable_usd', '$cost_usd'] } } } },
   ]);
-  const daily = fillDays(dayRows, range);
+  const daily = fillDays(rows, range);
   const totals = daily.reduce((a, d) => ({ calls: a.calls + d.calls, tokens: a.tokens + d.tokens, charged_usd: a.charged_usd + d.charged_usd }), { calls: 0, tokens: 0, charged_usd: 0 });
-  return { app, scope: user ? 'user' : 'company', from: range.from, to: range.to, totals: { ...totals, charged_usd: r6(totals.charged_usd) }, daily, users: summarizeUsers(userRows) };
+  return { app, from: range.from, to: range.to, totals: { ...totals, charged_usd: r6(totals.charged_usd) }, daily };
 }

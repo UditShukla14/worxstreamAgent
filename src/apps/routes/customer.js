@@ -4,7 +4,7 @@
  *
  *   GET  /:app/wallet                  the company's wallet (no markup, no staff notes)
  *   GET  /:app/wallet/transactions     credit history
- *   GET  /:app/usage?from=&to=         mails analysed and what they cost the company, per day (default: last 30 days), with the per-employee division; ?mine=1 = only my own usage
+ *   GET  /:app/usage?from=&to=         mails analysed and what they cost the company, per day (default: last 30 days)
  *   GET  /:app/plans                   plans on sale + the custom-amount range and bonus steps
  *   GET  /:app/plans/quote?amount=     what a custom amount costs and buys
  *   GET  /:app/status                  is the app active for the company (subscription + credit)
@@ -55,9 +55,7 @@ router.get('/:app/wallet/transactions', guard(async (s, req, res) => {
 }));
 
 router.get('/:app/usage', guard(async (s, req, res) => {
-  // ?mine=1: only the signed-in employee's own usage; otherwise the whole company with the per-employee division.
-  const userId = req.query.mine === '1' || req.query.mine === 'true' ? s.userId : '';
-  res.json({ success: true, data: await getAppUsageForCompany(s.companyId, s.app, { from: req.query.from, to: req.query.to, userId }) });
+  res.json({ success: true, data: await getAppUsageForCompany(s.companyId, s.app, { from: req.query.from, to: req.query.to }) });
 }));
 
 router.get('/:app/plans', guard(async (s, _req, res) => {
