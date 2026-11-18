@@ -10,6 +10,7 @@ import { getWorxstreamContext } from '../../config/index.js';
 import { runWithRequestContext } from '../../request/requestContext.js';
 import { readEnvApiToken } from '../../utils/worxstreamCredentials.js';
 import ScheduleRun from '../models/ScheduleRun.js';
+import { publishNotification } from '../../services/notificationHub.js';
 import { executeMcpTool } from '../../mcp/server.js';
 import {
   isE164,
@@ -1330,6 +1331,16 @@ export async function fillFlowRun(definition, run) {
       phase: 'done',
     });
 
+    void publishNotification({
+      companyId,
+      userId,
+      type: 'agent.schedule_result',
+      title: `${name} ${run.status === 'partial' ? 'partly sent' : 'sent'}`,
+      body: `Your scheduled ${channel} "${name}" ran on ${dateLabel}.`,
+      data: { runId: String(run._id || ''), channel },
+      idempotencyKey: `schedule-run:${run._id}`,
+    });
+
     return run;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -1343,6 +1354,15 @@ export async function fillFlowRun(definition, run) {
       status: 'error',
       detail: message,
       phase: 'done',
+    });
+    void publishNotification({
+      companyId,
+      userId,
+      type: 'agent.schedule_failed',
+      title: `${name} failed`,
+      body: message.slice(0, 300),
+      data: { runId: String(run._id || ''), channel },
+      idempotencyKey: `schedule-run:${run._id}`,
     });
     throw error;
   }
