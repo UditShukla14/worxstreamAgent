@@ -31,6 +31,8 @@ export const INVOICE_CSS = `
   th.r{text-align:right} th:first-child{border-radius:8px 0 0 8px} th:last-child{border-radius:0 8px 8px 0}
   td{padding:11px 12px;border-bottom:1px solid var(--border);vertical-align:top}
   tr{page-break-inside:avoid}
+  tfoot td{border-bottom:0;background:var(--primary-light);color:var(--primary-text);font-weight:800;font-size:15px}
+  tfoot td:first-child{border-radius:8px 0 0 8px} tfoot td:last-child{border-radius:0 8px 8px 0}
   .totals{margin:20px 0 0 auto;width:340px} .totals div{display:flex;justify-content:space-between;padding:5px 12px}
   .totals .due{background:var(--primary-light);color:var(--primary-text);border-radius:8px;margin-top:8px;padding:12px;font-size:17px;font-weight:800}
   .foot{margin-top:40px;padding-top:16px;border-top:1px solid var(--border)}

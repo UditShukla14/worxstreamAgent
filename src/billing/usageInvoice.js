@@ -15,6 +15,7 @@ export const MAX_INVOICE_DAYS = 366;
 
 const usd = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(n) || 0);
 const dateLong = (d) => new Date(`${d}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+const tokens = (n) => new Intl.NumberFormat('en-US').format(Number(n) || 0);
 const r6 = (n) => Number((n || 0).toFixed(6));
 
 /** The billable amount of a rollup row in dollars (legacy rows without billable fields count at their cost). */
@@ -28,19 +29,20 @@ export const billableOf = (row) => (row.billable_micros != null ? row.billable_m
 export function foldInvoiceDays(rows) {
   const byDay = new Map();
   for (const r of rows) {
-    const day = byDay.get(r.date) || { date: r.date, nova_usd: 0, raven_usd: 0, calls: 0 };
+    const day = byDay.get(r.date) || { date: r.date, nova_usd: 0, raven_usd: 0, calls: 0, tokens: 0 };
     const amount = billableOf(r);
     if (appForAgentKey(r.agent_key) === 'raven') day.raven_usd += amount;
     else day.nova_usd += amount;
     day.calls += r.call_count || 0;
+    day.tokens += r.total_tokens || 0;
     byDay.set(r.date, day);
   }
   const days = [...byDay.values()]
     .map((d) => ({ ...d, nova_usd: r6(d.nova_usd), raven_usd: r6(d.raven_usd), total_usd: r6(d.nova_usd + d.raven_usd) }))
     .filter((d) => d.total_usd > 0 || d.calls > 0)
     .sort((a, b) => (a.date < b.date ? -1 : 1));
-  const totals = days.reduce((a, d) => ({ nova_usd: a.nova_usd + d.nova_usd, raven_usd: a.raven_usd + d.raven_usd, calls: a.calls + d.calls }), { nova_usd: 0, raven_usd: 0, calls: 0 });
-  return { days, totals: { nova_usd: r6(totals.nova_usd), raven_usd: r6(totals.raven_usd), calls: totals.calls, total_usd: r6(totals.nova_usd + totals.raven_usd) } };
+  const totals = days.reduce((a, d) => ({ nova_usd: a.nova_usd + d.nova_usd, raven_usd: a.raven_usd + d.raven_usd, calls: a.calls + d.calls, tokens: a.tokens + d.tokens }), { nova_usd: 0, raven_usd: 0, calls: 0, tokens: 0 });
+  return { days, totals: { nova_usd: r6(totals.nova_usd), raven_usd: r6(totals.raven_usd), calls: totals.calls, tokens: totals.tokens, total_usd: r6(totals.nova_usd + totals.raven_usd) } };
 }
 
 /** Companies with something to invoice in the range, biggest first (for the company picker). */
@@ -93,16 +95,12 @@ export function renderUsageInvoiceHtml(d, seller, { generatedAt = new Date() } =
     </div>
   </div>
   <table>
-    <thead><tr><th>Description</th><th class="r">Amount</th></tr></thead>
-    <tbody><tr>
-      <td><div style="font-weight:600">AI credit usage</div><div class="muted small">${esc(dateLong(d.from))} to ${esc(dateLong(d.to))}</div></td>
-      <td class="r">${esc(usd(d.totals.total_usd))}</td>
-    </tr></tbody>
+    <thead><tr><th>Date (UTC)</th><th class="r">Tokens</th><th class="r">Amount charged</th></tr></thead>
+    <tbody>${d.lines.length
+      ? d.lines.map((l) => `<tr><td>${esc(dateLong(l.date))}</td><td class="r num">${esc(tokens(l.tokens))}</td><td class="r num">${esc(usd(l.total_usd))}</td></tr>`).join('')
+      : '<tr><td colspan="3" class="muted">No usage in this period.</td></tr>'}</tbody>
+    <tfoot><tr class="sum"><td>Total (USD)</td><td class="r num">${esc(tokens(d.totals.tokens))}</td><td class="r num">${esc(usd(d.totals.total_usd))}</td></tr></tfoot>
   </table>
-  <div class="totals">
-    <div><span class="muted">Subtotal</span><span>${esc(usd(d.totals.total_usd))}</span></div>
-    <div class="due"><span>Total (USD)</span><span>${esc(usd(d.totals.total_usd))}</span></div>
-  </div>
   <div class="foot muted small">Thank you for your business.</div>
 </div>
 </body></html>`;

@@ -8,7 +8,7 @@ const { compareDaily } = await import('../../src/analytics/anthropicReconcile.js
 
 describe('usage invoice', () => {
   const rows = [
-    { date: '2026-11-02', agent_key: 'nova-chat', call_count: 2, billable_micros: 1_200_000 },
+    { date: '2026-11-02', agent_key: 'nova-chat', call_count: 2, billable_micros: 1_200_000, total_tokens: 1000 },
     { date: '2026-11-02', agent_key: 'raven', call_count: 1, billable_micros: 300_000 },
     { date: '2026-11-01', agent_key: 'nova-chat', call_count: 1, billable_micros: 600_000 },
   ];
