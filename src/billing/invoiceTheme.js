@@ -36,6 +36,14 @@ export const INVOICE_CSS = `
   .totals{margin:20px 0 0 auto;width:340px} .totals div{display:flex;justify-content:space-between;padding:5px 12px}
   .totals .due{background:var(--primary-light);color:var(--primary-text);border-radius:8px;margin-top:8px;padding:12px;font-size:17px;font-weight:800}
   .foot{margin-top:40px;padding-top:16px;border-top:1px solid var(--border)}
+    .meta{margin-top:14px;font-size:13px} .meta div{display:flex;gap:12px} .meta span:first-child{min-width:110px;color:var(--muted);font-weight:700}
+  .parties{display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-top:28px}
+  .headline{margin-top:28px;font-size:22px;font-weight:800} .headline .muted{font-weight:600;font-size:15px}
+  h2{font-size:15px;font-weight:800;margin:36px 0 0}
+  table.items th{background:none;color:var(--muted);border-bottom:1px solid var(--border);border-radius:0;padding:10px 0}
+  table.items td{padding:12px 0} table.items tfoot td{background:none;color:var(--text);font-size:14px;border-radius:0;border-top:1px solid var(--border);padding:8px 0;font-weight:700}
+  table.items tfoot tr.strong td{font-size:15px;font-weight:800}
+  table.items tfoot td.l{text-align:right;color:var(--muted);font-weight:700;padding-right:16px}
   @media print{body{background:#fff}.bar{display:none}.page{border:0;border-radius:0;margin:0;padding:24px 0 0;max-width:none}}
 `;
 
@@ -57,4 +65,35 @@ export function invoiceHeader({ seller, title, number }) {
     <div class="seller">${lines.map((l) => `<div class="muted small">${esc(l)}</div>`).join('')}</div>
   </div>
   <h1>${esc(title)}</h1><div class="muted">${esc(number)}</div>`;
+}
+
+/**
+ * The standard SaaS invoice frame: title and meta lines with the logo, From / Bill to, the amount-due headline, then the
+ * caller's `body` (tables) and a footnote.
+ * @param {{ title: string, number: string, seller: object, billTo: { name: string, id: string }, issued: string, due: string, headline: string, body: string, note?: string }} p
+ */
+export function renderInvoiceDocument({ title, number, seller, billTo, issued, due, headline, body, note = '' }) {
+  const sellerLines = [seller.address, seller.tax_id ? `Tax ID: ${seller.tax_id}` : ''].filter(Boolean).flatMap((l) => String(l).split('|'));
+  return `${invoiceHead(`Invoice ${number}`)}
+<div class="page">
+  <div class="top">
+    <div>
+      <h1 style="margin-top:0">${esc(title)}</h1>
+      <div class="meta">
+        <div><span>Invoice number</span><span>${esc(number)}</span></div>
+        <div><span>Date of issue</span><span>${esc(issued)}</span></div>
+        <div><span>Date due</span><span>${esc(due)}</span></div>
+      </div>
+    </div>
+    <div class="brand">${LOGO_SVG}</div>
+  </div>
+  <div class="parties">
+    <div><div class="label">From</div><div style="font-weight:700">${esc(seller.name)}</div>${sellerLines.map((l) => `<div class="muted">${esc(l)}</div>`).join('')}</div>
+    <div><div class="label">Bill to</div><div style="font-weight:700">${esc(billTo.name)}</div><div class="muted">Company ID ${esc(billTo.id)}</div></div>
+  </div>
+  <div class="headline">${headline}</div>
+  ${body}
+  <div class="foot muted small">${note ? `${note} ` : ''}Thank you for your business.</div>
+</div>
+</body></html>`;
 }

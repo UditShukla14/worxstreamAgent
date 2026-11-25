@@ -7,7 +7,7 @@
 import LlmUsageDaily from '../analytics/models/LlmUsageDaily.js';
 import { parseDateRange } from '../analytics/queries.js';
 import { appForAgentKey } from '../apps/registry.js';
-import { invoiceHead, invoiceHeader, esc } from './invoiceTheme.js';
+import { renderInvoiceDocument, esc } from './invoiceTheme.js';
 import { UNATTRIBUTED } from '../analytics/recordUsage.js';
 
 const dayMs = 86_400_000;
@@ -84,24 +84,32 @@ export const usageInvoiceNumber = (d) => `WXU-${d.company_id}-${d.from.replace(/
  */
 export function renderUsageInvoiceHtml(d, seller, { generatedAt = new Date() } = {}) {
   const number = usageInvoiceNumber(d);
-  return `${invoiceHead(`Invoice ${number}`)}
-<div class="page">
-  ${invoiceHeader({ seller: seller, title: 'Invoice', number: number })}
-  <div class="grid">
-    <div class="box"><div class="label">Billed to</div><div style="font-weight:600">${esc(d.company_name || `Company ${d.company_id}`)}</div><div class="muted small">Company ID ${esc(d.company_id)}</div></div>
-    <div class="box">
-      <div class="label">Details</div>
-      <div>Invoice date: ${esc(dateLong(generatedAt.toISOString().slice(0, 10)))}</div>
-    </div>
-  </div>
-  <table>
+  const total = usd(d.totals.total_usd);
+  const issued = dateLong(generatedAt.toISOString().slice(0, 10));
+  const period = `${dateLong(d.from)} to ${dateLong(d.to)}`;
+  const body = `
+  <table class="items">
+    <thead><tr><th>Description</th><th class="r">Qty</th><th class="r">Unit price</th><th class="r">Amount</th></tr></thead>
+    <tbody><tr>
+      <td><div style="font-weight:600">AI credit usage</div><div class="muted small">${esc(period)}</div></td>
+      <td class="r num">1</td><td class="r num">${esc(total)}</td><td class="r num">${esc(total)}</td>
+    </tr></tbody>
+    <tfoot>
+      <tr><td colspan="2"></td><td class="l">Subtotal</td><td class="r num">${esc(total)}</td></tr>
+      <tr><td colspan="2"></td><td class="l">Total</td><td class="r num">${esc(total)}</td></tr>
+      <tr class="strong"><td colspan="2"></td><td class="l">Amount due</td><td class="r num">${esc(total)}</td></tr>
+    </tfoot>
+  </table>
+  <h2>Usage detail</h2>
+  <table class="items">
     <thead><tr><th>Date (UTC)</th><th class="r">Tokens</th><th class="r">Amount charged</th></tr></thead>
     <tbody>${d.lines.length
       ? d.lines.map((l) => `<tr><td>${esc(dateLong(l.date))}</td><td class="r num">${esc(tokens(l.tokens))}</td><td class="r num">${esc(usd(l.total_usd))}</td></tr>`).join('')
       : '<tr><td colspan="3" class="muted">No usage in this period.</td></tr>'}</tbody>
-    <tfoot><tr class="sum"><td>Total (USD)</td><td class="r num">${esc(tokens(d.totals.tokens))}</td><td class="r num">${esc(usd(d.totals.total_usd))}</td></tr></tfoot>
-  </table>
-  <div class="foot muted small">Thank you for your business.</div>
-</div>
-</body></html>`;
+    <tfoot><tr class="strong"><td>Total</td><td class="r num">${esc(tokens(d.totals.tokens))}</td><td class="r num">${esc(total)}</td></tr></tfoot>
+  </table>`;
+  return renderInvoiceDocument({
+    title: 'Invoice', number, seller, billTo: { name: d.company_name || `Company ${d.company_id}`, id: d.company_id },
+    issued, due: 'On receipt', headline: `${esc(total)} <span class="muted">due on receipt</span>`, body,
+  });
 }

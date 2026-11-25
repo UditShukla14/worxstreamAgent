@@ -3,7 +3,7 @@
  * the browser's "Save as PDF" in the print dialog gives the downloadable file. Every value is HTML-escaped.
  */
 
-import { invoiceHead, invoiceHeader, esc } from './invoiceTheme.js';
+import { renderInvoiceDocument, esc } from './invoiceTheme.js';
 const usd = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(n) || 0);
 const dateLong = (d) => new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
 
@@ -27,31 +27,25 @@ export function isInvoiceable(tx) {
 export function renderInvoiceHtml(tx, buyer, seller) {
   const number = invoiceNumber(tx);
   const bonus = Math.max(0, tx.amount_usd - tx.paid_usd);
-  return `${invoiceHead(`Invoice ${number}`)}
-<div class="page">
-  ${invoiceHeader({ seller: seller, title: 'Invoice', number: number })}
-  <div class="grid">
-    <div class="box"><div class="label">Billed to</div><div style="font-weight:600">${esc(buyer.company_name || `Company ${buyer.company_id}`)}</div><div class="muted small">Company ID ${esc(buyer.company_id)}</div></div>
-    <div class="box">
-      <div class="label">Details</div>
-      <div>Invoice date: ${esc(dateLong(tx.created_at))}</div>
-      <div>Status: <span class="badge">Paid</span></div>
-      ${tx.payment_ref ? `<div class="muted small">Payment reference: ${esc(tx.payment_ref)}</div>` : ''}
-    </div>
-  </div>
-  <table>
-    <thead><tr><th>Description</th><th class="r">Nova credit</th><th class="r">Amount</th></tr></thead>
+  const paid = esc(usd(tx.paid_usd));
+  const date = dateLong(tx.created_at);
+  const body = `
+  <table class="items">
+    <thead><tr><th>Description</th><th class="r">Qty</th><th class="r">Unit price</th><th class="r">Amount</th></tr></thead>
     <tbody><tr>
-      <td><div style="font-weight:600">${esc(tx.plan_name || 'Nova credit')}</div><div class="muted small">Nova AI credit, one-time purchase</div></td>
-      <td class="r">${esc(usd(tx.amount_usd))}${bonus > 0.004 ? `<div class="muted small">includes ${esc(usd(bonus))} bonus</div>` : ''}</td>
-      <td class="r">${esc(usd(tx.paid_usd))}</td>
+      <td><div style="font-weight:600">${esc(tx.plan_name || 'Nova credit')}</div><div class="muted small">AI credit, one-time purchase. Credit received: ${esc(usd(tx.amount_usd))}${bonus > 0.004 ? ` (includes ${esc(usd(bonus))} bonus)` : ''}</div></td>
+      <td class="r num">1</td><td class="r num">${paid}</td><td class="r num">${paid}</td>
     </tr></tbody>
-  </table>
-  <div class="totals">
-    <div><span class="muted">Subtotal</span><span>${esc(usd(tx.paid_usd))}</span></div>
-    <div class="due"><span>Total paid (USD)</span><span>${esc(usd(tx.paid_usd))}</span></div>
-  </div>
-  <div class="foot muted small">Paid by card through Stripe. Nova credit is non-refundable and is used by everyone in your company. Thank you for your business.</div>
-</div>
-</body></html>`;
+    <tfoot>
+      <tr><td colspan="2"></td><td class="l">Subtotal</td><td class="r num">${paid}</td></tr>
+      <tr><td colspan="2"></td><td class="l">Total</td><td class="r num">${paid}</td></tr>
+      <tr class="strong"><td colspan="2"></td><td class="l">Amount paid</td><td class="r num">${paid}</td></tr>
+    </tfoot>
+  </table>`;
+  return renderInvoiceDocument({
+    title: 'Invoice', number, seller, billTo: { name: buyer.company_name || `Company ${buyer.company_id}`, id: buyer.company_id },
+    issued: date, due: date,
+    headline: `${paid} <span class="badge">Paid</span>`, body,
+    note: `${tx.payment_ref ? `Payment reference: ${esc(tx.payment_ref)}. ` : ''}Paid by card through Stripe. AI credit is non-refundable and is used by everyone in your company.`,
+  });
 }
