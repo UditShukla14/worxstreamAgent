@@ -38,3 +38,19 @@ describe('usage invoice', () => {
     assert.equal(cmp.totals.billable_usd, 1.2);
   });
 });
+
+describe('margin breakdown', () => {
+  it('splits unattributed and legacy cost and flags companies off the expected rate', async () => {
+    const { marginBreakdown } = await import('../../src/analytics/anthropicReconcile.js');
+    const m = marginBreakdown([
+      { company_id: 'a', provider_cost_micros: 10e6, billable_micros: 12e6 },
+      { company_id: 'b', provider_cost_micros: 10e6, billable_micros: 10e6 },
+      { company_id: '_unattributed', provider_cost_micros: 5e6, billable_micros: 0 },
+      { company_id: 'c', cost_usd: 2 },
+    ], 0.2);
+    assert.equal(m.unattributed_cost_usd, 5);
+    assert.equal(m.legacy_cost_usd, 2);
+    assert.equal(m.effective_markup_pct, 9.1);
+    assert.deepEqual(m.companies_off_rate.map((c) => c.company_id).sort(), ['b', 'c']);
+  });
+});

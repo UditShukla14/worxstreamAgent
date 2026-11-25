@@ -17,6 +17,7 @@
 import LlmUsageDaily from './models/LlmUsageDaily.js';
 import { parseDateRange } from './queries.js';
 import { computeEventCost } from './costing.js';
+import { config } from '../config/index.js';
 
 const BASE = process.env.ANTHROPIC_ADMIN_API_BASE || 'https://api.anthropic.com/v1/organizations';
 const ANTHROPIC_VERSION = '2026-10-21';
@@ -152,6 +153,8 @@ export function compareDaily(ours, theirCost, theirUsage, { tolerancePct = 2, mi
       date: day,
       ours_usd: Number(o.cost_usd.toFixed(4)),
       billable_usd: Number((o.billable_usd || 0).toFixed(4)),
+      // Cost of the usage that is charged to a company; profit = billable - this (unattributed usage is nobody's to charge).
+      charged_cost_usd: Number((o.charged_cost_usd || 0).toFixed(4)),
       anthropic_usd: Number(a.toFixed(4)),
       diff_usd: Number(diff.toFixed(4)),
       diff_pct: Number(pct.toFixed(2)),
@@ -169,6 +172,7 @@ export function compareDaily(ours, theirCost, theirUsage, { tolerancePct = 2, mi
     diff_usd: Number(sum('diff_usd').toFixed(4)),
     // What to charge customers for the range: the ledger's billable amounts (cost plus markup), not the provider cost.
     billable_usd: Number(sum('billable_usd').toFixed(4)),
+    charged_cost_usd: Number(sum('charged_cost_usd').toFixed(4)),
   };
   totals.diff_pct = totals.anthropic_usd > 0 ? Number(((totals.diff_usd / totals.anthropic_usd) * 100).toFixed(2)) : 0;
   return { rows, totals, flagged_days: rows.filter((r) => r.status === 'under_recorded' || r.status === 'over_recorded').length };
@@ -201,17 +205,52 @@ async function fetchAllPages(path, params, key) {
 }
 
 /** Our side: per-day provider cost + tokens from the daily rollup (company totals incl. _unattributed). */
-export async function ledgerByDay(from, to) {
-  const rows = await LlmUsageDaily.find({
-    date: { $gte: from, $lte: to },
-    user_id: '',
-    agent_key: '',
-    model: '',
-  }).lean();
+/**
+ * Pure: why the margin is what it is. Splits the period's cost into usage charged at a markup, usage with no company
+ * (never charged), and old rows recorded before billable amounts existed (counted at cost, so 0% markup); lists the
+ * companies whose effective markup differs from the expected rate (a wallet override).
+ */
+export function marginBreakdown(rows, expectedRate) {
+  const cost = (r) => (r.provider_cost_micros != null ? r.provider_cost_micros / 1e6 : r.cost_usd) || 0;
+  const bill = (r) => (r.billable_micros != null ? r.billable_micros / 1e6 : (r.billable_usd ?? r.cost_usd)) || 0;
+  const m = { unattributed_cost_usd: 0, legacy_cost_usd: 0, charged_cost_usd: 0, billable_usd: 0 };
+  const byCompany = {};
+  for (const r of rows) {
+    if (r.company_id === '_unattributed') { m.unattributed_cost_usd += cost(r); continue; }
+    m.charged_cost_usd += cost(r);
+    m.billable_usd += bill(r);
+    if (r.billable_micros == null) m.legacy_cost_usd += cost(r);
+    const c = byCompany[r.company_id] || { company_id: r.company_id, cost_usd: 0, billable_usd: 0 };
+    c.cost_usd += cost(r);
+    c.billable_usd += bill(r);
+    byCompany[r.company_id] = c;
+  }
+  const round = (n) => Number(n.toFixed(4));
+  const effective = m.charged_cost_usd > 0 ? m.billable_usd / m.charged_cost_usd - 1 : 0;
+  const off = Object.values(byCompany)
+    .filter((c) => c.cost_usd >= 0.01 && Math.abs(c.billable_usd / c.cost_usd - 1 - expectedRate) > 0.01)
+    .map((c) => ({ company_id: c.company_id, cost_usd: round(c.cost_usd), billable_usd: round(c.billable_usd), effective_markup_pct: Number(((c.billable_usd / c.cost_usd - 1) * 100).toFixed(1)) }))
+    .sort((a, b) => b.cost_usd - a.cost_usd)
+    .slice(0, 10);
+  return {
+    expected_markup_pct: Number((expectedRate * 100).toFixed(1)),
+    effective_markup_pct: Number((effective * 100).toFixed(1)),
+    unattributed_cost_usd: round(m.unattributed_cost_usd),
+    legacy_cost_usd: round(m.legacy_cost_usd),
+    companies_off_rate: off,
+  };
+}
+
+/** The per-company day rollups in the range. */
+export const ledgerRows = (from, to) => LlmUsageDaily.find({ date: { $gte: from, $lte: to }, user_id: '', agent_key: '', model: '' }).lean();
+
+export async function ledgerByDay(from, to, rows) {
+  rows = rows || (await ledgerRows(from, to));
   const out = {};
   for (const r of rows) {
-    const a = out[r.date] || { cost_usd: 0, billable_usd: 0, input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+    const a = out[r.date] || { cost_usd: 0, charged_cost_usd: 0, billable_usd: 0, input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
     a.cost_usd += (r.provider_cost_micros != null ? r.provider_cost_micros / 1e6 : r.cost_usd) || 0;
+    if (r.company_id !== '_unattributed') a.charged_cost_usd += (r.provider_cost_micros != null ? r.provider_cost_micros / 1e6 : r.cost_usd) || 0;
     if (r.company_id !== '_unattributed') a.billable_usd += (r.billable_micros != null ? r.billable_micros / 1e6 : (r.billable_usd ?? r.cost_usd)) || 0;
     a.input_tokens += r.input_tokens || 0;
     a.output_tokens += r.output_tokens || 0;
@@ -232,7 +271,9 @@ export async function reconcileWithAnthropic({ from, to, apiKeyIds = [] } = {}) 
   const days = Math.round((Date.parse(range.to) - Date.parse(range.from)) / 86_400_000) + 1;
   if (days > MAX_DAYS) throw new Error(`Range too large (max ${MAX_DAYS} days)`);
 
-  const ours = await ledgerByDay(range.from, range.to);
+  const rows = await ledgerRows(range.from, range.to);
+  const ours = await ledgerByDay(range.from, range.to, rows);
+  const margin = marginBreakdown(rows, config.billing?.markupRate ?? 0);
   if (!key) {
     return {
       configured: false,
@@ -282,6 +323,7 @@ export async function reconcileWithAnthropic({ from, to, apiKeyIds = [] } = {}) 
       : workspaceId ? `workspace ${workspaceId}` : 'entire organization (set ANTHROPIC_RECONCILE_WORKSPACE_ID to narrow)',
     api_key_ids: keyIds,
     ...cmp,
+    margin,
     anthropic_cost_by_type_usd: Object.fromEntries(Object.entries(byType).map(([k, v]) => [k, Number(v.toFixed(4))])),
     notes: [
       ...(keyIds.length ? ['With API keys selected, Anthropic\'s dollars are those keys\' tokens priced at our price catalog (the cost report cannot be filtered by key). Our ledger is not split by key, so choose every key the agent and the mail service use.'] : []),

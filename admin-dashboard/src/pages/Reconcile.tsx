@@ -158,7 +158,7 @@ export default function Reconcile({ range }: { range: Range }) {
         <Kpi label={ids.length ? 'Anthropic tokens of the selected keys, priced' : 'Anthropic cost report'} value={usd(data.totals.anthropic_usd)} />
         <Kpi label="Difference" value={usd(data.totals.diff_usd)} hint={`${data.totals.diff_pct}% of Anthropic`} />
         <Kpi label="Customer billable (to charge)" value={usd(data.totals.billable_usd)} />
-        <Kpi label="Profit / loss (billable − ledger)" value={<Profit billable={data.totals.billable_usd} cost={data.totals.ours_usd} />} hint="% of our ledger cost" />
+        <Kpi label="Profit / loss (billable − ledger)" value={<Profit billable={data.totals.billable_usd} cost={data.totals.charged_cost_usd} />} hint={`% of cost of charged usage · markup ${data.margin.effective_markup_pct}% (expected ${data.margin.expected_markup_pct}%)`} />
         <Kpi label="Days needing a look" value={String(data.flagged_days)} hint={data.scope} />
       </div>
 
@@ -182,13 +182,34 @@ export default function Reconcile({ range }: { range: Range }) {
             { key: 'anthropic_usd', label: 'Anthropic', align: 'r', render: (r) => usd(r.anthropic_usd) },
             { key: 'diff_usd', label: 'Diff', align: 'r', render: (r) => <span>{usd(r.diff_usd)} <span className="muted">({r.diff_pct}%)</span></span> },
             { key: 'billable_usd', label: 'Customer billable', align: 'r', render: (r) => <b>{usd(r.billable_usd)}</b> },
-            { key: 'profit', label: 'Profit / loss', align: 'r', render: (r) => <Profit billable={r.billable_usd} cost={r.ours_usd} /> },
+            { key: 'profit', label: 'Profit / loss', align: 'r', render: (r) => <Profit billable={r.billable_usd} cost={r.charged_cost_usd} /> },
             { key: 'ours_tokens', label: 'Our tokens', align: 'r', render: (r) => compact(r.ours_tokens) },
             { key: 'anthropic_tokens', label: 'Anthropic tokens', align: 'r', render: (r) => compact(r.anthropic_tokens) },
             { key: 'status', label: 'Status', render: (r) => statusBadge(r.status) },
           ]}
         />
       </Card>
+
+      {(Math.abs(data.margin.effective_markup_pct - data.margin.expected_markup_pct) > 1 || data.margin.unattributed_cost_usd > 0.01 || data.margin.legacy_cost_usd > 0.01) && (
+        <Card title="Why the margin differs from the expected markup" sub="Profit is measured on usage that is charged to a company">
+          <div className="stack">
+            <div className="note">Effective markup on charged usage is <b>{data.margin.effective_markup_pct}%</b>; the setting is <b>{data.margin.expected_markup_pct}%</b>.</div>
+            {data.margin.unattributed_cost_usd > 0.01 && <div className="note"><b>{usd(data.margin.unattributed_cost_usd)}</b> of cost has no company (unattributed), so nobody is charged for it. It is a cost to us; find which calls miss a company id.</div>}
+            {data.margin.legacy_cost_usd > 0.01 && <div className="note"><b>{usd(data.margin.legacy_cost_usd)}</b> of cost is from older records without a billable amount; those are counted at cost (0% markup).</div>}
+            {data.margin.companies_off_rate.length > 0 && (
+              <DataTable
+                rows={data.margin.companies_off_rate}
+                cols={[
+                  { key: 'company_id', label: 'Company' },
+                  { key: 'cost_usd', label: 'Cost', align: 'r', render: (r) => usd(r.cost_usd) },
+                  { key: 'billable_usd', label: 'Billable', align: 'r', render: (r) => usd(r.billable_usd) },
+                  { key: 'effective_markup_pct', label: 'Markup', align: 'r', render: (r) => `${r.effective_markup_pct}%` },
+                ]}
+              />
+            )}
+          </div>
+        </Card>
+      )}
 
       {invoiceOpen && <InvoiceDialog range={range} onClose={() => setInvoiceOpen(false)} />}
 
