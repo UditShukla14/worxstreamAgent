@@ -13,6 +13,7 @@
     "dev": "node --watch src/index.js",
     "build": "node -e \"console.log('@worxstream/agent: no compile step')\"",
     "start": "node src/index.js",
+    "backfill:billable": "node src/scripts/backfillBillable.js",
     "seed:governance": "node src/governance/seed/runSeed.js",
     "test": "node --test test/**/*.test.js",
     "admin:install": "npm --prefix admin-dashboard install",
