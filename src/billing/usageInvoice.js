@@ -82,32 +82,28 @@ export const usageInvoiceNumber = (d) => `WXU-${d.company_id}-${d.from.replace(/
  */
 export function renderUsageInvoiceHtml(d, seller, { generatedAt = new Date() } = {}) {
   const number = usageInvoiceNumber(d);
-  const hasRaven = d.totals.raven_usd > 0;
-  const hasNova = d.totals.nova_usd > 0 || !hasRaven;
-  const cols = (hasNova ? 1 : 0) + (hasRaven ? 1 : 0);
   return `${invoiceHead(`Invoice ${number}`)}
 <div class="page">
-  ${invoiceHeader({ seller: seller, title: 'Usage invoice', number: number })}
+  ${invoiceHeader({ seller: seller, title: 'Invoice', number: number })}
   <div class="grid">
     <div class="box"><div class="label">Billed to</div><div style="font-weight:600">${esc(d.company_name || `Company ${d.company_id}`)}</div><div class="muted small">Company ID ${esc(d.company_id)}</div></div>
     <div class="box">
       <div class="label">Details</div>
-      <div>Period: ${esc(dateLong(d.from))} to ${esc(dateLong(d.to))}</div>
-      <div>Issued: ${esc(dateLong(generatedAt.toISOString().slice(0, 10)))}</div>
+      <div>Invoice date: ${esc(dateLong(generatedAt.toISOString().slice(0, 10)))}</div>
     </div>
   </div>
   <table>
-    <thead><tr><th>Day (UTC)</th>${hasNova ? '<th class="r">Nova</th>' : ''}${hasRaven ? '<th class="r">Raven</th>' : ''}${cols > 1 ? '<th class="r">Total</th>' : ''}</tr></thead>
-    <tbody>${d.lines.length
-      ? d.lines.map((l) => `<tr><td>${esc(dateLong(l.date))}</td>${hasNova ? `<td class="r num">${esc(usd(l.nova_usd))}</td>` : ''}${hasRaven ? `<td class="r num">${esc(usd(l.raven_usd))}</td>` : ''}${cols > 1 ? `<td class="r num">${esc(usd(l.total_usd))}</td>` : ''}</tr>`).join('')
-      : `<tr><td colspan="3" class="muted">No usage in this period.</td></tr>`}</tbody>
+    <thead><tr><th>Description</th><th class="r">Amount</th></tr></thead>
+    <tbody><tr>
+      <td><div style="font-weight:600">AI credit usage</div><div class="muted small">${esc(dateLong(d.from))} to ${esc(dateLong(d.to))}</div></td>
+      <td class="r">${esc(usd(d.totals.total_usd))}</td>
+    </tr></tbody>
   </table>
   <div class="totals">
-    ${hasNova ? `<div><span class="muted">Nova</span><span class="num">${esc(usd(d.totals.nova_usd))}</span></div>` : ''}
-    ${hasRaven ? `<div><span class="muted">Raven</span><span class="num">${esc(usd(d.totals.raven_usd))}</span></div>` : ''}
-    <div class="due"><span>Total (USD)</span><span class="num">${esc(usd(d.totals.total_usd))}</span></div>
+    <div><span class="muted">Subtotal</span><span>${esc(usd(d.totals.total_usd))}</span></div>
+    <div class="due"><span>Total (USD)</span><span>${esc(usd(d.totals.total_usd))}</span></div>
   </div>
-  <div class="foot muted small">Amounts are what was charged for AI usage in the period, per day. ${esc(String(d.totals.calls))} AI requests. Thank you for your business.</div>
+  <div class="foot muted small">Thank you for your business.</div>
 </div>
 </body></html>`;
 }

@@ -100,7 +100,7 @@ function InvoiceDialog({ range, onClose }: { range: Range; onClose: () => void }
   return (
     <Modal title="Generate usage invoice" onClose={onClose}>
       <div className="stack">
-        <div className="note">Period: <b>{range.from}</b> to <b>{range.to}</b>. It lists what the company was charged per day for Nova and Raven (the billable amounts) and the total. It is generated now and not stored.</div>
+        <div className="note">Period: <b>{range.from}</b> to <b>{range.to}</b>. It is the standard invoice with one line for the total billable amount, no usage details. It is generated now and not stored.</div>
         <label className="field">Company
           <select className="input" value={chosen} onChange={(e) => setCompany(e.target.value)} disabled={list.loading || !companies.length}>
             {!companies.length && <option value="">{list.loading ? 'Loading…' : 'No company has usage in this period'}</option>}
