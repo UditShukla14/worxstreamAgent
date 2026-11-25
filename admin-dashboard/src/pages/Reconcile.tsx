@@ -118,6 +118,18 @@ function InvoiceDialog({ range, onClose }: { range: Range; onClose: () => void }
   );
 }
 
+/** Profit = what the customer is charged minus what the ledger says it cost us; green when positive, red when negative. */
+const profitOf = (billable: number, cost: number) => {
+  const profit = billable - cost;
+  return { profit, pct: cost > 0 ? (profit / cost) * 100 : 0 };
+};
+function Profit({ billable, cost }: { billable: number; cost: number }) {
+  const { profit, pct } = profitOf(billable, cost);
+  const tone = profit > 0.00005 ? 'var(--good-text)' : profit < -0.00005 ? 'var(--critical-text)' : 'inherit';
+  const mark = profit > 0.00005 ? '▲ +' : profit < -0.00005 ? '▼ −' : '';
+  return <span style={{ color: tone, fontWeight: 600 }}>{mark}{usd(Math.abs(profit))} <span style={{ fontWeight: 400 }}>({pct >= 0 ? '+' : '−'}{Math.abs(pct).toFixed(1)}%)</span></span>;
+}
+
 export default function Reconcile({ range }: { range: Range }) {
   const [invoiceOpen, setInvoiceOpen] = useState(false);
   const [ids, setIds] = useState<string[]>(() => { try { return (JSON.parse(localStorage.getItem(STORE) || '[]') as string[]).filter((i) => KEY_ID.test(i)); } catch { return []; } });
@@ -141,11 +153,12 @@ export default function Reconcile({ range }: { range: Range }) {
   return (
     <div className={`stack ${loading ? 'loading' : ''}`}>
       {picker}
-      <div className="grid k5">
+      <div className="grid k6">
         <Kpi label="Our ledger (provider cost)" value={usd(data.totals.ours_usd)} />
         <Kpi label={ids.length ? 'Anthropic tokens of the selected keys, priced' : 'Anthropic cost report'} value={usd(data.totals.anthropic_usd)} />
         <Kpi label="Difference" value={usd(data.totals.diff_usd)} hint={`${data.totals.diff_pct}% of Anthropic`} />
-        <Kpi label="Customer billable (to charge)" value={usd(data.totals.billable_usd)} hint={`${usd(data.totals.billable_usd - data.totals.ours_usd)} over our cost`} />
+        <Kpi label="Customer billable (to charge)" value={usd(data.totals.billable_usd)} />
+        <Kpi label="Profit / loss (billable − ledger)" value={<Profit billable={data.totals.billable_usd} cost={data.totals.ours_usd} />} hint="% of our ledger cost" />
         <Kpi label="Days needing a look" value={String(data.flagged_days)} hint={data.scope} />
       </div>
 
@@ -169,6 +182,7 @@ export default function Reconcile({ range }: { range: Range }) {
             { key: 'anthropic_usd', label: 'Anthropic', align: 'r', render: (r) => usd(r.anthropic_usd) },
             { key: 'diff_usd', label: 'Diff', align: 'r', render: (r) => <span>{usd(r.diff_usd)} <span className="muted">({r.diff_pct}%)</span></span> },
             { key: 'billable_usd', label: 'Customer billable', align: 'r', render: (r) => <b>{usd(r.billable_usd)}</b> },
+            { key: 'profit', label: 'Profit / loss', align: 'r', render: (r) => <Profit billable={r.billable_usd} cost={r.ours_usd} /> },
             { key: 'ours_tokens', label: 'Our tokens', align: 'r', render: (r) => compact(r.ours_tokens) },
             { key: 'anthropic_tokens', label: 'Anthropic tokens', align: 'r', render: (r) => compact(r.anthropic_tokens) },
             { key: 'status', label: 'Status', render: (r) => statusBadge(r.status) },
