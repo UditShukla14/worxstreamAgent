@@ -1,6 +1,6 @@
 import { KeyboardEvent, useEffect, useMemo, useState } from 'react';
-import { Range, Row, compact, shortDate, usd, useApi } from '../lib';
-import { Badge, Card, ChartCard, DataTable, ErrorBox, Kpi } from '../components/ui';
+import { Range, Row, apiHtml, compact, shortDate, usd, useApi } from '../lib';
+import { Badge, Card, ChartCard, DataTable, ErrorBox, Kpi, Modal } from '../components/ui';
 
 const statusBadge = (s: string) => {
   if (s === 'ok') return <Badge tone="good">matches</Badge>;
@@ -76,7 +76,50 @@ function KeyPicker({ ids, onChange, keys }: { ids: string[]; onChange: (ids: str
   );
 }
 
+/** Generates a printable usage invoice for one company over the selected dates and opens it in a new tab. */
+function InvoiceDialog({ range, onClose }: { range: Range; onClose: () => void }) {
+  const list = useApi<Row[]>('/analytics/invoices/usage/companies', range);
+  const [company, setCompany] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const companies = list.data || [];
+  const chosen = company || companies[0]?.company_id || '';
+  const picked = companies.find((c) => c.company_id === chosen);
+
+  const generate = async () => {
+    setBusy(true); setErr('');
+    try {
+      const html = await apiHtml('/analytics/invoices/usage', { ...range, company_id: chosen });
+      const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+      window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      onClose();
+    } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+  };
+
+  return (
+    <Modal title="Generate usage invoice" onClose={onClose}>
+      <div className="stack">
+        <div className="note">Period: <b>{range.from}</b> to <b>{range.to}</b>. It lists what the company was charged per day for Nova and Raven (the billable amounts) and the total. It is generated now and not stored.</div>
+        <label className="field">Company
+          <select className="input" value={chosen} onChange={(e) => setCompany(e.target.value)} disabled={list.loading || !companies.length}>
+            {!companies.length && <option value="">{list.loading ? 'Loading…' : 'No company has usage in this period'}</option>}
+            {companies.map((c) => (<option key={c.company_id} value={c.company_id}>{c.display_name ? `${c.display_name} (${c.company_id})` : c.company_id}: {usd(c.billable_usd)}</option>))}
+          </select>
+        </label>
+        {picked && <div className="note">Total to charge for this company: <b>{usd(picked.billable_usd)}</b></div>}
+        <ErrorBox error={err || list.error} />
+        <div className="row" style={{ justifyContent: 'flex-end' }}>
+          <button className="btn" onClick={onClose}>Close</button>
+          <button className="btn primary" disabled={busy || !chosen} onClick={generate}>{busy ? 'Generating…' : 'Generate invoice'}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 export default function Reconcile({ range }: { range: Range }) {
+  const [invoiceOpen, setInvoiceOpen] = useState(false);
   const [ids, setIds] = useState<string[]>(() => { try { return (JSON.parse(localStorage.getItem(STORE) || '[]') as string[]).filter((i) => KEY_ID.test(i)); } catch { return []; } });
   useEffect(() => { try { localStorage.setItem(STORE, JSON.stringify(ids)); } catch { /* ignore */ } }, [ids]);
   const keys = useApi<Row[]>('/analytics/reconcile/anthropic/keys');
@@ -98,10 +141,11 @@ export default function Reconcile({ range }: { range: Range }) {
   return (
     <div className={`stack ${loading ? 'loading' : ''}`}>
       {picker}
-      <div className="grid k4">
+      <div className="grid k5">
         <Kpi label="Our ledger (provider cost)" value={usd(data.totals.ours_usd)} />
         <Kpi label={ids.length ? 'Anthropic tokens of the selected keys, priced' : 'Anthropic cost report'} value={usd(data.totals.anthropic_usd)} />
         <Kpi label="Difference" value={usd(data.totals.diff_usd)} hint={`${data.totals.diff_pct}% of Anthropic`} />
+        <Kpi label="Customer billable (to charge)" value={usd(data.totals.billable_usd)} hint={`${usd(data.totals.billable_usd - data.totals.ours_usd)} over our cost`} />
         <Kpi label="Days needing a look" value={String(data.flagged_days)} hint={data.scope} />
       </div>
 
@@ -115,7 +159,7 @@ export default function Reconcile({ range }: { range: Range }) {
         ]}
       />
 
-      <Card title="Daily comparison" sub="Under-recorded = Anthropic charged more than we metered (aborted calls, other apps on the org, tool fees, wrong catalog price).">
+      <Card title="Daily comparison" right={<button className="btn primary sm" onClick={() => setInvoiceOpen(true)}>Generate invoice</button>} sub="Under-recorded = Anthropic charged more than we metered (aborted calls, other apps on the org, tool fees, wrong catalog price).">
         <DataTable
           rows={data.rows}
           initialSort={{ key: 'date', desc: true }}
@@ -123,14 +167,16 @@ export default function Reconcile({ range }: { range: Range }) {
             { key: 'date', label: 'Day (UTC)', render: (r: Row) => `${shortDate(r.date)} ${r.date.slice(0, 4)}` },
             { key: 'ours_usd', label: 'Ours', align: 'r', render: (r) => usd(r.ours_usd) },
             { key: 'anthropic_usd', label: 'Anthropic', align: 'r', render: (r) => usd(r.anthropic_usd) },
-            { key: 'diff_usd', label: 'Diff', align: 'r', render: (r) => usd(r.diff_usd) },
-            { key: 'diff_pct', label: 'Diff %', align: 'r', render: (r) => `${r.diff_pct}%` },
+            { key: 'diff_usd', label: 'Diff', align: 'r', render: (r) => <span>{usd(r.diff_usd)} <span className="muted">({r.diff_pct}%)</span></span> },
+            { key: 'billable_usd', label: 'Customer billable', align: 'r', render: (r) => <b>{usd(r.billable_usd)}</b> },
             { key: 'ours_tokens', label: 'Our tokens', align: 'r', render: (r) => compact(r.ours_tokens) },
             { key: 'anthropic_tokens', label: 'Anthropic tokens', align: 'r', render: (r) => compact(r.anthropic_tokens) },
             { key: 'status', label: 'Status', render: (r) => statusBadge(r.status) },
           ]}
         />
       </Card>
+
+      {invoiceOpen && <InvoiceDialog range={range} onClose={() => setInvoiceOpen(false)} />}
 
       <div className="grid c2">
         <Card title="Anthropic cost by type">

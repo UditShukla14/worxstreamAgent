@@ -31,6 +31,19 @@ export async function api<T = any>(path: string, opts: { method?: string; params
   return json.data as T;
 }
 
+/** Fetches a printable HTML page (an invoice) with the admin key; the caller opens it in a new tab. */
+export async function apiHtml(path: string, params: Record<string, any> = {}): Promise<string> {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== '') qs.set(k, String(v));
+  const res = await fetch(`/api/admin${path}?${qs}`, { headers: { 'x-admin-api-key': getKey() } });
+  if (!res.ok) {
+    let message = `Request failed (${res.status})`;
+    try { message = (await res.json())?.error || message; } catch { /* not json */ }
+    throw new ApiError(message, res.status);
+  }
+  return res.text();
+}
+
 export function useApi<T = any>(path: string | null, params: Record<string, any> = {}) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string>('');

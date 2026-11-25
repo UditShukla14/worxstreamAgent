@@ -151,6 +151,7 @@ export function compareDaily(ours, theirCost, theirUsage, { tolerancePct = 2, mi
     return {
       date: day,
       ours_usd: Number(o.cost_usd.toFixed(4)),
+      billable_usd: Number((o.billable_usd || 0).toFixed(4)),
       anthropic_usd: Number(a.toFixed(4)),
       diff_usd: Number(diff.toFixed(4)),
       diff_pct: Number(pct.toFixed(2)),
@@ -166,6 +167,8 @@ export function compareDaily(ours, theirCost, theirUsage, { tolerancePct = 2, mi
     ours_usd: Number(sum('ours_usd').toFixed(4)),
     anthropic_usd: Number(sum('anthropic_usd').toFixed(4)),
     diff_usd: Number(sum('diff_usd').toFixed(4)),
+    // What to charge customers for the range: the ledger's billable amounts (cost plus markup), not the provider cost.
+    billable_usd: Number(sum('billable_usd').toFixed(4)),
   };
   totals.diff_pct = totals.anthropic_usd > 0 ? Number(((totals.diff_usd / totals.anthropic_usd) * 100).toFixed(2)) : 0;
   return { rows, totals, flagged_days: rows.filter((r) => r.status === 'under_recorded' || r.status === 'over_recorded').length };
@@ -207,8 +210,9 @@ export async function ledgerByDay(from, to) {
   }).lean();
   const out = {};
   for (const r of rows) {
-    const a = out[r.date] || { cost_usd: 0, input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+    const a = out[r.date] || { cost_usd: 0, billable_usd: 0, input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
     a.cost_usd += (r.provider_cost_micros != null ? r.provider_cost_micros / 1e6 : r.cost_usd) || 0;
+    if (r.company_id !== '_unattributed') a.billable_usd += (r.billable_micros != null ? r.billable_micros / 1e6 : (r.billable_usd ?? r.cost_usd)) || 0;
     a.input_tokens += r.input_tokens || 0;
     a.output_tokens += r.output_tokens || 0;
     a.cache_read_input_tokens += r.cache_read_input_tokens || 0;

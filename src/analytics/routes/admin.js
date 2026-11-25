@@ -21,6 +21,7 @@ import {
 import { getSummary, getUsage, getDirectory, getCompanyDetail } from '../adminQueries.js';
 import { getEconomics, getGrowth, getQuality, getWalletsInsights, getModelsOverview } from '../adminInsights.js';
 import { reconcileWithAnthropic, listAnthropicApiKeys } from '../anthropicReconcile.js';
+import { getUsageInvoiceData, listInvoiceableCompanies, renderUsageInvoiceHtml } from '../../billing/usageInvoice.js';
 import { listNovaPlans, getNovaPlan, saveNovaPlan, toAdminPlan, loadPlanContext } from '../novaPlans.js';
 import { getPricingSettings, savePricingSettings, quoteForPrice } from '../novaPricing.js';
 import { listCompanyModelAssignments } from '../customerModels.js';
@@ -83,6 +84,32 @@ router.get('/analytics/reconcile/anthropic/keys', async (req, res, next) => {
   try {
     res.json({ success: true, data: await listAnthropicApiKeys() });
   } catch (err) { next(err); }
+});
+
+/** Companies that have something to invoice in a date range (for the invoice dialog on the Reconcile page). */
+router.get('/analytics/invoices/usage/companies', async (req, res, next) => {
+  try {
+    const list = await listInvoiceableCompanies({ from: req.query.from, to: req.query.to });
+    const names = new Map((await listWallets()).map((w) => [w.company_id, w.display_name]));
+    res.json({ success: true, data: list.map((c) => ({ ...c, display_name: names.get(c.company_id) || '' })) });
+  } catch (err) { next(err); }
+});
+
+/** A printable usage invoice (HTML) for one company over a date range, generated on demand. Not stored. */
+router.get('/analytics/invoices/usage', async (req, res, next) => {
+  try {
+    const companyId = String(req.query.company_id || '').trim();
+    if (!companyId) return res.status(400).json({ success: false, error: 'company_id is required' });
+    const names = new Map((await listWallets()).map((w) => [w.company_id, w.display_name]));
+    const data = await getUsageInvoiceData({ companyId, from: req.query.from, to: req.query.to, companyName: names.get(companyId) || '' });
+    const inv = config.invoice;
+    res.set('Content-Type', 'text/html; charset=utf-8').set('Cache-Control', 'private, no-store').send(
+      renderUsageInvoiceHtml(data, { name: inv.sellerName, address: inv.sellerAddress, tax_id: inv.sellerTaxId }),
+    );
+  } catch (err) {
+    if (/Range too large|company_id is required/.test(err?.message || '')) return res.status(400).json({ success: false, error: err.message });
+    next(err);
+  }
 });
 
 router.get('/analytics/reconcile/anthropic', async (req, res, next) => {
