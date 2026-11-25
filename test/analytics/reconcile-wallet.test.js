@@ -80,3 +80,37 @@ describe('wallet integer money', () => {
     assert.equal('markup_rate' in api, false);
   });
 });
+
+describe('reconcile by API key', async () => {
+  const { parseApiKeyIds, parseUsageReportPriced, MAX_API_KEY_IDS } = await import('../../src/analytics/anthropicReconcile.js');
+
+  it('takes ids separated by commas, spaces or lines, once each', () => {
+    assert.deepEqual(parseApiKeyIds('apikey_01Gfc8SkSN6NDrYmhmM2wm1o, apikey_01LhmAn72J75rjL6W3ASG5Vx\napikey_01Gfc8SkSN6NDrYmhmM2wm1o'), ['apikey_01Gfc8SkSN6NDrYmhmM2wm1o', 'apikey_01LhmAn72J75rjL6W3ASG5Vx']);
+    assert.deepEqual(parseApiKeyIds(['apikey_01Gfc8SkSN6NDrYmhmM2wm1o apikey_01LhmAn72J75rjL6W3ASG5Vx']).length, 2);
+  });
+  it('no input means no key filter', () => {
+    assert.deepEqual(parseApiKeyIds(''), []);
+    assert.deepEqual(parseApiKeyIds(undefined), []);
+    assert.deepEqual(parseApiKeyIds([]), []);
+  });
+  it('rejects anything that is not an API key id, naming it (nothing odd reaches the URL)', () => {
+    assert.throws(() => parseApiKeyIds('sk-ant-api03-secret'), /not an API key id/);
+    assert.throws(() => parseApiKeyIds('apikey_ok1234567 workspace_x&admin=1'), /not an API key id/);
+    assert.throws(() => parseApiKeyIds('apikey_1'), /not an API key id/);
+  });
+  it('limits how many keys at once', () => {
+    const many = Array.from({ length: MAX_API_KEY_IDS + 1 }, (_, i) => `apikey_${String(i).padStart(10, '0')}`);
+    assert.throws(() => parseApiKeyIds(many), /At most/);
+  });
+  it('prices the selected keys\' tokens per day at the catalog', () => {
+    const pages = [{ data: [{ starting_at: '2026-11-10T00:00:00Z', results: [
+      { model: 'claude-haiku-4-5', uncached_input_tokens: 1_000_000, output_tokens: 0, cache_read_input_tokens: 0, cache_creation: {} },
+      { model: 'claude-haiku-4-5', uncached_input_tokens: 0, output_tokens: 1_000_000, cache_read_input_tokens: 0, cache_creation: {} },
+    ] }, { starting_at: '2026-11-11T00:00:00Z', results: [] }] }];
+    const { tokens, costByDay } = parseUsageReportPriced(pages);
+    assert.equal(tokens['2026-11-10'].input_tokens, 1_000_000);
+    assert.equal(tokens['2026-11-10'].output_tokens, 1_000_000);
+    assert.ok(costByDay['2026-11-10'] > 0);
+    assert.equal(costByDay['2026-11-11'], undefined);
+  });
+});

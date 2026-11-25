@@ -1,3 +1,4 @@
+import { KeyboardEvent, useEffect, useMemo, useState } from 'react';
 import { Range, Row, compact, shortDate, usd, useApi } from '../lib';
 import { Badge, Card, ChartCard, DataTable, ErrorBox, Kpi } from '../components/ui';
 
@@ -8,11 +9,82 @@ const statusBadge = (s: string) => {
   return <Badge tone="warn">over-recorded</Badge>;
 };
 
+const STORE = 'wx_reconcile_keys';
+const KEY_ID = /^apikey_[A-Za-z0-9]{8,64}$/;
+
+/** Splits what was typed or pasted (commas, spaces, new lines) into key ids. */
+const tokens = (text: string) => text.split(/[\s,;]+/).map((t) => t.trim()).filter(Boolean);
+
+/** Several API key ids as chips: type or paste one or many, press Enter or comma to add, pick by name from the list. */
+function KeyPicker({ ids, onChange, keys }: { ids: string[]; onChange: (ids: string[]) => void; keys: Row[] }) {
+  const [text, setText] = useState('');
+  const [problem, setProblem] = useState('');
+  const nameOf = useMemo(() => new Map(keys.map((k) => [String(k.id), String(k.name || '')])), [keys]);
+
+  const add = (raw: string) => {
+    const wanted = tokens(raw);
+    if (!wanted.length) return;
+    // A key's name is accepted too: "worxstream_mail" is turned into its id.
+    const byName = new Map(keys.map((k) => [String(k.name).toLowerCase(), String(k.id)]));
+    const resolved = wanted.map((w) => (KEY_ID.test(w) ? w : byName.get(w.toLowerCase()) || w));
+    const bad = resolved.find((w) => !KEY_ID.test(w));
+    if (bad) {
+      setProblem(`"${bad}" is not an API key id (they look like apikey_01AbC...) or a known key name.`);
+      return;
+    }
+    setProblem('');
+    onChange([...new Set([...ids, ...resolved])]);
+    setText('');
+  };
+  const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (['Enter', ',', ' ', 'Tab'].includes(e.key) && text.trim()) {
+      e.preventDefault();
+      add(text);
+    } else if (e.key === 'Backspace' && !text && ids.length) {
+      onChange(ids.slice(0, -1));
+    }
+  };
+
+  return (
+    <div className="stack" style={{ gap: 6 }}>
+      <label className="field">API keys to check (leave empty for everything)
+        <div className="input" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', minHeight: 36 }} onClick={(e) => (e.currentTarget.querySelector('input') as HTMLInputElement | null)?.focus()}>
+          {ids.map((id) => (
+            <span key={id} className="badge" title={id}>
+              {nameOf.get(id) || id}
+              <button type="button" aria-label={`Remove ${nameOf.get(id) || id}`} className="btn sm" style={{ padding: '0 5px', marginLeft: 4 }} onClick={() => onChange(ids.filter((x) => x !== id))}>×</button>
+            </span>
+          ))}
+          <input
+            style={{ flex: 1, minWidth: 220, border: 0, background: 'transparent', outline: 'none', color: 'inherit', font: 'inherit' }}
+            list="wx-reconcile-keys"
+            placeholder={ids.length ? 'Add another key id or name' : 'Paste apikey_… ids or pick a key by name'}
+            value={text}
+            onChange={(e) => { setText(e.target.value); setProblem(''); }}
+            onKeyDown={onKey}
+            onPaste={(e) => { const pasted = e.clipboardData.getData('text'); if (tokens(pasted).length > 1) { e.preventDefault(); add(pasted); } }}
+            onBlur={() => text.trim() && add(text)}
+          />
+        </div>
+      </label>
+      <datalist id="wx-reconcile-keys">
+        {keys.filter((k) => !ids.includes(String(k.id))).map((k) => (<option key={k.id} value={k.id}>{k.name}{k.status && k.status !== 'active' ? ` (${k.status})` : ''}</option>))}
+      </datalist>
+      {problem && <div className="err" role="alert">{problem}</div>}
+      <div className="note">With keys chosen, Anthropic's side is the tokens of just those keys, priced at our catalog (Anthropic's cost report cannot be filtered by key). Choose every key the agent and the mail service use.</div>
+    </div>
+  );
+}
+
 export default function Reconcile({ range }: { range: Range }) {
+  const [ids, setIds] = useState<string[]>(() => { try { return (JSON.parse(localStorage.getItem(STORE) || '[]') as string[]).filter((i) => KEY_ID.test(i)); } catch { return []; } });
+  useEffect(() => { try { localStorage.setItem(STORE, JSON.stringify(ids)); } catch { /* ignore */ } }, [ids]);
+  const keys = useApi<Row[]>('/analytics/reconcile/anthropic/keys');
   // Anthropic's report allows ≤31 daily buckets per page; the server pages through, but keep the view readable.
-  const { data, error, loading, reload } = useApi<Row>('/analytics/reconcile/anthropic', range);
-  if (error) return <div className="stack"><ErrorBox error={error} /><button className="btn" onClick={reload}>Retry</button></div>;
-  if (!data) return <div className="empty">Loading…</div>;
+  const { data, error, loading, reload } = useApi<Row>('/analytics/reconcile/anthropic', { ...range, api_key_ids: ids.join(',') });
+  const picker = <KeyPicker ids={ids} onChange={setIds} keys={keys.data || []} />;
+  if (error) return <div className="stack">{picker}<ErrorBox error={error} /><button className="btn" onClick={reload}>Retry</button></div>;
+  if (!data) return <div className="stack">{picker}<div className="empty">Loading…</div></div>;
 
   if (!data.configured) {
     return (
@@ -25,9 +97,10 @@ export default function Reconcile({ range }: { range: Range }) {
 
   return (
     <div className={`stack ${loading ? 'loading' : ''}`}>
+      {picker}
       <div className="grid k4">
         <Kpi label="Our ledger (provider cost)" value={usd(data.totals.ours_usd)} />
-        <Kpi label="Anthropic cost report" value={usd(data.totals.anthropic_usd)} />
+        <Kpi label={ids.length ? 'Anthropic tokens of the selected keys, priced' : 'Anthropic cost report'} value={usd(data.totals.anthropic_usd)} />
         <Kpi label="Difference" value={usd(data.totals.diff_usd)} hint={`${data.totals.diff_pct}% of Anthropic`} />
         <Kpi label="Days needing a look" value={String(data.flagged_days)} hint={data.scope} />
       </div>

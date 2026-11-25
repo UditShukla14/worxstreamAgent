@@ -16,6 +16,7 @@
 
 import LlmUsageDaily from './models/LlmUsageDaily.js';
 import { parseDateRange } from './queries.js';
+import { computeEventCost } from './costing.js';
 
 const BASE = process.env.ANTHROPIC_ADMIN_API_BASE || 'https://api.anthropic.com/v1/organizations';
 const ANTHROPIC_VERSION = '2026-10-21';
@@ -27,6 +28,23 @@ export function getAdminKey() {
 
 export function getReconcileWorkspaceId() {
   return String(process.env.ANTHROPIC_RECONCILE_WORKSPACE_ID || '').trim();
+}
+
+/** Anthropic API key ids look like apikey_01AbC...; anything else is rejected before it reaches a URL. */
+const API_KEY_ID = /^apikey_[A-Za-z0-9]{8,64}$/;
+export const MAX_API_KEY_IDS = 20;
+
+/**
+ * Pure: the API key ids typed or pasted into the reconcile window (a list, or one string separated by commas, spaces or
+ * lines) -> a de-duplicated list of valid ids. Throws with the offending text when something is not an API key id.
+ */
+export function parseApiKeyIds(input) {
+  const raw = Array.isArray(input) ? input.flatMap((v) => String(v).split(/[\s,;]+/)) : String(input ?? '').split(/[\s,;]+/);
+  const ids = [...new Set(raw.map((v) => v.trim()).filter(Boolean))];
+  const bad = ids.find((id) => !API_KEY_ID.test(id));
+  if (bad) throw new Error(`"${bad.slice(0, 40)}" is not an API key id (they look like apikey_01AbC...; copy it from the Console key's cost link)`);
+  if (ids.length > MAX_API_KEY_IDS) throw new Error(`At most ${MAX_API_KEY_IDS} API keys at a time`);
+  return ids;
 }
 
 const dayStart = (d) => `${d}T00:00:00Z`;
@@ -71,6 +89,47 @@ export function parseUsageReport(pages) {
     }
   }
   return byDay;
+}
+
+/**
+ * Pure: a usage_report grouped by model (and filtered to some API keys) -> per-day tokens AND the cost of those tokens at our
+ * price catalog. Anthropic's cost report cannot be filtered by API key, so for a key selection the dollars are the key's
+ * tokens priced here; this checks that every token of those keys was metered (the usual cause of a difference).
+ */
+export function parseUsageReportPriced(pages) {
+  const tokens = parseUsageReport(pages);
+  const costByDay = {};
+  for (const page of pages) {
+    for (const bucket of page?.data || []) {
+      const day = dayKey(bucket.starting_at);
+      for (const r of bucket.results || []) {
+        const usage = {
+          input_tokens: r.uncached_input_tokens || 0,
+          output_tokens: r.output_tokens || 0,
+          cache_read_input_tokens: r.cache_read_input_tokens || 0,
+          cache_creation_input_tokens: (r.cache_creation?.ephemeral_5m_input_tokens || 0) + (r.cache_creation?.ephemeral_1h_input_tokens || 0),
+        };
+        const priced = computeEventCost({ model: String(r.model || ''), usage, markupRate: 0 });
+        costByDay[day] = (costByDay[day] || 0) + priced.providerCostUsd;
+      }
+    }
+  }
+  return { tokens, costByDay };
+}
+
+/** The organisation's API keys (id, name, status, workspace) so the window can offer them by name. Empty when Anthropic refuses. */
+export async function listAnthropicApiKeys() {
+  const key = getAdminKey();
+  if (!key) return [];
+  try {
+    const pages = await fetchAllPages('api_keys', [['limit', '100']], key);
+    return pages
+      .flatMap((p) => p?.data || [])
+      .map((k) => ({ id: k.id, name: k.name || '', status: k.status || '', workspace_id: k.workspace_id || null, hint: k.partial_key_hint || '' }))
+      .filter((k) => API_KEY_ID.test(String(k.id)));
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -162,7 +221,8 @@ export async function ledgerByDay(from, to) {
 /**
  * @param {{ from?: string, to?: string }} range  YYYY-MM-DD (UTC, inclusive)
  */
-export async function reconcileWithAnthropic({ from, to } = {}) {
+export async function reconcileWithAnthropic({ from, to, apiKeyIds = [] } = {}) {
+  const keyIds = parseApiKeyIds(apiKeyIds);
   const key = getAdminKey();
   const range = parseDateRange(from, to);
   const days = Math.round((Date.parse(range.to) - Date.parse(range.from)) / 86_400_000) + 1;
@@ -183,27 +243,44 @@ export async function reconcileWithAnthropic({ from, to } = {}) {
   const start = dayStart(range.from);
   const end = dayStart(nextDay(range.to));
 
-  const costParams = [['starting_at', start], ['ending_at', end], ['limit', '31'], ['group_by[]', 'workspace_id'], ['group_by[]', 'description']];
   const usageParams = [['starting_at', start], ['ending_at', end], ['bucket_width', '1d'], ['limit', '31']];
   if (workspaceId) usageParams.push(['workspace_ids[]', workspaceId]);
 
-  const [costPages, usagePages] = await Promise.all([
-    fetchAllPages('cost_report', costParams, key),
-    fetchAllPages('usage_report/messages', usageParams, key),
-  ]);
-
-  const { byDay: theirCost, byType } = parseCostReport(costPages, { workspaceId });
-  const theirUsage = parseUsageReport(usagePages);
+  let theirCost;
+  let byType;
+  let theirUsage;
+  if (keyIds.length) {
+    // Selected API keys: their tokens (filtered by key, grouped by model) priced at our catalog, because the cost report has no key filter.
+    for (const id of keyIds) usageParams.push(['api_key_ids[]', id]);
+    usageParams.push(['group_by[]', 'model']);
+    const usagePages = await fetchAllPages('usage_report/messages', usageParams, key);
+    const priced = parseUsageReportPriced(usagePages);
+    theirUsage = priced.tokens;
+    theirCost = priced.costByDay;
+    byType = { 'tokens of the selected keys, priced at our catalog': Object.values(priced.costByDay).reduce((a, b) => a + b, 0) };
+  } else {
+    const costParams = [['starting_at', start], ['ending_at', end], ['limit', '31'], ['group_by[]', 'workspace_id'], ['group_by[]', 'description']];
+    const [costPages, usagePages] = await Promise.all([
+      fetchAllPages('cost_report', costParams, key),
+      fetchAllPages('usage_report/messages', usageParams, key),
+    ]);
+    ({ byDay: theirCost, byType } = parseCostReport(costPages, { workspaceId }));
+    theirUsage = parseUsageReport(usagePages);
+  }
   const cmp = compareDaily(ours, theirCost, theirUsage);
 
   return {
     configured: true,
     from: range.from,
     to: range.to,
-    scope: workspaceId ? `workspace ${workspaceId}` : 'entire organization (set ANTHROPIC_RECONCILE_WORKSPACE_ID to narrow)',
+    scope: keyIds.length
+      ? `API key${keyIds.length > 1 ? 's' : ''} ${keyIds.join(', ')}${workspaceId ? ` in workspace ${workspaceId}` : ''} (tokens priced at our catalog)`
+      : workspaceId ? `workspace ${workspaceId}` : 'entire organization (set ANTHROPIC_RECONCILE_WORKSPACE_ID to narrow)',
+    api_key_ids: keyIds,
     ...cmp,
     anthropic_cost_by_type_usd: Object.fromEntries(Object.entries(byType).map(([k, v]) => [k, Number(v.toFixed(4))])),
     notes: [
+      ...(keyIds.length ? ['With API keys selected, Anthropic\'s dollars are those keys\' tokens priced at our price catalog (the cost report cannot be filtered by key). Our ledger is not split by key, so choose every key the agent and the mail service use.'] : []),
       'Priority Tier costs are not in the cost report.',
       'Today\'s numbers can lag a few minutes behind real usage.',
       'Web search / code execution fees appear in Anthropic cost but not in per-call usage — they show as "under recorded".',

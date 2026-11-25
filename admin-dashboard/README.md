@@ -13,7 +13,7 @@ per-company override in the wallet panel.
 
 ## Pages
 - **Monitor** — Overview, Growth & adoption, Economics, Quality & reliability
-- **Manage** — Companies (+ company page), Usage explorer, Wallets & credit
+- **Manage** — Companies (+ company page), Usage explorer, **AI apps** (Nova + Raven subscriptions, credit and usage per company; see `docs/ai-apps.md`), Wallets & credit
 - **Platform** — Models (limits, capabilities, Anthropic cost vs customer price, cost estimator), Reconcile
 
 Latency, cost-per-turn and context-pressure panels fill from turns created after they were introduced.

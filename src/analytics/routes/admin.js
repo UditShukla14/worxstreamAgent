@@ -20,7 +20,7 @@ import {
 } from '../novaWallet.js';
 import { getSummary, getUsage, getDirectory, getCompanyDetail } from '../adminQueries.js';
 import { getEconomics, getGrowth, getQuality, getWalletsInsights, getModelsOverview } from '../adminInsights.js';
-import { reconcileWithAnthropic } from '../anthropicReconcile.js';
+import { reconcileWithAnthropic, listAnthropicApiKeys } from '../anthropicReconcile.js';
 import { listNovaPlans, getNovaPlan, saveNovaPlan, toAdminPlan, loadPlanContext } from '../novaPlans.js';
 import { getPricingSettings, savePricingSettings, quoteForPrice } from '../novaPricing.js';
 import { listCompanyModelAssignments } from '../customerModels.js';
@@ -78,10 +78,18 @@ router.get('/analytics/quality', insight(getQuality));
 router.get('/analytics/models', insight(getModelsOverview));
 
 /** Ledger vs Anthropic's Usage & Cost Admin API (needs ANTHROPIC_ADMIN_API_KEY). */
+/** The organisation's API keys by name, for the key picker in the Reconcile window. */
+router.get('/analytics/reconcile/anthropic/keys', async (req, res, next) => {
+  try {
+    res.json({ success: true, data: await listAnthropicApiKeys() });
+  } catch (err) { next(err); }
+});
+
 router.get('/analytics/reconcile/anthropic', async (req, res, next) => {
   try {
-    res.json({ success: true, data: await reconcileWithAnthropic({ from: req.query.from, to: req.query.to }) });
+    res.json({ success: true, data: await reconcileWithAnthropic({ from: req.query.from, to: req.query.to, apiKeyIds: req.query.api_key_ids }) });
   } catch (err) {
+    if (/is not an API key id|At most \d+ API keys/.test(err?.message || '')) return res.status(400).json({ success: false, error: err.message });
     if (/^Anthropic |Range too large/.test(err?.message || '')) {
       return res.status(502).json({ success: false, error: err.message });
     }
