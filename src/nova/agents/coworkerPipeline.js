@@ -8,7 +8,7 @@ import { config } from '../../config/index.js';
 import { createMessage, streamMessage } from '../../llm/anthropicClient.js';
 import { getModelForTier, loadTaskModels } from '../../analytics/taskModels.js';
 import { buildContextSnapshot } from './contextSnapshot.js';
-import { setRequestContext } from '../../request/requestContext.js';
+import { getRequestTimezone, setRequestContext } from '../../request/requestContext.js';
 import Conversation from '../models/Conversation.js';
 import {
   AGENT_DEFINITIONS,
@@ -464,7 +464,7 @@ export async function runCoworkerTurn({
   const baseContext = options.freshConversation === true
     ? ''
     : await buildContextPrompt(ctxRef, { lastAssistantSnippet });
-  const dateContext = getCurrentDateTimeContext();
+  const dateContext = getCurrentDateTimeContext(getRequestTimezone());
 
   const contextPrompt = [
     dateContext,

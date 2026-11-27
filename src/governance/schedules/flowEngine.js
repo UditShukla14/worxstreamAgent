@@ -509,6 +509,21 @@ export function computeFlowNextRunAt(definition, fromDate = new Date()) {
   if (cadence === 'hourly') {
     return computeHourlyNextRunAt(definition, fromDate);
   }
+  const localTime = parseLocalTime(definition.run_at_local_time ?? definition.flow?.run_at_local_time);
+  if (localTime) {
+    const timeZone = String(definition.timezone || definition.flow?.timezone || 'UTC');
+    const step = Math.max(1, definition.interval_days || 1);
+    const today = getZonedParts(fromDate, timeZone);
+    let candidate = zonedLocalToUtc({ ...today, hour: localTime.hour, minute: localTime.minute, second: 0 }, timeZone);
+    if (candidate <= fromDate) {
+      // Advance by calendar days in the zone (not 24h) so DST shifts keep the same wall-clock time.
+      candidate = zonedLocalToUtc(
+        { year: today.year, month: today.month, day: today.day + step, hour: localTime.hour, minute: localTime.minute, second: 0 },
+        timeZone,
+      );
+    }
+    return candidate;
+  }
   const anchor = new Date(fromDate);
   const hour = Number.isFinite(definition.run_at_hour_utc)
     ? definition.run_at_hour_utc
@@ -519,6 +534,40 @@ export function computeFlowNextRunAt(definition, fromDate = new Date()) {
     anchor.setUTCDate(anchor.getUTCDate() + Math.max(1, definition.interval_days || 1));
   }
   return anchor;
+}
+
+/** 'HH:MM' (24h) -> { hour, minute } or null. */
+export function parseLocalTime(raw) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(raw ?? '').trim());
+  if (!m) return null;
+  const hour = Number(m[1]);
+  const minute = Number(m[2]);
+  if (hour > 23 || minute > 59) return null;
+  return { hour, minute };
+}
+
+function formatClock(hour, minute) {
+  const h12 = hour % 12 || 12;
+  return `${h12}:${String(minute).padStart(2, '0')} ${hour < 12 ? 'AM' : 'PM'}`;
+}
+
+/** One plain-language line describing when a schedule runs (in the schedule's own timezone). */
+export function describeScheduleCadence(definition) {
+  const cadence = normalizeCadenceType(definition.cadence_type || definition.flow?.cadence_type);
+  const tz = String(definition.timezone || definition.flow?.timezone || 'UTC');
+  if (cadence === 'hourly') {
+    const start = definition.run_window_start_utc ?? 0;
+    const end = definition.run_window_end_utc ?? 23;
+    return `Every hour between ${formatClock(start, 0)} and ${formatClock(end, 0)} UTC`;
+  }
+  if (cadence === 'monthly') {
+    return `Monthly on day ${definition.day_of_month ?? 1} at ${formatClock(definition.run_at_hour_local ?? 9, 0)} ${tz}`;
+  }
+  const days = definition.interval_days || 1;
+  const every = days === 1 ? 'Every day' : `Every ${days} days`;
+  const lt = parseLocalTime(definition.run_at_local_time ?? definition.flow?.run_at_local_time);
+  if (lt) return `${every} at ${formatClock(lt.hour, lt.minute)} ${tz}`;
+  return `${every} at ${formatClock(definition.run_at_hour_utc ?? 23, 0)} UTC`;
 }
 
 /**

@@ -7,6 +7,7 @@
 import { z } from 'zod';
 import { registerTool } from '../../mcp/server.js';
 import { getWorxstreamContext } from '../../config/index.js';
+import { getRequestTimezone } from '../../request/requestContext.js';
 import ScheduleDefinition from '../models/ScheduleDefinition.js';
 import ScheduleRun from '../models/ScheduleRun.js';
 import {
@@ -17,6 +18,8 @@ import {
   MAX_ACTIVE_FLOW_SCHEDULES,
   SUPPORTED_FLOW_TYPES,
   computeFlowNextRunAt,
+  describeScheduleCadence,
+  parseLocalTime,
   isFlowRecipe,
   normalizeCadenceType,
 } from '../schedules/flowEngine.js';
@@ -119,6 +122,7 @@ function buildCadenceFields(input, flow, cloneSource = null) {
       cadence_type,
       interval_days: null,
       run_at_hour_utc: null,
+      run_at_local_time: null,
       day_of_month: null,
       run_at_hour_local: null,
       run_window_start_utc: clampUtcHour(
@@ -150,6 +154,7 @@ function buildCadenceFields(input, flow, cloneSource = null) {
         input.run_at_hour_utc ?? cloneSource?.run_at_hour_utc ?? 23,
         23,
       ),
+      run_at_local_time: null,
       day_of_month: Math.min(
         28,
         Math.max(1, Math.round(Number(
@@ -166,6 +171,23 @@ function buildCadenceFields(input, flow, cloneSource = null) {
     };
   }
 
+  // Local wall-clock time wins: the UTC hour is kept only as a derived legacy value.
+  const localRaw = input.run_at_local_time ?? (
+    input.run_at_hour_utc != null ? null : cloneSource?.run_at_local_time
+  );
+  const localTime = parseLocalTime(localRaw);
+  let utcHour = clampUtcHour(
+    input.run_at_hour_utc ?? cloneSource?.run_at_hour_utc ?? 23,
+    23,
+  );
+  if (localTime) {
+    utcHour = computeFlowNextRunAt({
+      cadence_type: 'interval',
+      interval_days: 1,
+      run_at_local_time: `${localTime.hour}:${String(localTime.minute).padStart(2, '0')}`,
+      timezone: flow.timezone,
+    }).getUTCHours();
+  }
   return {
     cadence_type: 'interval',
     interval_days: Math.min(
@@ -174,10 +196,10 @@ function buildCadenceFields(input, flow, cloneSource = null) {
         input.interval_days ?? cloneSource?.interval_days ?? 1,
       ) || 1)),
     ),
-    run_at_hour_utc: clampUtcHour(
-      input.run_at_hour_utc ?? cloneSource?.run_at_hour_utc ?? 23,
-      23,
-    ),
+    run_at_hour_utc: utcHour,
+    run_at_local_time: localTime
+      ? `${String(localTime.hour).padStart(2, '0')}:${String(localTime.minute).padStart(2, '0')}`
+      : null,
     day_of_month: null,
     run_at_hour_local: null,
     run_window_start_utc: null,
@@ -187,7 +209,7 @@ function buildCadenceFields(input, flow, cloneSource = null) {
 }
 
 function buildFlow(input) {
-  const timezone = String(input.timezone || 'UTC').trim() || 'UTC';
+  const timezone = String(input.timezone || getRequestTimezone() || 'UTC').trim() || 'UTC';
   const channel = resolveChannel(input);
   const cadenceType = normalizeCadenceType(input.cadence_type || 'interval');
   const periods = parseStringList(input.periods);
@@ -354,7 +376,11 @@ export function registerScribeTools() {
           .optional()
           .describe('interval (default), monthly, or hourly'),
         interval_days: z.number().optional().describe('When cadence_type=interval: every N days'),
-        run_at_hour_utc: z.number().optional().describe('When cadence_type=interval: hour UTC 0-23'),
+        run_at_local_time: z
+          .string()
+          .optional()
+          .describe('PREFERRED for interval cadence: local wall-clock time "HH:MM" (24h) in the schedule timezone, e.g. "19:00" for 7 PM. Server handles UTC and DST.'),
+        run_at_hour_utc: z.number().optional().describe('Legacy: UTC hour 0-23. Do NOT use for user-stated times; use run_at_local_time.'),
         run_window_start_utc: z
           .number()
           .optional()
@@ -614,7 +640,11 @@ export function registerScribeTools() {
         timezone: z.string().optional(),
         cadence_type: z.enum(['interval', 'monthly', 'hourly']).optional(),
         interval_days: z.number().optional(),
-        run_at_hour_utc: z.number().optional(),
+        run_at_local_time: z
+          .string()
+          .optional()
+          .describe('Local wall-clock time "HH:MM" (24h) in the schedule timezone, e.g. "19:00" for 7 PM. Use this for any time the user states.'),
+        run_at_hour_utc: z.number().optional().describe('Legacy UTC hour; prefer run_at_local_time.'),
         run_window_start_utc: z.number().optional()
           .describe('When cadence_type=hourly: inclusive UTC start hour 0-23'),
         run_window_end_utc: z.number().optional()
@@ -652,6 +682,9 @@ export function registerScribeTools() {
           error: 'scribe_update_schedule only supports flow_recipe schedules',
         });
       }
+
+      const before = definitionToApi(doc);
+      const requested = Object.keys(input).filter((k) => k !== 'schedule_id' && input[k] != null);
 
       if (input.name != null) doc.name = String(input.name).trim();
       if (input.description != null) doc.description = String(input.description).trim();
@@ -731,6 +764,7 @@ export function registerScribeTools() {
       const cadenceInputChanged = input.cadence_type != null
         || input.interval_days != null
         || input.run_at_hour_utc != null
+        || input.run_at_local_time != null
         || input.run_window_start_utc != null
         || input.run_window_end_utc != null
         || input.day_of_month != null
@@ -742,6 +776,7 @@ export function registerScribeTools() {
             cadence_type: input.cadence_type ?? doc.cadence_type,
             interval_days: input.interval_days,
             run_at_hour_utc: input.run_at_hour_utc,
+            run_at_local_time: input.run_at_local_time,
             run_window_start_utc: input.run_window_start_utc,
             run_window_end_utc: input.run_window_end_utc,
             day_of_month: input.day_of_month,
@@ -752,6 +787,7 @@ export function registerScribeTools() {
             cadence_type: doc.cadence_type,
             interval_days: doc.interval_days,
             run_at_hour_utc: doc.run_at_hour_utc,
+            run_at_local_time: doc.run_at_local_time,
             run_window_start_utc: doc.run_window_start_utc,
             run_window_end_utc: doc.run_window_end_utc,
             day_of_month: doc.day_of_month,
@@ -763,9 +799,43 @@ export function registerScribeTools() {
 
       doc.flow = flow;
       doc.markModified('flow');
+      // A changed timezone on a local-time schedule must move the run; a bare local time needs a timezone.
       doc.next_run_at = computeFlowNextRunAt(doc);
       await doc.save();
-      return asText({ success: true, data: definitionToApi(doc) });
+
+      // Report what actually changed, from the saved document, so the model never claims more than was stored.
+      const after = definitionToApi(doc);
+      const fields = [
+        'name', 'description', 'active', 'timezone', 'cadenceType', 'intervalDays',
+        'runAtLocalTime', 'runAtHourUtc', 'runWindowStartUtc', 'runWindowEndUtc',
+        'dayOfMonth', 'runAtHourLocal', 'nextRunAt',
+      ];
+      const changed = fields.filter((f) => JSON.stringify(before[f]) !== JSON.stringify(after[f]));
+      const flowFields = ['channel', 'recipients', 'prompt', 'subject_template', 'message_template', 'engine'];
+      flowFields.forEach((f) => {
+        if (JSON.stringify((before.flow || {})[f]) !== JSON.stringify((after.flow || {})[f])) changed.push(`flow.${f}`);
+      });
+      const warnings = [];
+      if (!changed.length) warnings.push('Nothing changed: every requested value already matched the saved schedule.');
+      const timeRequested = input.run_at_local_time != null || input.run_at_hour_utc != null;
+      const timeChanged = changed.some((f) => ['runAtLocalTime', 'runAtHourUtc', 'nextRunAt'].includes(f));
+      if (timeRequested && !timeChanged) {
+        warnings.push('A new run time was requested but the stored run time is unchanged.');
+      }
+      if (input.timezone != null && !timeRequested && after.runAtLocalTime == null && after.cadenceType === 'interval') {
+        warnings.push(
+          'Timezone was changed but this schedule still runs at a fixed UTC hour, so the run time did not move. '
+          + 'Call again with run_at_local_time (e.g. "19:00") to set the time in the new timezone.',
+        );
+      }
+      return asText({
+        success: true,
+        requested,
+        changed,
+        ...(warnings.length ? { warnings } : {}),
+        summary: after.humanSummary,
+        data: after,
+      });
     },
   );
 

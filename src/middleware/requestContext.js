@@ -37,5 +37,6 @@ export function requestContextMiddleware(req, res, next) {
   );
 
   // What this very request carried as a token, kept apart from fallbacks (see getRequestUserToken).
-  enterRequestContext({ ...ctx, userToken: requestContextFromReq(req).apiToken }, () => next());
+  const fromReq = requestContextFromReq(req);
+  enterRequestContext({ ...ctx, userToken: fromReq.apiToken, timezone: fromReq.timezone }, () => next());
 }

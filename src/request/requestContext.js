@@ -12,11 +12,24 @@ import { AsyncLocalStorage } from 'async_hooks';
  *   apiToken?: string,
  *   userToken?: string,  // the token the caller itself sent (never the server's fallback); used for per-user services like mail
  *   freshData?: boolean,
+ *   timezone?: string,   // caller's IANA timezone (validated); used as the default for schedules and date context
  *   taskModels?: { daily?: string, medium?: string, hard?: string, advanced?: string },
  * }} RequestContextStore
  */
 
 const storage = new AsyncLocalStorage();
+
+/** Returns the IANA zone if valid, else undefined. */
+export function sanitizeTimezone(raw) {
+  const tz = typeof raw === 'string' ? raw.trim() : '';
+  if (!tz) return undefined;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return tz;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * @returns {RequestContextStore | undefined}
@@ -36,6 +49,7 @@ export function setRequestContext(partial) {
   if (partial.userId != null) store.userId = String(partial.userId).trim();
   if (partial.apiToken != null) store.apiToken = String(partial.apiToken).trim();
   if (partial.userToken != null) store.userToken = String(partial.userToken).trim();
+  if (partial.timezone != null) store.timezone = sanitizeTimezone(partial.timezone);
   if (partial.creditBudget !== undefined) store.creditBudget = partial.creditBudget; // the running turn's credit budget (creditGuard.js)
   if (partial.taskModels != null && typeof partial.taskModels === 'object') {
     store.taskModels = { ...partial.taskModels };
@@ -49,6 +63,7 @@ function normalizeStore(ctx) {
     apiToken: ctx.apiToken != null ? String(ctx.apiToken).trim() : undefined,
     userToken: ctx.userToken != null ? String(ctx.userToken).trim() : undefined,
     freshData: ctx.freshData === true,
+    timezone: sanitizeTimezone(ctx.timezone),
     taskModels: ctx.taskModels && typeof ctx.taskModels === 'object'
       ? { ...ctx.taskModels }
       : undefined,
@@ -121,7 +136,15 @@ export function requestContextFromReq(req) {
     companyId: companyId != null ? String(companyId) : undefined,
     userId: userId != null ? String(userId) : undefined,
     apiToken: apiToken || undefined,
+    timezone: sanitizeTimezone(
+      body.timezone ?? body.user_timezone ?? query.timezone ?? headerValue(req, 'x-user-timezone'),
+    ),
   };
+}
+
+/** The caller's IANA timezone for this request, or '' when the client did not send one. */
+export function getRequestTimezone() {
+  return storage.getStore()?.timezone || '';
 }
 
 /**

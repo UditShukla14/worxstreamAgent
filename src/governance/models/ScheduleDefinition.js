@@ -73,6 +73,8 @@ const scheduleDefinitionSchema = new mongoose.Schema({
   day_of_month: { type: Number, default: null, min: 1, max: 28 },
   /** Local hour 0–23 when cadence_type=monthly (uses timezone). */
   run_at_hour_local: { type: Number, default: null, min: 0, max: 23 },
+  /** Local wall-clock 'HH:MM' in `timezone` for interval cadence (DST-safe). Null = legacy run_at_hour_utc. */
+  run_at_local_time: { type: String, default: null },
   /** IANA timezone for flow recipes (period labels + monthly local hour). */
   timezone: { type: String, default: 'UTC' },
 

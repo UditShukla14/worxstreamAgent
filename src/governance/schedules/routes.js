@@ -11,6 +11,8 @@ import {
   queueScheduleDefinition,
 } from './engine.js';
 import {
+  describeScheduleCadence,
+  parseLocalTime,
   MAX_ACTIVE_FLOW_SCHEDULES,
   SUPPORTED_FLOW_TYPES,
   computeFlowNextRunAt,
@@ -60,6 +62,8 @@ function definitionToApi(doc) {
     cadenceType: doc.cadence_type || 'interval',
     intervalDays: doc.interval_days ?? null,
     runAtHourUtc: doc.run_at_hour_utc ?? null,
+    runAtLocalTime: doc.run_at_local_time ?? null,
+    humanSummary: describeScheduleCadence(doc),
     runWindowStartUtc: doc.run_window_start_utc ?? null,
     runWindowEndUtc: doc.run_window_end_utc ?? null,
     dayOfMonth: doc.day_of_month ?? null,
@@ -340,6 +344,13 @@ function definitionFieldsFromBody(body, partial = false) {
     if (!partial || body.runAtHourUtc != null || body.run_at_hour_utc != null) {
       const hour = Number(body.runAtHourUtc ?? body.run_at_hour_utc);
       out.run_at_hour_utc = Number.isFinite(hour) ? Math.min(23, Math.max(0, Math.round(hour))) : 23;
+      out.run_at_local_time = null; // an explicit UTC hour replaces any local-time setting
+    }
+    if (body.runAtLocalTime != null || body.run_at_local_time != null) {
+      const lt = parseLocalTime(body.runAtLocalTime ?? body.run_at_local_time);
+      if (lt) {
+        out.run_at_local_time = `${String(lt.hour).padStart(2, '0')}:${String(lt.minute).padStart(2, '0')}`;
+      }
     }
     if (!partial || body.dayOfMonth != null || body.day_of_month != null) {
       const day = Number(body.dayOfMonth ?? body.day_of_month);
@@ -366,6 +377,7 @@ function nextRunFor(fields, existing = null) {
     cadence_type: fields.cadence_type ?? existing?.cadence_type ?? 'interval',
     interval_days: fields.interval_days ?? existing?.interval_days ?? 1,
     run_at_hour_utc: fields.run_at_hour_utc ?? existing?.run_at_hour_utc ?? 23,
+    run_at_local_time: fields.run_at_local_time !== undefined ? fields.run_at_local_time : existing?.run_at_local_time ?? null,
     run_window_start_utc: fields.run_window_start_utc
       ?? existing?.run_window_start_utc
       ?? 0,
